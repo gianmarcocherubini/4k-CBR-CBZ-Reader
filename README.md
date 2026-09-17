@@ -97,27 +97,24 @@ le linee pulite. Funziona con la doppia pagina; le pagine seguenti vengono elabo
   (risultato verificato equivalente: 54,6 dB tra i due backend); senza GPU utilizzabile, ridimensionamento del browser.
   Le impostazioni dicono sempre backend, livello, fattore, dimensione di uscita e tempo stimato.
 - **Indicatore** nella barra in alto: `SR ×2 VL` / `SR ×4 UL` (fattore e livello in uso, `+` con Linee nitide),
-  `SR ×2 CUNet`, `SR ×4 GAN`, `SR…` (in elaborazione), `SR n/d` (nessuna GPU utilizzabile o pagina troppo grande).
+  `SR ×4 GAN` (Qualità massima), `SR…` (in elaborazione), `SR n/d` (nessuna GPU utilizzabile o pagina troppo grande).
 
 ### "Qualità massima (lenta)" (sperimentale, spenta di default)
 
-Modelli pesanti tramite onnxruntime-web, con risultati salvati per sempre nell'archiviazione dell'app
-(`sr-cache/<volume>[.modello][.x4]/<pagina>.webp`) e precedenza su Anime4K; eliminando il volume si cancellano.
-Attivandola vengono scaricati una volta sola il motore (14–27 MB) e il modello, poi restano in cache. Anche qui il
-risultato è un fattore fisso della pagina, poi adattato allo schermo (se esistono sia il ×4 sia il ×2, si usa il ×4).
+**Real-ESRGAN anime 6B a ×4** tramite onnxruntime-web: aspetto "stampato", molto nitido; **decine di secondi per
+pagina** anche su GPU, minuti sulla CPU. I risultati sono salvati per sempre nell'archiviazione dell'app
+(`sr-cache/<volume>.esrgan6b.x4/<pagina>.webp`) e hanno la precedenza su Anime4K, che nel frattempo mostra la pagina:
+i due livelli convivono. Eliminando il volume si cancellano. Attivandola vengono scaricati una volta sola il motore
+(14–27 MB) e il modello (18 MB), poi restano in cache. Anche qui il risultato è un fattore fisso della pagina (×4;
+×2 solo se il ×4 supererebbe i 16 MP), poi adattato allo schermo.
 
-- **waifu2x CUNet art/scale2x** (5 MB): il risultato più fedele (conserva i retini), secondi per pagina. ×2 nativo;
-  con Fattore ×4 fa due passaggi (circa 5 volte più lento).
-- **Modello GAN pesante** — *Real-ESRGAN anime 6B* (18 MB): **×4 nativo** (con Fattore ×2 viene ridotto), aspetto
-  "stampato", molto nitido, ma tende a cancellare i retini fini e a "ridisegnare" il lettering minuscolo; **decine di
-  secondi per pagina** anche su GPU, minuti sulla CPU. È l'ultimo interruttore delle impostazioni e si può accendere
-  **solo con la Super risoluzione standard spenta**: i due sistemi sono alternativi (riaccendendo la standard, il GAN
-  si spegne). Per scansioni di manga con retini CUNet dà in genere il risultato migliore.
 - Con WebGPU le pagine seguenti vengono pre-elaborate in background mentre leggi; con la sola CPU (WebAssembly,
   fino a 4 thread) si usa **Pre-elabora questo volume**, che elabora tutto il volume con barra di avanzamento, tempo
-  stimato e Annulla (lo schermo resta acceso). Per il GAN conviene sempre la pre-elaborazione.
+  stimato e Annulla (lo schermo resta acceso). Conviene comunque la pre-elaborazione.
+- Il modello tende a cancellare i retini finissimi e a "ridisegnare" il lettering minuscolo delle scansioni a bassa
+  risoluzione: **Confronta** mostra l'originale per giudicare.
 
-I modelli non sono nel repository: `npm run setup` scarica CUNet dalla release di nunif e il GAN dalla
+Il modello non è nel repository: `npm run setup` lo scarica dalla
 [release `models-v1`](https://github.com/gianmarcocherubini/4k-CBR-CBZ-Reader/releases/tag/models-v1) di questo
 repository (export ONNX a dimensioni dinamiche del `.pth` ufficiale, licenza BSD-3).
 
@@ -180,8 +177,8 @@ src/
   lib/reader/      layout delle tavole (con spazio centrale), cache LRU delle pagine
   lib/spread.ts    accoppiamento intelligente delle pagine e pagine bianche inserite
   lib/upscale/     Anime4K su WebGPU (anime4k.ts) e WebGL2 (glslHooks.ts + webgl2Backend.ts, shader ufficiali in
-                   shaders/), motore con coda e livello automatico (srEngine.ts), waifu2x CUNet (cunet/: worker
-                   onnxruntime-web, cache OPFS, batch)
+                   shaders/), motore con coda e livello automatico (srEngine.ts), Real-ESRGAN (cunet/: worker
+                   onnxruntime-web generico per modelli pesanti, cache OPFS, batch)
   components/      libreria, lettore (gesti, barre, impostazioni raggruppate)
   sw.ts            service worker (precache, offline, COOP/COEP, cache del motore e del modello)
 scripts/           make-fixtures.mjs (CBZ e CBR di prova), fetch-models.mjs (npm run setup)

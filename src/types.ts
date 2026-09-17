@@ -57,7 +57,7 @@ export type SrLevel = 'auto' | 'M' | 'VL' | 'UL'
  * auto = x4 when memory and GPU allow (heavy models: their native factor), else x2.
  */
 export type SrScale = 'auto' | 'x2' | 'x4'
-/** Model of the heavy "Qualità massima" tier. */
+/** Models of the heavy "Qualità massima" tier ('cunet' is legacy: only its caches are still cleaned up). */
 export type HeavyModel = 'cunet' | 'esrgan6b'
 
 export interface ReaderSettings {
@@ -74,10 +74,8 @@ export interface ReaderSettings {
   srRestore: boolean
   /** Scan clean-up: paper levels + light denoise ("Pulizia scansione"). */
   srClean: boolean
-  /** "Qualità massima (lenta)": waifu2x CUNet, experimental, off by default. */
+  /** "Qualità massima (lenta)": Real-ESRGAN anime 6B at x4, experimental, off by default. */
   maxQuality: boolean
-  /** Heavy GAN model (Real-ESRGAN anime 6B) for the max-quality tier; only when superResolution is off. */
-  ganModel: boolean
   theme: Theme
   stageBackground: StageBackground
   /** Centre margin between the two pages in double-page mode. */
@@ -101,7 +99,6 @@ export const DEFAULT_SETTINGS: ReaderSettings = {
   srRestore: false,
   srClean: false,
   maxQuality: false,
-  ganModel: false,
   theme: 'system',
   stageBackground: 'default',
   gutter: 'm',

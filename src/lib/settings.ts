@@ -7,8 +7,10 @@ export function loadSettings(): ReaderSettings {
   try {
     const raw = localStorage.getItem(KEY)
     if (!raw) return { ...DEFAULT_SETTINGS }
-    const parsed = JSON.parse(raw) as Partial<ReaderSettings>
-    return { ...DEFAULT_SETTINGS, ...parsed }
+    const parsed = JSON.parse(raw) as Partial<ReaderSettings> & { ganModel?: boolean }
+    const { ganModel, ...rest } = parsed
+    // The separate "Modello GAN pesante" switch was folded into "Qualità massima".
+    return { ...DEFAULT_SETTINGS, ...rest, maxQuality: Boolean(rest.maxQuality || ganModel) }
   } catch {
     return { ...DEFAULT_SETTINGS }
   }

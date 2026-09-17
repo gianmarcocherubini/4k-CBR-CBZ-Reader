@@ -282,12 +282,7 @@ export function SettingsPanel({
 
           <Group title="Super risoluzione" footer={extra} testId="sr-section">
             <Row title="Super risoluzione" hint="Anime4K sulla GPU: la pagina viene ingrandita ×2 o ×4 rispetto all’originale e poi adattata allo schermo. Linee e lettering più nitidi a ogni zoom.">
-              {/* Turning the standard tier on switches the heavy GAN model off: they are exclusive. */}
-              <Switch
-                checked={settings.superResolution}
-                onChange={(v) => onChange(v ? { superResolution: true, ganModel: false } : { superResolution: false })}
-                label="Super risoluzione"
-              />
+              <Switch checked={settings.superResolution} onChange={(v) => onChange({ superResolution: v })} label="Super risoluzione" />
             </Row>
             <Row title="Livello">
               <Segmented<SrLevel>
@@ -305,7 +300,7 @@ export function SettingsPanel({
             </Row>
             <Row
               title="Fattore"
-              hint="Ingrandimento rispetto alla pagina originale, indipendente dallo schermo. Auto: ×4 quando GPU e memoria lo consentono (pagine fino a ~1 MP), altrimenti ×2. Vale anche per Qualità massima e modello GAN."
+              hint="Ingrandimento rispetto alla pagina originale, indipendente dallo schermo. Auto: ×4 quando GPU e memoria lo consentono (pagine fino a ~1 MP), altrimenti ×2."
             >
               <Segmented<SrScale>
                 label="Fattore di ingrandimento"

@@ -1,24 +1,18 @@
 // Fetches the assets of the "Qualità massima" tier, which are too large to commit:
-//   public/models/waifu2x_cunet_art_scale2x.onnx  (5.2 MB, nunif, MIT) — extracted from the 700 MB
-//                                                  release zip with HTTP range requests (only the entry is read)
+//   public/models/realesrgan_x4plus_anime_6b.onnx   (17 MB) Real-ESRGAN anime 6B, see below
 //   public/ort/ort-wasm-simd-threaded*.{mjs,wasm}   onnxruntime-web binaries (served same-origin, cached by the SW)
 // Usage: node scripts/fetch-models.mjs   (npm run setup). Idempotent; a failure leaves the app working without the tier.
-import { BlobWriter, configure, HttpRangeReader, ZipReader } from '@zip.js/zip.js'
 import { copyFileSync, existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-configure({ useWebWorkers: false })
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const modelsDir = join(root, 'public', 'models')
 const ortDir = join(root, 'public', 'ort')
 mkdirSync(modelsDir, { recursive: true })
 mkdirSync(ortDir, { recursive: true })
 
-const ZIP_URL = 'https://github.com/nagadomi/nunif/releases/download/0.0.0/waifu2x_onnx_models_20250502.zip'
-const ENTRY = 'onnx_models/cunet/art/scale2x.onnx'
-const MODEL = join(modelsDir, 'waifu2x_cunet_art_scale2x.onnx')
-// Heavy GAN tier: dynamic-shape ONNX export of RealESRGAN_x4plus_anime_6B.pth (xinntao/Real-ESRGAN, BSD-3),
+// Dynamic-shape ONNX export of RealESRGAN_x4plus_anime_6B.pth (xinntao/Real-ESRGAN, BSD-3),
 // published as a release asset of this repository (see the models-v1 release notes).
 const GAN_URL = 'https://github.com/gianmarcocherubini/4k-CBR-CBZ-Reader/releases/download/models-v1/realesrgan_x4plus_anime_6b.onnx'
 const GAN_MODEL = join(modelsDir, 'realesrgan_x4plus_anime_6b.onnx')
@@ -32,23 +26,6 @@ async function fetchGan() {
   if (!res.ok) throw new Error(`GET ${GAN_URL}: ${res.status}`)
   writeFileSync(GAN_MODEL, Buffer.from(await res.arrayBuffer()))
   console.log(`GAN model written: ${GAN_MODEL} (${statSync(GAN_MODEL).size} bytes)`)
-}
-
-async function fetchModel() {
-  if (existsSync(MODEL) && statSync(MODEL).size > 1_000_000) {
-    console.log('model already present:', MODEL)
-    return
-  }
-  const head = await fetch(ZIP_URL, { method: 'HEAD', redirect: 'follow' })
-  if (!head.ok) throw new Error(`HEAD ${ZIP_URL}: ${head.status}`)
-  const reader = new ZipReader(new HttpRangeReader(head.url, { useXHR: false }))
-  const entries = await reader.getEntries()
-  const entry = entries.find((e) => e.filename === ENTRY)
-  if (!entry) throw new Error(`${ENTRY} not found in the archive`)
-  const blob = await entry.getData(new BlobWriter())
-  await reader.close()
-  writeFileSync(MODEL, Buffer.from(await blob.arrayBuffer()))
-  console.log(`model written: ${MODEL} (${blob.size} bytes)`)
 }
 
 function copyOrt() {
@@ -71,7 +48,6 @@ function copyOrt() {
 
 try {
   copyOrt()
-  await fetchModel()
   await fetchGan()
 } catch (e) {
   console.error('setup incomplete:', e instanceof Error ? e.message : e)

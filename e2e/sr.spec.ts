@@ -251,47 +251,44 @@ test('WebGL2 fallback runs the same shaders and matches the WebGPU output', asyn
   expect(psnr).toBeGreaterThan(40)
 })
 
-test('Qualità massima: CUNet batch job caches results that survive a reload', async ({ page }) => {
-  test.setTimeout(10 * 60_000)
+test('Qualità massima: Real-ESRGAN x4 batch job, results win over Anime4K and survive a reload', async ({ page }) => {
+  test.setTimeout(15 * 60_000)
   await page.goto('/')
   await importAndOpen(page, 'tiny-book.cbz', 'tiny-book')
   await page.mouse.move(590, 410)
   await page.getByTestId('settings').click()
   await expect(page.getByTestId('mq-status')).toContainText('Disattivata')
+  // The standard tier stays on: it shows the page while the heavy model works.
+  await expect(page.getByRole('switch', { name: 'Super risoluzione' })).toHaveAttribute('aria-checked', 'true')
   await page.getByRole('switch', { name: 'Qualità massima' }).click()
   const status = page.getByTestId('mq-status')
   await expect(status).not.toContainText('Caricamento', { timeout: 180_000 })
   const text = (await status.textContent()) ?? ''
-  test.skip(text.includes('Modello non disponibile'), 'model not fetched (npm run setup)')
-  expect(text).toMatch(/waifu2x CUNet · (WebGPU|CPU)/)
-  console.log('CUNet:', text)
+  test.skip(text.includes('non disponibile su questo server'), 'GAN model not fetched (npm run setup)')
+  expect(text).toMatch(/Real-ESRGAN anime 6B \(GAN\) ×4 · (WebGPU|CPU)/)
+  console.log('GAN:', text)
 
   await page.getByTestId('mq-start').click()
   await expect(page.getByTestId('mq-cancel')).toBeVisible()
-  await expect(page.getByText(/^Completato: 2 pagine in cache\./)).toBeVisible({ timeout: 8 * 60_000 })
+  await expect(page.getByText(/^Completato: 2 pagine in cache\./)).toBeVisible({ timeout: 12 * 60_000 })
   await page.getByRole('button', { name: 'Chiudi impostazioni' }).click()
 
   const p1 = page.locator('[data-testid=page][data-page="1"]')
-  await expect(p1).toHaveAttribute('data-sr', 'CUNet', { timeout: 30_000 })
-  await expect(p1.locator('canvas[data-testid=enhanced]')).toHaveAttribute('data-sr-width', '600')
+  await expect(p1).toHaveAttribute('data-sr', 'GAN', { timeout: 30_000 })
+  // Native x4 output (300 px pages -> 1200), fitted to the box.
+  await expect(p1.locator('canvas[data-testid=enhanced]')).toHaveAttribute('data-sr-width', '1200')
   await page.mouse.move(600, 420)
-  await expect(badge(page)).toHaveText('SR ×2 CUNet')
+  await expect(badge(page)).toHaveText('SR ×4 GAN')
 
-  // Faithfulness of the CUNet output vs the source (downsampled back).
-  const psnr = await page.evaluate(async () => {
+  // Sanity: not blank, not garbage (has both dark and light pixels).
+  const stats = await page.evaluate(() => {
     const canvas = document.querySelector('[data-testid=page][data-page="1"] canvas') as HTMLCanvasElement
-    const r = await fetch('/e2e/fixtures/tiny-book.cbz')
-    void r
-    // Source pixels: re-decode the page through the app's blob is not reachable here, so compare
-    // against a bicubic downsample consistency check: the 2x result downsampled twice must be stable.
     const c = document.createElement('canvas')
     c.width = canvas.width / 2
     c.height = canvas.height / 2
     const ctx = c.getContext('2d')!
-    ctx.imageSmoothingQuality = 'high'
     ctx.drawImage(canvas, 0, 0, c.width, c.height)
     const a = ctx.getImageData(0, 0, c.width, c.height).data
-    // Sanity: not blank, not garbage (has both dark and light pixels).
     let dark = 0
     let light = 0
     for (let i = 0; i < a.length; i += 4) {
@@ -301,19 +298,19 @@ test('Qualità massima: CUNet batch job caches results that survive a reload', a
     }
     return { dark, light, total: a.length / 4 }
   })
-  expect(psnr.dark).toBeGreaterThan(psnr.total * 0.02)
-  expect(psnr.light).toBeGreaterThan(psnr.total * 0.3)
+  expect(stats.dark).toBeGreaterThan(stats.total * 0.02)
+  expect(stats.light).toBeGreaterThan(stats.total * 0.3)
 
   // Cached results are served after a reload without recomputing.
   await page.reload()
   await expect(page.getByTestId('reader')).toHaveAttribute('data-status', 'ready', { timeout: 20_000 })
-  await expect(page.locator('[data-testid=page][data-page="1"]')).toHaveAttribute('data-sr', 'CUNet', { timeout: 15_000 })
+  await expect(page.locator('[data-testid=page][data-page="1"]')).toHaveAttribute('data-sr', 'GAN', { timeout: 15_000 })
   await page.keyboard.press('ArrowLeft')
-  await expect(page.locator('[data-testid=page][data-page="2"]')).toHaveAttribute('data-sr', 'CUNet', { timeout: 15_000 })
+  await expect(page.locator('[data-testid=page][data-page="2"]')).toHaveAttribute('data-sr', 'GAN', { timeout: 15_000 })
 })
 
 test('Qualità massima on the CPU (WebAssembly threads): batch job only', async ({ page }) => {
-  test.setTimeout(15 * 60_000)
+  test.setTimeout(20 * 60_000)
   await page.goto('/?cunet=wasm')
   await importAndOpen(page, 'tiny-book.cbz', 'tiny-book')
   await page.mouse.move(590, 410)
@@ -322,17 +319,17 @@ test('Qualità massima on the CPU (WebAssembly threads): batch job only', async 
   const status = page.getByTestId('mq-status')
   await expect(status).not.toContainText('Caricamento', { timeout: 180_000 })
   const text = (await status.textContent()) ?? ''
-  test.skip(text.includes('Modello non disponibile'), 'model not fetched (npm run setup)')
+  test.skip(text.includes('non disponibile su questo server'), 'GAN model not fetched (npm run setup)')
   expect(text).toContain('CPU (WebAssembly')
   const isolated = await page.evaluate(() => crossOriginIsolated)
-  console.log('CUNet CPU:', text, '| crossOriginIsolated:', isolated)
+  console.log('GAN CPU:', text, '| crossOriginIsolated:', isolated)
   if (isolated) expect(text).toMatch(/[2-9] thread|1[0-9] thread/)
   const t0 = Date.now()
   await page.getByTestId('mq-start').click()
-  await expect(page.getByText(/^Completato: 2 pagine in cache\./)).toBeVisible({ timeout: 12 * 60_000 })
+  await expect(page.getByText(/^Completato: 2 pagine in cache\./)).toBeVisible({ timeout: 16 * 60_000 })
   console.log(`CPU batch of 2 tiny pages: ${((Date.now() - t0) / 1000).toFixed(1)} s`)
   await page.getByRole('button', { name: 'Chiudi impostazioni' }).click()
-  await expect(page.locator('[data-testid=page][data-page="1"]')).toHaveAttribute('data-sr', 'CUNet', { timeout: 30_000 })
+  await expect(page.locator('[data-testid=page][data-page="1"]')).toHaveAttribute('data-sr', 'GAN', { timeout: 30_000 })
 })
 
 test('factor x4 / x2 / auto, "Linee nitide", "Pulizia scansione"', async ({ page }) => {
@@ -389,67 +386,6 @@ test('factor x4 / x2 / auto, "Linee nitide", "Pulizia scansione"', async ({ page
   await page.getByRole('switch', { name: 'Linee nitide' }).click()
   await page.getByRole('switch', { name: 'Pulizia scansione' }).click()
   await expect(badge(page)).toHaveText(/^SR ×4 (M|VL|UL)$/, { timeout: 90_000 })
-})
-
-test('heavy GAN model: gated by the standard SR switch, batch job, cached results', async ({ page }) => {
-  test.setTimeout(15 * 60_000)
-  await page.goto('/')
-  await importAndOpen(page, 'tiny-book.cbz', 'tiny-book')
-  await page.mouse.move(590, 410)
-  await page.getByTestId('settings').click()
-  // Disabled while the standard super resolution is on.
-  await expect(page.getByTestId('gan-toggle-wrap')).toHaveAttribute('aria-disabled', 'true')
-  await expect(page.getByTestId('mq-status')).toContainText('Disattivata')
-  await page.getByRole('switch', { name: 'Super risoluzione' }).click()
-  await expect(page.getByTestId('gan-toggle-wrap')).toHaveAttribute('aria-disabled', 'false')
-  await page.getByRole('switch', { name: 'Modello GAN pesante' }).click()
-  const status = page.getByTestId('mq-status')
-  await expect(status).not.toContainText('Caricamento', { timeout: 180_000 })
-  const text = (await status.textContent()) ?? ''
-  test.skip(text.includes('non disponibile su questo server'), 'GAN model not fetched (npm run setup)')
-  expect(text).toMatch(/Real-ESRGAN anime 6B \(GAN\) · (WebGPU|CPU)/)
-  console.log('GAN:', text)
-
-  // Re-enabling the standard SR switches the GAN model off again (exclusive).
-  await page.getByRole('switch', { name: 'Super risoluzione' }).click()
-  await expect(page.getByRole('switch', { name: 'Modello GAN pesante' })).toHaveAttribute('aria-checked', 'false')
-  await expect(page.getByTestId('gan-toggle-wrap')).toHaveAttribute('aria-disabled', 'true')
-  await page.getByRole('switch', { name: 'Super risoluzione' }).click()
-  await page.getByRole('switch', { name: 'Modello GAN pesante' }).click()
-  await expect(status).toHaveText(/Real-ESRGAN anime 6B \(GAN\) · (WebGPU|CPU)/, { timeout: 180_000 })
-
-  await page.getByTestId('mq-start').click()
-  await expect(page.getByText(/^Completato: 2 pagine in cache\./)).toBeVisible({ timeout: 12 * 60_000 })
-  await page.getByRole('button', { name: 'Chiudi impostazioni' }).click()
-  const p1 = page.locator('[data-testid=page][data-page="1"]')
-  await expect(p1).toHaveAttribute('data-sr', 'GAN', { timeout: 30_000 })
-  // Real-ESRGAN's native x4 output is kept (300 px pages -> 1200), then fitted to the box.
-  await expect(p1.locator('canvas[data-testid=enhanced]')).toHaveAttribute('data-sr-width', '1200')
-  await page.mouse.move(600, 420)
-  await expect(badge(page)).toHaveText('SR ×4 GAN')
-  const stats = await page.evaluate(() => {
-    const canvas = document.querySelector('[data-testid=page][data-page="1"] canvas') as HTMLCanvasElement
-    const c = document.createElement('canvas')
-    c.width = canvas.width / 2
-    c.height = canvas.height / 2
-    const ctx = c.getContext('2d')!
-    ctx.drawImage(canvas, 0, 0, c.width, c.height)
-    const a = ctx.getImageData(0, 0, c.width, c.height).data
-    let dark = 0
-    let light = 0
-    for (let i = 0; i < a.length; i += 4) {
-      const l = 0.299 * a[i]! + 0.587 * a[i + 1]! + 0.114 * a[i + 2]!
-      if (l < 80) dark++
-      if (l > 200) light++
-    }
-    return { dark, light, total: a.length / 4 }
-  })
-  expect(stats.dark).toBeGreaterThan(stats.total * 0.02)
-  expect(stats.light).toBeGreaterThan(stats.total * 0.3)
-  // Cached results survive a reload, in their own cache separate from CUNet.
-  await page.reload()
-  await expect(page.getByTestId('reader')).toHaveAttribute('data-status', 'ready', { timeout: 20_000 })
-  await expect(page.locator('[data-testid=page][data-page="1"]')).toHaveAttribute('data-sr', 'GAN', { timeout: 15_000 })
 })
 
 test('?sr=off disables super resolution entirely', async ({ page }) => {

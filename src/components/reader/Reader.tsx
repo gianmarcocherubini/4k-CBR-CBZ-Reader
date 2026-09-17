@@ -439,24 +439,22 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose 
 
   useWakeLock(status === 'ready')
 
-  // ---- "Qualità massima" (waifu2x CUNet or the heavy GAN; cached results take precedence) -----
-  // The GAN model is only allowed while the standard super resolution is off.
-  const ganActive = settings.ganModel && !settings.superResolution
-  const heavyModel = ganActive ? 'esrgan6b' : 'cunet'
-  const mq = useMaxQuality(status === 'ready' && (settings.maxQuality || ganActive), heavyModel)
-  const heavyLabel = ganActive ? 'GAN' : 'CUNet'
-  /** Factor asked of the heavy model: the setting, or its native output (GAN x4, CUNet x2) on Auto. */
-  const heavyMaxFactor: HeavyFactor = settings.srScale === 'x4' ? 4 : settings.srScale === 'x2' ? 2 : ganActive ? 4 : 2
+  // ---- "Qualità massima" (Real-ESRGAN anime 6B at x4; cached results take precedence) ---------
+  // Coexists with the standard tier: Anime4K shows the page at once, the GAN result replaces it.
+  const mq = useMaxQuality(status === 'ready' && settings.maxQuality, 'esrgan6b')
+  const heavyLabel = 'GAN'
+  /** The GAN's native factor; the worker drops to x2 only when x4 would exceed the canvas cap. */
+  const heavyMaxFactor: HeavyFactor = 4
   const [cunetResults, setCunetResults] = useState<Map<number, SrResult>>(() => new Map())
   /** A heavy result as shown: its factor is read off the bitmap (x4 results are preferred when cached). */
   const heavyResult = useCallback(
     (index: number, bitmap: ImageBitmap): SrResult => {
       const size = sizes[index]
-      return { bitmap, level: heavyLabel, factor: size ? Math.max(1, Math.round(bitmap.width / size.w)) : 2, ms: 0 }
+      return { bitmap, level: heavyLabel, factor: size ? Math.max(1, Math.round(bitmap.width / size.w)) : 4, ms: 0 }
     },
-    [sizes, heavyLabel],
+    [sizes],
   )
-  /** Raw page bytes straight from the archive (no decode), for the CUNet worker. */
+  /** Raw page bytes straight from the archive (no decode), for the heavy-model worker. */
   const pageBlob = useCallback(async (index: number): Promise<Blob> => {
     const opened = archiveRef.current
     if (!opened) throw new ArchiveError('aborted')
@@ -510,7 +508,7 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose 
       cancelled = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mq.engine, mq.tick, mq.batch.running, status, book, spreadKey, spreads, spreadIndex, pageBlob, heavyMaxFactor])
+  }, [mq.engine, mq.tick, mq.batch.running, status, book, spreadKey, spreads, spreadIndex, pageBlob])
 
   // ---- super resolution (Anime4K) ------------------------------------------------------------
   const srOptions = useMemo<SrOptions>(
@@ -600,14 +598,14 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sr.engine, sr.tick, status, spreadKey, spreadPages, sizes, spreads, spreadIndex, srOptions, cunetResults])
 
-  /** What the view shows: CUNet results first, then Anime4K. */
+  /** What the view shows: GAN results first, then Anime4K. */
   const displayed = useMemo(() => {
     if (cunetResults.size === 0) return enhanced
     const merged = new Map(enhanced)
     for (const [k, v] of cunetResults) merged.set(k, v)
     return merged
   }, [enhanced, cunetResults])
-  const heavyEnabled = settings.maxQuality || ganActive
+  const heavyEnabled = settings.maxQuality
   const showEnhanced = (settings.superResolution && !!sr.engine) || (heavyEnabled && cunetResults.size > 0)
   /** "Originale" held down: the plain page is shown instead of the enhanced one, to compare. */
   const [compare, setCompare] = useState(false)
@@ -664,8 +662,8 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose 
   })()
 
   const mqStatusLine = (() => {
-    if (!heavyEnabled) return 'Disattivata. Attivandola vengono scaricati il motore (≈ 14–25 MB) e il modello (5–18 MB), una sola volta.'
-    const modelName = ganActive ? 'Real-ESRGAN anime 6B (GAN)' : 'waifu2x CUNet'
+    if (!heavyEnabled) return 'Disattivata. Attivandola vengono scaricati il motore (≈ 14–25 MB) e il modello (18 MB), una sola volta.'
+    const modelName = 'Real-ESRGAN anime 6B (GAN)'
     switch (mq.status) {
       case 'idle':
       case 'loading':
@@ -677,10 +675,9 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose 
       case 'ready': {
         const i = mq.engine?.info
         if (!i) return 'Pronta.'
-        const factorNote = `Fattore ×${heavyMaxFactor}${heavyMaxFactor === 4 && !ganActive ? ' (due passaggi, circa 5 volte più lento)' : ''}.`
         return i.ep === 'webgpu'
-          ? `${modelName} · WebGPU: le pagine seguenti vengono elaborate in background mentre leggi. ${factorNote}`
-          : `${modelName} · CPU (WebAssembly, ${i.threads} thread${i.crossOriginIsolated ? '' : ', isolamento cross-origin assente'}): troppo lenta durante la lettura, usa “Pre-elabora questo volume”. ${factorNote}`
+          ? `${modelName} ×4 · WebGPU: le pagine seguenti vengono elaborate in background mentre leggi.`
+          : `${modelName} ×4 · CPU (WebAssembly, ${i.threads} thread${i.crossOriginIsolated ? '' : ', isolamento cross-origin assente'}): troppo lenta durante la lettura, usa “Pre-elabora questo volume”.`
       }
     }
   })()
@@ -818,9 +815,6 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose 
                 mq.startBatch(book.id, Array.from({ length: pageCount }, (_, i) => i), pageBlob, heavyMaxFactor)
               }}
               onCancel={mq.cancelBatch}
-              gan={settings.ganModel}
-              ganAllowed={!settings.superResolution}
-              onToggleGan={(v) => updateSettings({ ganModel: v })}
             />
           }
         />
