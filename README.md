@@ -1,0 +1,160 @@
+# 4K CBR/CBZ Reader
+
+Lettore di fumetti e manga per iPad, come **web app installabile (PWA)** con un'interfaccia nello stile di Apple
+Libri: tutto gira nel browser, nessun server. Importa file **CBZ** (ZIP) e **CBR** (RAR) fino a 10 GB ciascuno, li
+tiene nell'archiviazione dell'app anche offline e li mostra a piena risoluzione con lettura da destra a sinistra,
+doppia pagina intelligente e super risoluzione AI sulla GPU.
+
+## Requisiti
+
+- Node.js 20+ (sviluppato con Node 24) e npm.
+- Per leggere: Safari su iPadOS 17+ (super risoluzione su WebGL2; da iPadOS 26 su WebGPU), oppure Chrome/Edge desktop.
+
+## Avvio in locale
+
+```bash
+npm install
+npm run setup        # scarica il modello waifu2x (5 MB) e copia onnxruntime in public/ (una sola volta)
+npm run dev          # http://127.0.0.1:4877
+```
+
+Apri l'indirizzo nel browser, tocca **Importa** e scegli uno o più `.cbz` / `.cbr` (o trascinali nella finestra).
+**Apri senza importare** legge il file scelto direttamente, senza copiarlo nell'archiviazione dell'app: utile se lo
+spazio è poco (il segnalibro resta comunque salvato).
+
+`npm run setup` serve solo per il livello "Qualità massima": senza, l'app funziona lo stesso e le impostazioni lo
+dicono. Se lo esegui mentre `npm run dev` è attivo, riavvia il server (i file in `public/ort` vengono letti all'avvio).
+
+Altri comandi:
+
+```bash
+npm run build        # build di produzione in dist/ (con service worker)
+npm run preview      # serve dist/ su http://127.0.0.1:4878
+npm test             # test unitari (Vitest)
+npm run fixtures     # genera i CBZ/CBR di prova in e2e/fixtures
+npm run test:e2e     # test end-to-end (Playwright; la prima volta: npx playwright install chromium)
+npm run check        # lint + typecheck + test + build
+```
+
+I test end-to-end del progetto `webgpu` (`e2e/sr.spec.ts`) usano il browser completo in modalità headless nuova, così la
+super risoluzione gira sulla GPU reale; con `E2E_PREVIEW=1 npm run test:e2e` girano contro la build di produzione e
+verificano anche il funzionamento offline.
+
+## Interfaccia
+
+Libreria e lettore seguono lo stile di Apple Libri: titolo grande, copertine con ombra, barre traslucide, controlli
+segmentati e interruttori iOS, elenchi raggruppati nelle impostazioni. L'aspetto segue quello del sistema (chiaro o
+scuro); in **Impostazioni → Aspetto** si può forzare, e lo **sfondo di lettura** dietro le pagine può essere Default
+(grigio chiaro o nero a seconda dell'aspetto), Nero o Bianco.
+
+## Come si usa il lettore
+
+- **Tocco ai lati**: in modalità manga (destra → sinistra) il tocco a sinistra va avanti, a destra indietro. Tocco al
+  centro: mostra/nasconde le barre. Funzionano anche scorrimento orizzontale, frecce, spazio, PagSu/PagGiù, Home/Fine.
+- **Doppia pagina intelligente**: le pagine verticali vengono accoppiate, le tavole doppie (orizzontali) restano da sole
+  e la coppia riparte dopo. **Sfasa coppie** decide se la copertina sta da sola (1 | 2-3 | 4-5…) o si accoppia
+  (1-2 | 3-4…); l'impostazione è per volume. Con **Automatica** la doppia pagina si attiva con lo schermo in
+  orizzontale.
+- **Pagina bianca qui**: se in un punto le coppie non combaciano (una pagina pubblicitaria in mezzo, per esempio),
+  inserisce una pagina bianca prima di quella corrente e le coppie seguenti si spostano di una. Si ricorda per volume.
+- **Spazio centrale**: il margine tra le due pagine, bianco di default come la piega di un libro; in Impostazioni si
+  sceglie la larghezza (nessuno, stretto, medio, largo) e il colore (bianco, carta, sfondo).
+- **Zoom**: pizzico, doppio tocco al centro (×2,5) e Ctrl + rotella. Alla fine del gesto la pagina viene ridisegnata
+  alla nuova dimensione, quindi resta nitida. Adattamento: schermo, altezza, larghezza, 1:1 (un pixel dell'immagine
+  per pixel dello schermo).
+- **Segnalibro**, dimensioni delle pagine e pagine bianche vengono salvati per ogni volume: si riprende dove si era
+  rimasti e la suddivisione in coppie è stabile tra una sessione e l'altra.
+- Lo schermo resta acceso durante la lettura (Wake Lock).
+
+## Super risoluzione
+
+### "Super risoluzione" (Anime4K, attiva di default)
+
+Quando una pagina è mostrata più grande dei suoi pixel (iPad ad alta densità, zoom), viene ingrandita ×2 con la rete
+**Anime4K Upscale_CNN_x2** sulla GPU, a strisce di 288 righe per usare poca memoria. Linee e lettering escono più
+nitidi del ridimensionamento del browser; le pagine già alla risoluzione dello schermo non vengono toccate
+(indicatore `SR nativo`). Funziona con lo zoom e con la doppia pagina; le pagine seguenti vengono elaborate in
+anticipo.
+
+- **Livello**: `Auto` parte da VL, misura il tempo della prima pagina e sceglie il livello più forte che sta sotto
+  100 ms per pagina (UL solo se la GPU lo consente; con 2–4 GB di RAM si ferma a M/VL). Si può forzare M, VL o UL.
+- **Backend automatico**: WebGPU (iPadOS 26+); su iPadOS 17/18 gli stessi shader ufficiali girano su **WebGL2**
+  (risultato verificato identico: 62,5 dB tra i due backend); senza GPU utilizzabile, ridimensionamento del browser.
+  Le impostazioni dicono sempre quale backend, livello e tempo stimato sono in uso.
+- **Indicatore** nella barra in alto: `SR ×2 VL` (livello in uso), `SR ×2 CUNet`, `SR…` (in elaborazione),
+  `SR nativo`, `SR n/d` (nessuna GPU utilizzabile).
+
+### "Qualità massima (lenta)" (waifu2x CUNet, sperimentale, spenta di default)
+
+Il risultato più fedele (conserva i retini), con **waifu2x CUNet art/scale2x** tramite onnxruntime-web, ma richiede
+secondi per pagina. Attivandola vengono scaricati una volta sola il motore (14–27 MB) e il modello (5 MB), poi restano
+in cache.
+
+- Con WebGPU le pagine seguenti vengono pre-elaborate in background mentre leggi; con la sola CPU (WebAssembly,
+  fino a 4 thread) si usa **Pre-elabora questo volume**, che elabora tutto il volume con barra di avanzamento, tempo
+  stimato e Annulla (lo schermo resta acceso).
+- I risultati sono salvati per sempre nell'archiviazione dell'app (`sr-cache/<volume>/<pagina>.webp`) e hanno la
+  precedenza su Anime4K; eliminando il volume si cancellano.
+
+## Formati e limiti
+
+| Formato | Supporto |
+| --- | --- |
+| CBZ / ZIP, anche ZIP64 | Sì. Lettura voce per voce dal file, senza caricarlo in memoria. |
+| CBR / RAR 4 e RAR 5 | Sì, tramite unrar (WebAssembly) in un worker con letture a finestra sul file. |
+| RAR "solido" o multi-volume | No: messaggio esplicito. Ricomprimere senza l'opzione solido. |
+| Archivi cifrati | No. |
+| 7z, PDF | No. |
+| Immagini | JPEG, PNG, GIF, WebP, BMP, AVIF, HEIC (quelle che il browser sa decodificare). |
+
+Le pagine sono ordinate in modo naturale (`2.jpg` prima di `10.jpg`), ignorando `__MACOSX`, file nascosti e
+`ComicInfo.xml`.
+
+**Spazio**: l'import copia il file nell'Origin Private File System (OPFS) a blocchi di 8 MB da un worker; se OPFS
+manca il file finisce in IndexedDB. Prima di copiare viene controllato lo spazio disponibile. Un file da 4,5 GB si
+importa con la memoria del renderer che resta a poche decine di MB.
+
+## Installazione su iPad
+
+1. Apri il sito in Safari (una volta pubblicato, vedi sotto; in locale serve HTTPS o un tunnel su `localhost`).
+2. **Condividi → Aggiungi alla schermata Home**.
+3. Apri l'app dalla Home e **importa i file da lì**: l'app installata ha uno spazio di archiviazione separato da
+   Safari (fino al 60 % del disco, non soggetto alla scadenza dei 7 giorni). Il piè di pagina della libreria mostra lo
+   spazio usato.
+
+## Pubblicazione su GitHub Pages
+
+Il workflow `.github/workflows/deploy.yml` esegue lint, typecheck, test, `npm run setup`, build e test end-to-end
+sulla build, poi pubblica `dist/` su GitHub Pages a ogni push su `main`. Nel repository: **Settings → Pages →
+Source: GitHub Actions**. Il percorso base è ricavato dal nome del repository (`/4k-CBR-CBZ-Reader/`); per un dominio
+proprio impostare `VITE_BASE=/` nella build.
+
+Il service worker aggiunge le intestazioni COOP/COEP (isolamento cross-origin) a tutte le risposte: GitHub Pages non
+può impostarle, e servono ai thread WebAssembly di "Qualità massima". Diventano attive dal secondo caricamento. Il
+motore ONNX e il modello non vengono precaricati: finiscono in cache alla prima attivazione.
+
+## Flag per i test
+
+- `?storage=idb` forza l'import in IndexedDB invece che in OPFS.
+- `?sr=off` disattiva la super risoluzione; `?sr=webgl2` / `?sr=webgpu` forzano il backend Anime4K.
+- `?cunet=wasm` forza la CPU per "Qualità massima".
+- `?test` espone `window.__reader.importFiles(files)` e `window.__reader.openSession(file)` (sempre attivi in
+  sviluppo).
+
+## Struttura
+
+```
+src/
+  lib/archive/     rilevamento formato, lettore ZIP (zip.js), lettore RAR (worker + Extractor su Blob)
+  lib/storage/     IndexedDB (idb), OPFS, worker di copia, import, miniature
+  lib/reader/      layout delle tavole (con spazio centrale), cache LRU delle pagine
+  lib/spread.ts    accoppiamento intelligente delle pagine e pagine bianche inserite
+  lib/upscale/     Anime4K su WebGPU (anime4k.ts) e WebGL2 (glslHooks.ts + webgl2Backend.ts, shader ufficiali in
+                   shaders/), motore con coda e livello automatico (srEngine.ts), waifu2x CUNet (cunet/: worker
+                   onnxruntime-web, cache OPFS, batch)
+  components/      libreria, lettore (gesti, barre, impostazioni raggruppate)
+  sw.ts            service worker (precache, offline, COOP/COEP, cache del motore e del modello)
+scripts/           make-fixtures.mjs (CBZ e CBR di prova), fetch-models.mjs (npm run setup)
+e2e/               test Playwright (progetti chromium e webgpu)
+docs/, internal/   contesto di progetto, studio di fattibilità della super risoluzione, report
+```

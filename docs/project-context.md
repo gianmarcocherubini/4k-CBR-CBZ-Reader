@@ -1,0 +1,34 @@
+# 4K CBR & CBZ Reader — project context
+
+## Goal
+Personal iPad app for reading CBR/CBZ files, mainly manga, with high-resolution page rendering.
+
+## Constraints
+- User has no Mac (no Xcode) and no Apple Developer account (no App Store / TestFlight).
+- Native iOS would require free-Apple-ID sideloading with 7-day re-signing; rejected as the default path.
+
+## Decisions
+- 2026-09-17: Build as an installable PWA (Safari > Add to Home Screen), fully client-side, no backend.
+- Stack: Vite + React + TypeScript + Tailwind + vite-plugin-pwa; CBZ via @zip.js/zip.js, CBR via node-unrar-js (WASM); library in IndexedDB.
+- Manga-first reader: right-to-left by default, single/double page with spread handling, pinch-to-zoom, tap zones.
+- UI copy in Italian, dark theme by default.
+- Hosting: GitHub Pages via GitHub Actions.
+- 2026-09-17: CBR via node-unrar-js with a custom Blob-backed streaming adapter (libarchive.js rejected: loads whole archive in memory, 4 GB wasm cap). Solid RARs are refused with a clear error.
+- 2026-09-17: Import path is OPFS chunked copy from a worker, IndexedDB File put as fallback; "Apri senza importare" session mode as escape hatch for small quotas.
+
+## Required features (added 2026-09-17)
+- Local import of files up to 10GB each: never load a whole archive into memory; ZIP64; streaming RAR (libarchive.js or equivalent); import copies the file into app storage, plus an "open without importing" session mode.
+- Smart double page: portrait pages paired into spreads, landscape pages always alone, RTL order, cover-offset toggle.
+- AI super resolution (phase 2): candidates are Anime4K real-time shaders (default), Real-ESRGAN/waifu2x on-device via WebGPU (experimental, cached), or offline upscaling on the PC before import. Pending spike report in docs/ai-upscaling-feasibility.md.
+
+- 2026-09-17: AI super resolution approved. Default = Anime4K Upscale_CNN_x2 (VL, UL on high-end) via anime4k-webgpu (WebGPU; Anime4K.js WebGL2 or bicubic fallback). Experimental, off by default = waifu2x CUNet art/scale2x via onnxruntime-web WebGPU EP, tiled, in a worker on next pages, cached to OPFS. Real-ESRGAN anime rejected (erases screentones, 8x cost) — offline on PC only. Source: docs/ai-upscaling-feasibility.md; prototype on branch spike/ai-upscaling.
+- 2026-09-17: Super resolution shipped on branch cursor/ai-upscaling-f557. Anime4K CNNx2 in 288-row strips (WebGPU; in-repo WebGL2 runner of the official GLSL shaders instead of Anime4K.js; plain scaling fallback), auto level VL→UL by frame-time probe. waifu2x CUNet via onnxruntime-web in a worker, OPFS cache, COOP/COEP injected by the app's own service worker (vite-plugin-pwa injectManifest); ORT binaries and model runtime-cached, model fetched by `npm run setup`/CI and git-ignored.
+- Platform facts: WebGPU default in Safari 26 / iPadOS 26; OPFS sync access handles since Safari 15.2; home-screen web app quota up to 60% of disk, exempt from the 7-day ITP cap; WASM threads need COOP/COEP (coi-serviceworker on static hosting).
+
+## Repository
+- GitHub: https://github.com/gianmarcocherubini/4k-CBR-CBZ-Reader (private, personal account; earlier misnamed CBR-CBR repo superseded). Personal project, not work-related. Not yet linked to the Project as of 2026-09-17; workers still push to the temporary Origin repo.
+- User keeps a fine-grained GitHub token at C:\Users\CHERUG02\.githubfinegrainedtoken on his Windows PC (not reachable from cloud; never paste it in chat). Access options offered: Cursor GitHub App link, Cursor cloud secret GITHUB_TOKEN, or self-hosted worker on his PC.
+- Hosting: GitHub Pages requires a public repo or GitHub Pro; alternatives Cloudflare Pages / Vercel. Decision pending.
+
+## Open questions
+- iPad model and iPadOS version (affects Wake Lock, storage quota, OPFS availability).

@@ -1,0 +1,2524 @@
+{
+ "env": {
+  "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/148.0.0.0 Safari/537.36",
+  "hardwareConcurrency": 4,
+  "crossOriginIsolated": true,
+  "deviceMemory": 16,
+  "jsHeap": 20851654,
+  "gpu": {
+   "adapterInfo": {
+    "vendor": "google",
+    "architecture": "swiftshader",
+    "device": "",
+    "description": ""
+   },
+   "features": [
+    "core-features-and-limits"
+   ],
+   "limits": {
+    "maxBufferSize": 1073741824,
+    "maxStorageBufferBindingSize": 1073741824,
+    "maxTextureDimension2D": 8192
+   }
+  },
+  "chrome": "Google Chrome 148.0.7778.96",
+  "cpu": "Intel(R) Xeon(R) Processor",
+  "nproc": "4",
+  "memTotalGB": 16,
+  "date": "2026-09-17T13:01:31.472Z"
+ },
+ "models": [
+  {
+   "id": "waifu2x_cunet_art_2x",
+   "label": "waifu2x CUNet art 2x (nunif)",
+   "file": "waifu2x_cunet_art_scale2x.onnx",
+   "scale": 2,
+   "license": "MIT",
+   "source": "https://unlimited.waifu2x.net/models/cunet/art/scale2x.onnx"
+  },
+  {
+   "id": "waifu2x_swin_unet_art_scan_2x",
+   "label": "waifu2x swin_unet art_scan 2x (nunif)",
+   "file": "waifu2x_swin_unet_art_scan_scale2x.onnx",
+   "scale": 2,
+   "license": "MIT",
+   "source": "https://unlimited.waifu2x.net/models/swin_unet/art_scan/scale2x.onnx"
+  },
+  {
+   "id": "realesr_animevideov3_x4",
+   "label": "realesr-animevideov3 x4 (SRVGGNetCompact)",
+   "file": "realesr-animevideov3_x4.onnx",
+   "scale": 4,
+   "license": "BSD-3-Clause",
+   "source": "https://huggingface.co/tidus2102/Real-ESRGAN/resolve/main/RealESR-AnimeVideo-v3_x4.onnx"
+  },
+  {
+   "id": "realesrgan_x4plus_anime_6b",
+   "label": "RealESRGAN_x4plus_anime_6B (RRDBNet 6 blocks)",
+   "file": "RealESRGAN_x4plus_anime_6B.onnx",
+   "scale": 4,
+   "license": "BSD-3-Clause",
+   "source": "https://huggingface.co/deepghs/imgutils-models/resolve/main/real_esrgan/RealESRGAN_x4plus_anime_6B.onnx"
+  }
+ ],
+ "src:synthetic": {
+  "id": "synthetic",
+  "width": 1400,
+  "height": 2000,
+  "hasGT": true,
+  "note": "synthetic 1400x2000, JPEG q90 input, GT = 2x vector render",
+  "jpegBytes": 1084135
+ },
+ "synthetic|baselines": {
+  "nearest": {
+   "ms": 49.08499999996275,
+   "metrics": {
+    "psnr": 17.52668265117058,
+    "ssim": 0.9137445856950533
+   }
+  },
+  "bicubic": {
+   "ms": 104.41000000014901,
+   "metrics": {
+    "psnr": 18.926854271375174,
+    "ssim": 0.9134616831100464
+   }
+  },
+  "wallMs": 969,
+  "mem": {
+   "baseMB": {
+    "renderer": 599,
+    "gpu": 140,
+    "total": 1218
+   },
+   "peakMB": {
+    "renderer": 599,
+    "gpu": 140,
+    "total": 1218
+   },
+   "deltaMB": {
+    "renderer": 0,
+    "gpu": 0,
+    "total": 0
+   }
+  },
+  "ok": true
+ },
+ "synthetic|a4k|CNNx2M": {
+  "variant": "CNNx2M",
+  "buildMs": 271.2749999994412,
+  "runsMs": [
+   2910.6800000006333,
+   2221.3899999996647,
+   2196.0950000006706
+  ],
+  "readbackMs": 86.90499999932945,
+  "outputSize": {
+   "width": 2800,
+   "height": 4000
+  },
+  "pipelineCount": 10,
+  "metrics": {
+   "psnr": 24.995995684800036,
+   "ssim": 0.9780221841973792
+  },
+  "wallMs": 8200,
+  "mem": {
+   "baseMB": {
+    "renderer": 664,
+    "gpu": 787,
+    "total": 1800
+   },
+   "peakMB": {
+    "renderer": 664,
+    "gpu": 787,
+    "total": 1800
+   },
+   "deltaMB": {
+    "renderer": 0,
+    "gpu": 0,
+    "total": 0
+   }
+  },
+  "ok": true,
+  "png": "synthetic__a4k__CNNx2M.png"
+ },
+ "synthetic|a4k|CNNx2VL": {
+  "variant": "CNNx2VL",
+  "buildMs": 908.2099999999627,
+  "runsMs": [
+   7351.155000000261,
+   6615.745000000112,
+   6662.9350000005215
+  ],
+  "readbackMs": 67.25,
+  "outputSize": {
+   "width": 2800,
+   "height": 4000
+  },
+  "pipelineCount": 19,
+  "metrics": {
+   "psnr": 27.037601154651973,
+   "ssim": 0.9854421997581578
+  },
+  "wallMs": 22604,
+  "mem": {
+   "baseMB": {
+    "renderer": 726,
+    "gpu": 1289,
+    "total": 2369
+   },
+   "peakMB": {
+    "renderer": 726,
+    "gpu": 1289,
+    "total": 2369
+   },
+   "deltaMB": {
+    "renderer": 0,
+    "gpu": 0,
+    "total": 0
+   }
+  },
+  "ok": true,
+  "png": "synthetic__a4k__CNNx2VL.png"
+ },
+ "synthetic|a4k|CNNx2UL": {
+  "variant": "CNNx2UL",
+  "buildMs": 1773.1699999999255,
+  "runsMs": [
+   13799.145000000484,
+   12576.740000000224,
+   12584.989999999292
+  ],
+  "readbackMs": 79.35499999951571,
+  "outputSize": {
+   "width": 2800,
+   "height": 4000
+  },
+  "pipelineCount": 26,
+  "metrics": {
+   "psnr": 27.529220417055438,
+   "ssim": 0.9873611982234447
+  },
+  "wallMs": 41615,
+  "mem": {
+   "baseMB": {
+    "renderer": 719,
+    "gpu": 1575,
+    "total": 2620
+   },
+   "peakMB": {
+    "renderer": 719,
+    "gpu": 1575,
+    "total": 2620
+   },
+   "deltaMB": {
+    "renderer": 0,
+    "gpu": 0,
+    "total": 0
+   }
+  },
+  "ok": true,
+  "png": "synthetic__a4k__CNNx2UL.png"
+ },
+ "synthetic|a4k|ModeA": {
+  "variant": "ModeA",
+  "buildMs": 1784.8649999992922,
+  "runsMs": [
+   14116.769999999553,
+   12761.855000000447,
+   12886.5
+  ],
+  "readbackMs": 79.1699999999255,
+  "outputSize": {
+   "width": 2800,
+   "height": 4000
+  },
+  "pipelineCount": 3,
+  "metrics": {
+   "psnr": 22.961717148917383,
+   "ssim": 0.9666709860641567
+  },
+  "wallMs": 41989,
+  "mem": {
+   "baseMB": {
+    "renderer": 772,
+    "gpu": 2176,
+    "total": 3262
+   },
+   "peakMB": {
+    "renderer": 772,
+    "gpu": 2176,
+    "total": 3262
+   },
+   "deltaMB": {
+    "renderer": 0,
+    "gpu": 0,
+    "total": 0
+   }
+  },
+  "ok": true,
+  "png": "synthetic__a4k__ModeA.png"
+ },
+ "src:gogo": {
+  "id": "gogo",
+  "width": 1080,
+  "height": 1440,
+  "hasGT": false,
+  "note": "Go Go! Encyclopedia Girls p.3 (CC BY-SA 4.0), 1080x1440 JPEG q90, no GT",
+  "jpegBytes": 351070
+ },
+ "gogo|baselines": {
+  "nearest": {
+   "ms": 48.92999999970198,
+   "metrics": null
+  },
+  "bicubic": {
+   "ms": 81.3199999993667,
+   "metrics": null
+  },
+  "wallMs": 134,
+  "mem": {
+   "baseMB": {
+    "renderer": 876,
+    "gpu": 1337,
+    "total": 2720
+   },
+   "peakMB": {
+    "renderer": 876,
+    "gpu": 1337,
+    "total": 2720
+   },
+   "deltaMB": {
+    "renderer": 0,
+    "gpu": 0,
+    "total": 0
+   }
+  },
+  "ok": true
+ },
+ "gogo|a4k|CNNx2M": {
+  "variant": "CNNx2M",
+  "buildMs": 246.75499999988824,
+  "runsMs": [
+   1421.7050000000745,
+   1270.550000000745,
+   1246.054999999702
+  ],
+  "readbackMs": 36.269999999552965,
+  "outputSize": {
+   "width": 2160,
+   "height": 2880
+  },
+  "pipelineCount": 10,
+  "metrics": null,
+  "wallMs": 4242,
+  "mem": {
+   "baseMB": {
+    "renderer": 978,
+    "gpu": 1366,
+    "total": 2802
+   },
+   "peakMB": {
+    "renderer": 978,
+    "gpu": 1366,
+    "total": 2802
+   },
+   "deltaMB": {
+    "renderer": 0,
+    "gpu": 0,
+    "total": 0
+   }
+  },
+  "ok": true,
+  "png": "gogo__a4k__CNNx2M.png"
+ },
+ "gogo|a4k|CNNx2VL": {
+  "variant": "CNNx2VL",
+  "buildMs": 801.3899999996647,
+  "runsMs": [
+   3966.195000000298,
+   3660.4000000003725,
+   3677.7949999999255
+  ],
+  "readbackMs": 35.955000000074506,
+  "outputSize": {
+   "width": 2160,
+   "height": 2880
+  },
+  "pipelineCount": 19,
+  "metrics": null,
+  "wallMs": 12161,
+  "mem": {
+   "baseMB": {
+    "renderer": 890,
+    "gpu": 811,
+    "total": 2168
+   },
+   "peakMB": {
+    "renderer": 890,
+    "gpu": 811,
+    "total": 2168
+   },
+   "deltaMB": {
+    "renderer": 0,
+    "gpu": 0,
+    "total": 0
+   }
+  },
+  "ok": true,
+  "png": "gogo__a4k__CNNx2VL.png"
+ },
+ "gogo|a4k|CNNx2UL": {
+  "variant": "CNNx2UL",
+  "buildMs": 1659.1500000003725,
+  "runsMs": [
+   7610.104999999516,
+   7062.600000000559,
+   7140.875
+  ],
+  "readbackMs": 43.05499999970198,
+  "outputSize": {
+   "width": 2160,
+   "height": 2880
+  },
+  "pipelineCount": 26,
+  "metrics": null,
+  "wallMs": 23536,
+  "mem": {
+   "baseMB": {
+    "renderer": 762,
+    "gpu": 1046,
+    "total": 2248
+   },
+   "peakMB": {
+    "renderer": 762,
+    "gpu": 1046,
+    "total": 2248
+   },
+   "deltaMB": {
+    "renderer": 0,
+    "gpu": 0,
+    "total": 0
+   }
+  },
+  "ok": true,
+  "png": "gogo__a4k__CNNx2UL.png"
+ },
+ "gogo|a4k|ModeA": {
+  "variant": "ModeA",
+  "buildMs": 1640.664999999106,
+  "runsMs": [
+   7629.069999999367,
+   7012.825000000186,
+   7182.385000000708
+  ],
+  "readbackMs": 38.08499999996275,
+  "outputSize": {
+   "width": 2160,
+   "height": 2880
+  },
+  "pipelineCount": 3,
+  "metrics": null,
+  "wallMs": 23525,
+  "mem": {
+   "baseMB": {
+    "renderer": 785,
+    "gpu": 1366,
+    "total": 2592
+   },
+   "peakMB": {
+    "renderer": 785,
+    "gpu": 1366,
+    "total": 2592
+   },
+   "deltaMB": {
+    "renderer": 0,
+    "gpu": 0,
+    "total": 0
+   }
+  },
+  "ok": true,
+  "png": "gogo__a4k__ModeA.png"
+ },
+ "src:gogo-half": {
+  "id": "gogo-half",
+  "width": 540,
+  "height": 720,
+  "hasGT": true,
+  "note": "same page box-downsampled to 540x720 JPEG q90, GT = 1080x1440 original",
+  "jpegBytes": 124126
+ },
+ "gogo-half|baselines": {
+  "nearest": {
+   "ms": 6.510000000707805,
+   "metrics": {
+    "psnr": 20.104178091523593,
+    "ssim": 0.9136600453428625
+   }
+  },
+  "bicubic": {
+   "ms": 14.565000000409782,
+   "metrics": {
+    "psnr": 21.045509636895247,
+    "ssim": 0.8974622656991075
+   }
+  },
+  "wallMs": 303,
+  "mem": {
+   "baseMB": {
+    "renderer": 879,
+    "gpu": 929,
+    "total": 2298
+   },
+   "peakMB": {
+    "renderer": 879,
+    "gpu": 929,
+    "total": 2298
+   },
+   "deltaMB": {
+    "renderer": 0,
+    "gpu": 0,
+    "total": 0
+   }
+  },
+  "ok": true
+ },
+ "gogo-half|a4k|CNNx2M": {
+  "variant": "CNNx2M",
+  "buildMs": 236.25,
+  "runsMs": [
+   372.945000000298,
+   315.7600000007078,
+   345.82500000018626
+  ],
+  "readbackMs": 14.014999999664724,
+  "outputSize": {
+   "width": 1080,
+   "height": 1440
+  },
+  "pipelineCount": 10,
+  "metrics": {
+   "psnr": 27.048499531458408,
+   "ssim": 0.967432855014282
+  },
+  "wallMs": 1400,
+  "mem": {
+   "baseMB": {
+    "renderer": 911,
+    "gpu": 947,
+    "total": 2347
+   },
+   "peakMB": {
+    "renderer": 911,
+    "gpu": 947,
+    "total": 2347
+   },
+   "deltaMB": {
+    "renderer": 0,
+    "gpu": 0,
+    "total": 0
+   }
+  },
+  "ok": true,
+  "png": "gogo-half__a4k__CNNx2M.png"
+ },
+ "gogo-half|a4k|CNNx2VL": {
+  "variant": "CNNx2VL",
+  "buildMs": 811.3349999999627,
+  "runsMs": [
+   987.714999999851,
+   924.6049999995157,
+   894.7549999998882
+  ],
+  "readbackMs": 13.8050000006333,
+  "outputSize": {
+   "width": 1080,
+   "height": 1440
+  },
+  "pipelineCount": 19,
+  "metrics": {
+   "psnr": 28.18231388655001,
+   "ssim": 0.9730712455342123
+  },
+  "wallMs": 3668,
+  "mem": {
+   "baseMB": {
+    "renderer": 921,
+    "gpu": 500,
+    "total": 1828
+   },
+   "peakMB": {
+    "renderer": 921,
+    "gpu": 500,
+    "total": 1828
+   },
+   "deltaMB": {
+    "renderer": 0,
+    "gpu": 0,
+    "total": 0
+   }
+  },
+  "ok": true,
+  "png": "gogo-half__a4k__CNNx2VL.png"
+ },
+ "gogo-half|a4k|CNNx2UL": {
+  "variant": "CNNx2UL",
+  "buildMs": 1596.4350000005215,
+  "runsMs": [
+   1902.2750000003725,
+   1851.9449999993667,
+   1772.0900000007823
+  ],
+  "readbackMs": 11.009999999776483,
+  "outputSize": {
+   "width": 1080,
+   "height": 1440
+  },
+  "pipelineCount": 26,
+  "metrics": {
+   "psnr": 28.88060208031512,
+   "ssim": 0.9755652998794924
+  },
+  "wallMs": 7180,
+  "mem": {
+   "baseMB": {
+    "renderer": 860,
+    "gpu": 612,
+    "total": 1956
+   },
+   "peakMB": {
+    "renderer": 860,
+    "gpu": 612,
+    "total": 1956
+   },
+   "deltaMB": {
+    "renderer": 0,
+    "gpu": 0,
+    "total": 0
+   }
+  },
+  "ok": true,
+  "png": "gogo-half__a4k__CNNx2UL.png"
+ },
+ "gogo-half|a4k|ModeA": {
+  "variant": "ModeA",
+  "buildMs": 1636.2949999999255,
+  "runsMs": [
+   1865.9500000001863,
+   1821.144999999553,
+   1727.4199999999255
+  ],
+  "readbackMs": 13.815000000409782,
+  "outputSize": {
+   "width": 1080,
+   "height": 1440
+  },
+  "pipelineCount": 3,
+  "metrics": {
+   "psnr": 23.979318151360584,
+   "ssim": 0.9394191712187916
+  },
+  "wallMs": 7101,
+  "mem": {
+   "baseMB": {
+    "renderer": 861,
+    "gpu": 620,
+    "total": 1946
+   },
+   "peakMB": {
+    "renderer": 861,
+    "gpu": 620,
+    "total": 1946
+   },
+   "deltaMB": {
+    "renderer": 0,
+    "gpu": 0,
+    "total": 0
+   }
+  },
+  "ok": true,
+  "png": "gogo-half__a4k__ModeA.png"
+ },
+ "src:tagosaku": {
+  "id": "tagosaku",
+  "width": 600,
+  "height": 853,
+  "hasGT": false,
+  "note": "Kitazawa Rakuten 1902 scan (PD), 600x853 JPEG, no GT"
+ },
+ "tagosaku|baselines": {
+  "nearest": {
+   "ms": 7.985000000335276,
+   "metrics": null
+  },
+  "bicubic": {
+   "ms": 19.135000000707805,
+   "metrics": null
+  },
+  "wallMs": 30,
+  "mem": {
+   "baseMB": {
+    "renderer": 882,
+    "gpu": 491,
+    "total": 1864
+   },
+   "peakMB": {
+    "renderer": 882,
+    "gpu": 491,
+    "total": 1864
+   },
+   "deltaMB": {
+    "renderer": 0,
+    "gpu": 0,
+    "total": 0
+   }
+  },
+  "ok": true
+ },
+ "tagosaku|a4k|CNNx2M": {
+  "variant": "CNNx2M",
+  "buildMs": 227.66500000003725,
+  "runsMs": [
+   469.25499999988824,
+   400.50499999988824,
+   400.15499999932945
+  ],
+  "readbackMs": 17.359999999403954,
+  "outputSize": {
+   "width": 1200,
+   "height": 1706
+  },
+  "pipelineCount": 10,
+  "metrics": null,
+  "wallMs": 1528,
+  "mem": {
+   "baseMB": {
+    "renderer": 867,
+    "gpu": 533,
+    "total": 1872
+   },
+   "peakMB": {
+    "renderer": 867,
+    "gpu": 533,
+    "total": 1872
+   },
+   "deltaMB": {
+    "renderer": 0,
+    "gpu": 0,
+    "total": 0
+   }
+  },
+  "ok": true,
+  "png": "tagosaku__a4k__CNNx2M.png"
+ },
+ "tagosaku|a4k|CNNx2VL": {
+  "variant": "CNNx2VL",
+  "buildMs": 800.7549999998882,
+  "runsMs": [
+   1295.820000000298,
+   1192.5449999999255,
+   1201.8250000001863
+  ],
+  "readbackMs": 17.549999999813735,
+  "outputSize": {
+   "width": 1200,
+   "height": 1706
+  },
+  "pipelineCount": 19,
+  "metrics": null,
+  "wallMs": 4518,
+  "mem": {
+   "baseMB": {
+    "renderer": 923,
+    "gpu": 627,
+    "total": 2027
+   },
+   "peakMB": {
+    "renderer": 923,
+    "gpu": 627,
+    "total": 2027
+   },
+   "deltaMB": {
+    "renderer": 0,
+    "gpu": 0,
+    "total": 0
+   }
+  },
+  "ok": true,
+  "png": "tagosaku__a4k__CNNx2VL.png"
+ },
+ "tagosaku|a4k|CNNx2UL": {
+  "variant": "CNNx2UL",
+  "buildMs": 1605.660000000149,
+  "runsMs": [
+   2387.589999999851,
+   2300.1850000005215,
+   2332.7199999997392
+  ],
+  "readbackMs": 15.330000000074506,
+  "outputSize": {
+   "width": 1200,
+   "height": 1706
+  },
+  "pipelineCount": 26,
+  "metrics": null,
+  "wallMs": 8656,
+  "mem": {
+   "baseMB": {
+    "renderer": 922,
+    "gpu": 633,
+    "total": 2037
+   },
+   "peakMB": {
+    "renderer": 922,
+    "gpu": 633,
+    "total": 2037
+   },
+   "deltaMB": {
+    "renderer": 0,
+    "gpu": 0,
+    "total": 0
+   }
+  },
+  "ok": true,
+  "png": "tagosaku__a4k__CNNx2UL.png"
+ },
+ "tagosaku|a4k|ModeA": {
+  "variant": "ModeA",
+  "buildMs": 1602.464999999851,
+  "runsMs": [
+   2414.0800000000745,
+   2295.9949999991804,
+   2292.054999999702
+  ],
+  "readbackMs": 14.790000000037253,
+  "outputSize": {
+   "width": 1200,
+   "height": 1706
+  },
+  "pipelineCount": 3,
+  "metrics": null,
+  "wallMs": 8634,
+  "mem": {
+   "baseMB": {
+    "renderer": 866,
+    "gpu": 717,
+    "total": 2057
+   },
+   "peakMB": {
+    "renderer": 866,
+    "gpu": 717,
+    "total": 2057
+   },
+   "deltaMB": {
+    "renderer": 0,
+    "gpu": 0,
+    "total": 0
+   }
+  },
+  "ok": true,
+  "png": "tagosaku__a4k__ModeA.png"
+ },
+ "src:synthetic-crop": {
+  "id": "synthetic-crop",
+  "width": 512,
+  "height": 512,
+  "hasGT": true,
+  "note": "synthetic 512x512 crop (timing subset)",
+  "jpegBytes": 1084135
+ },
+ "synthetic-crop|ort|realesr_animevideov3_x4|wasm|t4": {
+  "model": "realesr_animevideov3_x4",
+  "ep": "wasm",
+  "tiles": 9,
+  "tileIn": 256,
+  "tileOut": 1024,
+  "modelBytes": 2495473,
+  "effectiveScale": 2,
+  "loadMs": 455.39000000059605,
+  "firstTileMs": 979.6150000002235,
+  "tileMs": [
+   979.6150000002235,
+   559.4950000001118,
+   565.5600000005215,
+   566.9550000000745,
+   587.8799999998882,
+   561.0499999998137,
+   570.035000000149,
+   567.875,
+   557.4049999993294
+  ],
+  "totalMs": 5620.75,
+  "cpuPackMs": 101.1200000019744,
+  "medianTileMs": 566.9550000000745,
+  "metrics": {
+   "psnr": 24.853901448751312,
+   "ssim": 0.983750780492749
+  },
+  "wallMs": 6140,
+  "mem": {
+   "baseMB": {
+    "renderer": 652,
+    "gpu": 142,
+    "total": 1278
+   },
+   "peakMB": {
+    "renderer": 652,
+    "gpu": 142,
+    "total": 1278
+   },
+   "deltaMB": {
+    "renderer": 0,
+    "gpu": 0,
+    "total": 0
+   }
+  },
+  "ok": true,
+  "png": "synthetic-crop__ort__realesr_animevideov3_x4__wasm.png"
+ },
+ "synthetic-crop|ort|waifu2x_cunet_art_2x|wasm|t4": {
+  "model": "waifu2x_cunet_art_2x",
+  "ep": "wasm",
+  "tiles": 9,
+  "tileIn": 256,
+  "tileOut": 440,
+  "modelBytes": 5299512,
+  "effectiveScale": 2,
+  "loadMs": 80.15499999932945,
+  "firstTileMs": 980.3799999998882,
+  "tileMs": [
+   980.3799999998882,
+   638.7199999997392,
+   670.25,
+   674.4350000005215,
+   640.8249999992549,
+   637.804999999702,
+   628.9099999992177,
+   664.7200000006706,
+   678.2949999999255
+  ],
+  "totalMs": 6271.995000000112,
+  "cpuPackMs": 56.63499999977648,
+  "medianTileMs": 664.7200000006706,
+  "metrics": {
+   "psnr": 30.496849401394638,
+   "ssim": 0.9923733566910019
+  },
+  "wallMs": 6409,
+  "mem": {
+   "baseMB": {
+    "renderer": 641,
+    "gpu": 149,
+    "total": 1279
+   },
+   "peakMB": {
+    "renderer": 641,
+    "gpu": 149,
+    "total": 1279
+   },
+   "deltaMB": {
+    "renderer": 0,
+    "gpu": 0,
+    "total": 0
+   }
+  },
+  "ok": true,
+  "png": "synthetic-crop__ort__waifu2x_cunet_art_2x__wasm.png"
+ },
+ "synthetic-crop|ort|waifu2x_swin_unet_art_scan_2x|wasm|t4": {
+  "model": "waifu2x_swin_unet_art_scan_2x",
+  "ep": "wasm",
+  "tiles": 9,
+  "tileIn": 256,
+  "tileOut": 480,
+  "modelBytes": 21292630,
+  "effectiveScale": 2,
+  "loadMs": 562.5,
+  "firstTileMs": 3104.81500000041,
+  "tileMs": [
+   3104.81500000041,
+   1954.0600000005215,
+   2034.3150000004098,
+   1946.1500000003725,
+   1935.804999999702,
+   1940.1399999996647,
+   1947.8600000003353,
+   1948.9700000006706,
+   1931.5400000000373
+  ],
+  "totalMs": 18794.919999999925,
+  "cpuPackMs": 50.84999999869615,
+  "medianTileMs": 1947.8600000003353,
+  "metrics": {
+   "psnr": 29.514960603503255,
+   "ssim": 0.9939089088604269
+  },
+  "wallMs": 19541,
+  "mem": {
+   "baseMB": {
+    "renderer": 2036,
+    "gpu": 155,
+    "total": 2681
+   },
+   "peakMB": {
+    "renderer": 2036,
+    "gpu": 155,
+    "total": 2681
+   },
+   "deltaMB": {
+    "renderer": 0,
+    "gpu": 0,
+    "total": 0
+   }
+  },
+  "ok": true,
+  "png": "synthetic-crop__ort__waifu2x_swin_unet_art_scan_2x__wasm.png"
+ },
+ "synthetic-crop|ort|realesrgan_x4plus_anime_6b|wasm|t4": {
+  "model": "realesrgan_x4plus_anime_6b",
+  "ep": "wasm",
+  "tiles": 9,
+  "tileIn": 192,
+  "tileOut": 768,
+  "modelBytes": 17906556,
+  "effectiveScale": 2,
+  "loadMs": 142.2949999999255,
+  "firstTileMs": 3043.6150000002235,
+  "tileMs": [
+   3043.6150000002235,
+   3028.1399999996647,
+   3737.5299999993294,
+   3022.69000000041,
+   3027.2200000006706,
+   3034.320000000298,
+   3077.649999999441,
+   3061.9850000003353,
+   3076.214999999851
+  ],
+  "totalMs": 28162.110000000335,
+  "cpuPackMs": 52.06000000052154,
+  "medianTileMs": 3043.6150000002235,
+  "metrics": {
+   "psnr": 25.930132654040957,
+   "ssim": 0.9876248861233026
+  },
+  "wallMs": 28388,
+  "mem": {
+   "baseMB": {
+    "renderer": 2078,
+    "gpu": 160,
+    "total": 2729
+   },
+   "peakMB": {
+    "renderer": 2078,
+    "gpu": 160,
+    "total": 2729
+   },
+   "deltaMB": {
+    "renderer": 0,
+    "gpu": 0,
+    "total": 0
+   }
+  },
+  "ok": true,
+  "png": "synthetic-crop__ort__realesrgan_x4plus_anime_6b__wasm.png"
+ },
+ "tagosaku|ort|realesr_animevideov3_x4|wasm|t4": {
+  "model": "realesr_animevideov3_x4",
+  "ep": "wasm",
+  "tiles": 12,
+  "tileIn": 256,
+  "tileOut": 1024,
+  "modelBytes": 2495473,
+  "effectiveScale": 2,
+  "loadMs": 455.39000000059605,
+  "firstTileMs": 567.1500000003725,
+  "tileMs": [
+   567.1500000003725,
+   561.9749999996275,
+   563.0200000004843,
+   561.2750000003725,
+   559.804999999702,
+   559.570000000298,
+   560.035000000149,
+   563.4350000005215,
+   618.3250000001863,
+   822.9249999998137,
+   572.984999999404,
+   563.1549999993294
+  ],
+  "totalMs": 7198.9550000000745,
+  "cpuPackMs": 122.35499999765307,
+  "medianTileMs": 563.0874999999069,
+  "metrics": null,
+  "wallMs": 7215,
+  "mem": {
+   "baseMB": {
+    "renderer": 2127,
+    "gpu": 170,
+    "total": 2794
+   },
+   "peakMB": {
+    "renderer": 2127,
+    "gpu": 170,
+    "total": 2794
+   },
+   "deltaMB": {
+    "renderer": 0,
+    "gpu": 0,
+    "total": 0
+   }
+  },
+  "ok": true,
+  "png": "tagosaku__ort__realesr_animevideov3_x4__wasm.png"
+ },
+ "tagosaku|ort|waifu2x_cunet_art_2x|wasm|t4": {
+  "model": "waifu2x_cunet_art_2x",
+  "ep": "wasm",
+  "tiles": 12,
+  "tileIn": 256,
+  "tileOut": 440,
+  "modelBytes": 5299512,
+  "effectiveScale": 2,
+  "loadMs": 80.15499999932945,
+  "firstTileMs": 630.4400000004098,
+  "tileMs": [
+   630.4400000004098,
+   620.035000000149,
+   622.1899999994785,
+   619.6200000001118,
+   627.1549999993294,
+   622.2999999998137,
+   631.6299999998882,
+   623.4400000004098,
+   622.1150000002235,
+   619.4900000002235,
+   624.734999999404,
+   620.0149999996647
+  ],
+  "totalMs": 7547.354999999516,
+  "cpuPackMs": 63.56499999854714,
+  "medianTileMs": 622.2449999996461,
+  "metrics": null,
+  "wallMs": 7567,
+  "mem": {
+   "baseMB": {
+    "renderer": 2071,
+    "gpu": 186,
+    "total": 2745
+   },
+   "peakMB": {
+    "renderer": 2071,
+    "gpu": 186,
+    "total": 2745
+   },
+   "deltaMB": {
+    "renderer": 0,
+    "gpu": 0,
+    "total": 0
+   }
+  },
+  "ok": true,
+  "png": "tagosaku__ort__waifu2x_cunet_art_2x__wasm.png"
+ },
+ "tagosaku|ort|waifu2x_swin_unet_art_scan_2x|wasm|t4": {
+  "model": "waifu2x_swin_unet_art_scan_2x",
+  "ep": "wasm",
+  "tiles": 12,
+  "tileIn": 256,
+  "tileOut": 480,
+  "modelBytes": 21292630,
+  "effectiveScale": 2,
+  "loadMs": 562.5,
+  "firstTileMs": 1955.8849999997765,
+  "tileMs": [
+   1955.8849999997765,
+   1952.4850000003353,
+   1940.875,
+   1963.9199999999255,
+   2021.6500000003725,
+   1947.050000000745,
+   1943.730000000447,
+   1938.2800000002608,
+   1936.2299999995157,
+   2015.445000000298,
+   1927.8349999999627,
+   1937.3349999999627
+  ],
+  "totalMs": 23543.260000000708,
+  "cpuPackMs": 61.91999999806285,
+  "medianTileMs": 1945.390000000596,
+  "metrics": null,
+  "wallMs": 23562,
+  "mem": {
+   "baseMB": {
+    "renderer": 2127,
+    "gpu": 186,
+    "total": 2808
+   },
+   "peakMB": {
+    "renderer": 2127,
+    "gpu": 186,
+    "total": 2808
+   },
+   "deltaMB": {
+    "renderer": 0,
+    "gpu": 0,
+    "total": 0
+   }
+  },
+  "ok": true,
+  "png": "tagosaku__ort__waifu2x_swin_unet_art_scan_2x__wasm.png"
+ },
+ "tagosaku|ort|realesrgan_x4plus_anime_6b|wasm|t4": {
+  "model": "realesrgan_x4plus_anime_6b",
+  "ep": "wasm",
+  "tiles": 20,
+  "tileIn": 192,
+  "tileOut": 768,
+  "modelBytes": 17906556,
+  "effectiveScale": 2,
+  "loadMs": 142.2949999999255,
+  "firstTileMs": 2966.445000000298,
+  "tileMs": [
+   2966.445000000298,
+   2986.55999999959,
+   5342.129999999888,
+   3414.9749999996275,
+   2959.8050000006333,
+   3026.8100000005215,
+   2994.0499999998137,
+   2966.609999999404,
+   2964.855000000447,
+   2980.0149999996647,
+   2967.945000000298,
+   2966.7000000001863,
+   2978.774999999441,
+   2960.5300000002608,
+   2968.0049999998882,
+   2964.5849999999627,
+   3134.945000000298,
+   3144.445000000298,
+   3025.105000000447,
+   2995.239999999292
+  ],
+  "totalMs": 62822.88500000071,
+  "cpuPackMs": 113.61000000033528,
+  "medianTileMs": 2979.394999999553,
+  "metrics": null,
+  "wallMs": 62839,
+  "mem": {
+   "baseMB": {
+    "renderer": 2117,
+    "gpu": 195,
+    "total": 2809
+   },
+   "peakMB": {
+    "renderer": 2117,
+    "gpu": 195,
+    "total": 2809
+   },
+   "deltaMB": {
+    "renderer": 0,
+    "gpu": 0,
+    "total": 0
+   }
+  },
+  "ok": true,
+  "png": "tagosaku__ort__realesrgan_x4plus_anime_6b__wasm.png"
+ },
+ "gogo-half|ort|realesr_animevideov3_x4|wasm|t4": {
+  "model": "realesr_animevideov3_x4",
+  "ep": "wasm",
+  "tiles": 9,
+  "tileIn": 256,
+  "tileOut": 1024,
+  "modelBytes": 2495473,
+  "effectiveScale": 2,
+  "loadMs": 455.39000000059605,
+  "firstTileMs": 561.6150000002235,
+  "tileMs": [
+   561.6150000002235,
+   552.8899999996647,
+   558.8300000000745,
+   555.8999999994412,
+   557.5650000004098,
+   555.5,
+   558.1299999998882,
+   556.9799999995157,
+   563.910000000149
+  ],
+  "totalMs": 5105.9749999996275,
+  "cpuPackMs": 84.20000000018626,
+  "medianTileMs": 557.5650000004098,
+  "metrics": {
+   "psnr": 26.821952643258065,
+   "ssim": 0.9622729244630975
+  },
+  "wallMs": 5166,
+  "mem": {
+   "baseMB": {
+    "renderer": 2138,
+    "gpu": 179,
+    "total": 2815
+   },
+   "peakMB": {
+    "renderer": 2138,
+    "gpu": 179,
+    "total": 2815
+   },
+   "deltaMB": {
+    "renderer": 0,
+    "gpu": 0,
+    "total": 0
+   }
+  },
+  "ok": true,
+  "png": "gogo-half__ort__realesr_animevideov3_x4__wasm.png"
+ },
+ "gogo-half|ort|waifu2x_cunet_art_2x|wasm|t4": {
+  "model": "waifu2x_cunet_art_2x",
+  "ep": "wasm",
+  "tiles": 12,
+  "tileIn": 256,
+  "tileOut": 440,
+  "modelBytes": 5299512,
+  "effectiveScale": 2,
+  "loadMs": 80.15499999932945,
+  "firstTileMs": 686.2549999998882,
+  "tileMs": [
+   686.2549999998882,
+   622.625,
+   626.2800000002608,
+   622.8799999998882,
+   628.4500000001863,
+   620.7549999998882,
+   625.464999999851,
+   621.4050000002608,
+   622.8600000003353,
+   679.0049999998882,
+   659.6949999993667,
+   617.5049999998882
+  ],
+  "totalMs": 7697.1349999997765,
+  "cpuPackMs": 63.315000001341105,
+  "medianTileMs": 624.1724999998696,
+  "metrics": {
+   "psnr": 32.04904480970978,
+   "ssim": 0.9798485626520979
+  },
+  "wallMs": 7940,
+  "mem": {
+   "baseMB": {
+    "renderer": 2124,
+    "gpu": 187,
+    "total": 2806
+   },
+   "peakMB": {
+    "renderer": 2124,
+    "gpu": 187,
+    "total": 2806
+   },
+   "deltaMB": {
+    "renderer": 0,
+    "gpu": 0,
+    "total": 0
+   }
+  },
+  "ok": true,
+  "png": "gogo-half__ort__waifu2x_cunet_art_2x__wasm.png"
+ },
+ "gogo-half|ort|waifu2x_swin_unet_art_scan_2x|wasm|t4": {
+  "model": "waifu2x_swin_unet_art_scan_2x",
+  "ep": "wasm",
+  "tiles": 9,
+  "tileIn": 256,
+  "tileOut": 480,
+  "modelBytes": 21292630,
+  "effectiveScale": 2,
+  "loadMs": 562.5,
+  "firstTileMs": 1943.089999999851,
+  "tileMs": [
+   1943.089999999851,
+   1977.105000000447,
+   1940.070000000298,
+   1941.3649999992922,
+   2152.1450000004843,
+   1925.2549999998882,
+   1959.875,
+   1949.8899999996647,
+   1953.0849999999627
+  ],
+  "totalMs": 17783.044999999925,
+  "cpuPackMs": 40.820000001229346,
+  "medianTileMs": 1949.8899999996647,
+  "metrics": {
+   "psnr": 28.696690746818124,
+   "ssim": 0.9763621756247848
+  },
+  "wallMs": 17903,
+  "mem": {
+   "baseMB": {
+    "renderer": 2140,
+    "gpu": 193,
+    "total": 2830
+   },
+   "peakMB": {
+    "renderer": 2140,
+    "gpu": 193,
+    "total": 2830
+   },
+   "deltaMB": {
+    "renderer": 0,
+    "gpu": 0,
+    "total": 0
+   }
+  },
+  "ok": true,
+  "png": "gogo-half__ort__waifu2x_swin_unet_art_scan_2x__wasm.png"
+ },
+ "gogo-half|ort|realesrgan_x4plus_anime_6b|wasm|t4": {
+  "model": "realesrgan_x4plus_anime_6b",
+  "ep": "wasm",
+  "tiles": 20,
+  "tileIn": 192,
+  "tileOut": 768,
+  "modelBytes": 17906556,
+  "effectiveScale": 2,
+  "loadMs": 142.2949999999255,
+  "firstTileMs": 3059.4700000006706,
+  "tileMs": [
+   3059.4700000006706,
+   3036.2900000000373,
+   2952.9050000002608,
+   2943.9500000001863,
+   2931.489999999292,
+   3089.515000000596,
+   2932.3250000001863,
+   2928.9199999999255,
+   2989.675000000745,
+   2933.730000000447,
+   2921.515000000596,
+   2920.9550000000745,
+   2996.5149999996647,
+   2919.4550000000745,
+   2917.304999999702,
+   2917.135000000708,
+   2914.3899999996647,
+   2920.4900000002235,
+   2922.4950000001118,
+   2929.2949999999255
+  ],
+  "totalMs": 59178.96999999974,
+  "cpuPackMs": 100.38499999511987,
+  "medianTileMs": 2930.392499999609,
+  "metrics": {
+   "psnr": 24.793238691363307,
+   "ssim": 0.9513703034905654
+  },
+  "wallMs": 59217,
+  "mem": {
+   "baseMB": {
+    "renderer": 2194,
+    "gpu": 191,
+    "total": 2884
+   },
+   "peakMB": {
+    "renderer": 2194,
+    "gpu": 191,
+    "total": 2884
+   },
+   "deltaMB": {
+    "renderer": 0,
+    "gpu": 0,
+    "total": 0
+   }
+  },
+  "ok": true,
+  "png": "gogo-half__ort__realesrgan_x4plus_anime_6b__wasm.png"
+ },
+ "synthetic|ort|realesr_animevideov3_x4|wasm|t4": {
+  "model": "realesr_animevideov3_x4",
+  "ep": "wasm",
+  "tiles": 54,
+  "tilesRun": 54,
+  "partial": false,
+  "tileIn": 256,
+  "tileOut": 1024,
+  "modelBytes": 2495473,
+  "effectiveScale": 2,
+  "loadMs": 459.65500000026077,
+  "firstTileMs": 882.7450000001118,
+  "tileMs": [
+   882.7450000001118,
+   565.4749999996275,
+   564.6200000001118,
+   560.3899999996647,
+   615.7799999993294,
+   563.4349999995902,
+   582.1650000000373,
+   570.9350000005215,
+   574.6299999998882,
+   570.6749999998137,
+   602.125,
+   585.785000000149,
+   661,
+   569.0149999996647,
+   568.9899999992922,
+   559.320000000298,
+   561.8449999997392,
+   561.0649999994785,
+   561.9749999996275,
+   561.3799999998882,
+   563.4950000001118,
+   563.8700000001118,
+   560.035000000149,
+   558.4900000002235,
+   595.7450000001118,
+   543.3250000001863,
+   552.195000000298,
+   554.4500000001863,
+   566.9250000007451,
+   626.0800000000745,
+   943.5600000005215,
+   1088.4500000001863,
+   1101.714999999851,
+   1110.7099999999627,
+   1059.269999999553,
+   1029.144999999553,
+   1071.410000000149,
+   1105.3250000001863,
+   1049.4500000001863,
+   1034.4350000005215,
+   1081.9749999996275,
+   1056.125,
+   1071.714999999851,
+   1053.3799999998882,
+   1083.5299999993294,
+   867.7649999996647,
+   542.6849999995902,
+   544.7549999998882,
+   544.4000000003725,
+   544.5849999999627,
+   544.6949999993667,
+   543.8950000004843,
+   543.9699999997392,
+   543.269999999553
+  ],
+  "totalMs": 39316.61999999918,
+  "cpuPackMs": 614.9200000017881,
+  "medianTileMs": 569.8449999997392,
+  "metrics": {
+   "psnr": 25.885654279884562,
+   "ssim": 0.9856488105281437
+  },
+  "wallMs": 40219,
+  "mem": {
+   "baseMB": {
+    "renderer": 734,
+    "gpu": 144,
+    "total": 1357
+   },
+   "peakMB": {
+    "renderer": 734,
+    "gpu": 144,
+    "total": 1357
+   },
+   "deltaMB": {
+    "renderer": 0,
+    "gpu": 0,
+    "total": 0
+   }
+  },
+  "ok": true,
+  "png": "synthetic__ort__realesr_animevideov3_x4__wasm.png"
+ },
+ "synthetic|ort|waifu2x_cunet_art_2x|wasm|t4": {
+  "model": "waifu2x_cunet_art_2x",
+  "ep": "wasm",
+  "tiles": 70,
+  "tilesRun": 70,
+  "partial": false,
+  "tileIn": 256,
+  "tileOut": 440,
+  "modelBytes": 5299512,
+  "effectiveScale": 2,
+  "loadMs": 74.60499999951571,
+  "firstTileMs": 895.7949999999255,
+  "tileMs": [
+   895.7949999999255,
+   607.4050000002608,
+   599.1749999998137,
+   629.304999999702,
+   600.9350000005215,
+   599.1850000005215,
+   601.1150000002235,
+   604.6599999992177,
+   603.7099999999627,
+   602.375,
+   603.9899999992922,
+   600.1749999998137,
+   619.0950000006706,
+   621.9400000004098,
+   608.2900000000373,
+   606.6800000006333,
+   603.0449999999255,
+   604.8349999999627,
+   606.2949999999255,
+   608.8849999997765,
+   604.1100000003353,
+   628.0099999997765,
+   631.4850000003353,
+   623.5,
+   636.339999999851,
+   624.9549999991432,
+   626.429999999702,
+   627.0699999993667,
+   630.1100000003353,
+   629.6699999999255,
+   622.4050000002608,
+   629.8950000004843,
+   628.019999999553,
+   623.4749999996275,
+   614.7250000005588,
+   598.7799999993294,
+   599.519999999553,
+   600.7900000000373,
+   601.214999999851,
+   599.8450000006706,
+   603.7249999996275,
+   604.1900000004098,
+   598.7949999999255,
+   600.1900000004098,
+   598.3400000007823,
+   599.394999999553,
+   602.2249999996275,
+   600.0400000000373,
+   601.8899999996647,
+   599.7599999997765,
+   606.4900000002235,
+   622.6299999998882,
+   600.9249999998137,
+   600.015000000596,
+   604.1500000003725,
+   598.4449999993667,
+   657.019999999553,
+   596.804999999702,
+   613.515000000596,
+   600.9349999995902,
+   604.6299999998882,
+   599.929999999702,
+   601.2299999995157,
+   598.3250000001863,
+   598.7750000003725,
+   602.7949999999255,
+   604.0349999992177,
+   604.1599999992177,
+   597.804999999702,
+   599.214999999851
+  ],
+  "totalMs": 43224.235000000335,
+  "cpuPackMs": 286.0000000046566,
+  "medianTileMs": 604.0124999992549,
+  "metrics": {
+   "psnr": 32.46354306107991,
+   "ssim": 0.9927587948971648
+  },
+  "wallMs": 43735,
+  "mem": {
+   "baseMB": {
+    "renderer": 907,
+    "gpu": 169,
+    "total": 1569
+   },
+   "peakMB": {
+    "renderer": 907,
+    "gpu": 169,
+    "total": 1569
+   },
+   "deltaMB": {
+    "renderer": 0,
+    "gpu": 0,
+    "total": 0
+   }
+  },
+  "ok": true,
+  "png": "synthetic__ort__waifu2x_cunet_art_2x__wasm.png"
+ },
+ "synthetic|ort|waifu2x_swin_unet_art_scan_2x|wasm|t4": {
+  "model": "waifu2x_swin_unet_art_scan_2x",
+  "ep": "wasm",
+  "tiles": 54,
+  "tilesRun": 54,
+  "partial": false,
+  "tileIn": 256,
+  "tileOut": 480,
+  "modelBytes": 21292630,
+  "effectiveScale": 2,
+  "loadMs": 548.0500000007451,
+  "firstTileMs": 3084.1800000006333,
+  "tileMs": [
+   3084.1800000006333,
+   1923.679999999702,
+   1928.339999999851,
+   1939.7649999996647,
+   1907.9799999995157,
+   1948.3149999994785,
+   1895.4550000000745,
+   1906.785000000149,
+   1919.1899999994785,
+   1989.109999999404,
+   1935.1699999999255,
+   1902.8700000001118,
+   1907.3899999996647,
+   1898.6000000005588,
+   1905.0200000004843,
+   1927.3799999998882,
+   1961.6200000001118,
+   1905.0800000000745,
+   1970.1849999995902,
+   1917,
+   1973.9400000004098,
+   1958.675000000745,
+   1962.7900000000373,
+   2084.4249999998137,
+   1971.3899999996647,
+   1946.035000000149,
+   1983.265000000596,
+   1961.2799999993294,
+   1990.9799999995157,
+   1927.9349999995902,
+   1940.0900000007823,
+   1900.480000000447,
+   1912.1900000004098,
+   1906.4850000003353,
+   1972.9399999994785,
+   2001.7299999995157,
+   2031.550000000745,
+   2123.660000000149,
+   2011.390000000596,
+   2052.6049999995157,
+   1971.0149999996647,
+   2001.785000000149,
+   1956.8849999997765,
+   1964.7800000002608,
+   1902.0100000007078,
+   2131.1049999995157,
+   1895.7400000002235,
+   1901.5100000007078,
+   1903.6550000002608,
+   1890.7350000003353,
+   1905.0650000004098,
+   1896.8700000001118,
+   1894.8150000004098,
+   1900.8799999998882
+  ],
+  "totalMs": 106652.78500000015,
+  "cpuPackMs": 243.31500000040978,
+  "medianTileMs": 1937.467499999795,
+  "metrics": {
+   "psnr": 31.167571599403928,
+   "ssim": 0.9954128590533641
+  },
+  "wallMs": 108213,
+  "mem": {
+   "baseMB": {
+    "renderer": 2445,
+    "gpu": 186,
+    "total": 3125
+   },
+   "peakMB": {
+    "renderer": 2445,
+    "gpu": 186,
+    "total": 3125
+   },
+   "deltaMB": {
+    "renderer": 0,
+    "gpu": 0,
+    "total": 0
+   }
+  },
+  "ok": true,
+  "png": "synthetic__ort__waifu2x_swin_unet_art_scan_2x__wasm.png"
+ },
+ "synthetic|ort|realesrgan_x4plus_anime_6b|wasm|t4": {
+  "model": "realesrgan_x4plus_anime_6b",
+  "ep": "wasm",
+  "tiles": 96,
+  "tilesRun": 96,
+  "partial": false,
+  "tileIn": 192,
+  "tileOut": 768,
+  "modelBytes": 17906556,
+  "effectiveScale": 2,
+  "loadMs": 122.7050000000745,
+  "firstTileMs": 2976.5400000000373,
+  "tileMs": [
+   2976.5400000000373,
+   2930.6349999997765,
+   2962.9749999996275,
+   2934.2999999998137,
+   2946.1399999996647,
+   2935.7099999999627,
+   2937.0299999993294,
+   2940.0400000000373,
+   2937.714999999851,
+   3005.18499999959,
+   2981.679999999702,
+   3105.910000000149,
+   2972.079999999143,
+   2971.8950000004843,
+   3040.234999999404,
+   3055.55999999959,
+   3006.2450000001118,
+   3006.0800000000745,
+   3000.80999999959,
+   2995.56500000041,
+   2958.1899999994785,
+   2965.1200000001118,
+   2954.1450000004843,
+   2960.1699999999255,
+   2972.3899999996647,
+   2957.6699999999255,
+   2959.6550000002608,
+   2962.30999999959,
+   2953.2900000000373,
+   2955.0299999993294,
+   2974.2799999993294,
+   2966.3100000005215,
+   3055.1200000001118,
+   2972.7450000001118,
+   2975.9699999997392,
+   2961.9000000003725,
+   2964.2400000002235,
+   2962.3950000004843,
+   2960.234999999404,
+   2988.9000000003725,
+   2959.0849999999627,
+   2955,
+   2960.69000000041,
+   2956.9850000003353,
+   2958.839999999851,
+   2963.25,
+   2959.9950000001118,
+   2955.589999999851,
+   2959.6949999993667,
+   2977.2000000001863,
+   2959.7099999999627,
+   2974.7350000003353,
+   2977.3600000003353,
+   2994.535000000149,
+   2960.739999999292,
+   3009.5800000000745,
+   2963.4199999999255,
+   2956.714999999851,
+   2917.1650000000373,
+   2956.114999999292,
+   2952.024999999441,
+   2951.074999999255,
+   2950.1200000001118,
+   2942.5099999997765,
+   3036.1100000003353,
+   3014.4249999998137,
+   3019.714999999851,
+   3025.25,
+   3065.589999999851,
+   3066.6399999996647,
+   3042.019999999553,
+   2997.679999999702,
+   3011.1049999995157,
+   3079.0849999999627,
+   3012.9799999995157,
+   3124.8849999997765,
+   3289.429999999702,
+   3246.1800000006333,
+   3000.8449999997392,
+   2988.7050000000745,
+   2958.850000000559,
+   2984.7099999999627,
+   2939.4050000002608,
+   2963.695000000298,
+   2987.864999999292,
+   2947.2949999999255,
+   2984.859999999404,
+   2983.2949999999255,
+   3213.199999999255,
+   2972.0800000000745,
+   3048.2000000001863,
+   2937.6550000002608,
+   2934.4249999998137,
+   2936.9749999996275,
+   2954.230000000447,
+   2944.894999999553
+  ],
+  "totalMs": 287312.2050000001,
+  "cpuPackMs": 500.6100000049919,
+  "medianTileMs": 2964.6800000001676,
+  "metrics": {
+   "psnr": 14.505883813031776,
+   "ssim": 0.8670413435518275
+  },
+  "wallMs": 288238,
+  "mem": {
+   "baseMB": {
+    "renderer": 2422,
+    "gpu": 177,
+    "total": 3095
+   },
+   "peakMB": {
+    "renderer": 2422,
+    "gpu": 177,
+    "total": 3095
+   },
+   "deltaMB": {
+    "renderer": 0,
+    "gpu": 0,
+    "total": 0
+   }
+  },
+  "ok": true,
+  "png": "synthetic__ort__realesrgan_x4plus_anime_6b__wasm.png"
+ },
+ "gogo|ort|realesr_animevideov3_x4|wasm|t4": {
+  "model": "realesr_animevideov3_x4",
+  "ep": "wasm",
+  "tiles": 30,
+  "tilesRun": 30,
+  "partial": false,
+  "tileIn": 256,
+  "tileOut": 1024,
+  "modelBytes": 2495473,
+  "effectiveScale": 2,
+  "loadMs": 459.65500000026077,
+  "firstTileMs": 568.5949999997392,
+  "tileMs": [
+   568.5949999997392,
+   553.6350000007078,
+   551.535000000149,
+   550.5650000004098,
+   549.910000000149,
+   580.7549999998882,
+   555.9399999994785,
+   549.4749999996275,
+   550.7800000002608,
+   552.8349999999627,
+   550.2199999997392,
+   550.2050000000745,
+   550.2400000002235,
+   551.6100000003353,
+   567.4550000000745,
+   566.9250000007451,
+   548.7099999999627,
+   550.4749999996275,
+   549.714999999851,
+   546.2949999999255,
+   580.9199999999255,
+   551.2999999998137,
+   597.5800000000745,
+   553.8899999996647,
+   675.480000000447,
+   605.3600000003353,
+   548.4050000002608,
+   547.5900000007823,
+   546.6900000004098,
+   547.5999999996275
+  ],
+  "totalMs": 17124.87000000011,
+  "cpuPackMs": 272.8750000009313,
+  "medianTileMs": 551.0400000000373,
+  "metrics": null,
+  "wallMs": 17162,
+  "mem": {
+   "baseMB": {
+    "renderer": 2503,
+    "gpu": 177,
+    "total": 3187
+   },
+   "peakMB": {
+    "renderer": 2503,
+    "gpu": 177,
+    "total": 3187
+   },
+   "deltaMB": {
+    "renderer": 0,
+    "gpu": 0,
+    "total": 0
+   }
+  },
+  "ok": true,
+  "png": "gogo__ort__realesr_animevideov3_x4__wasm.png"
+ },
+ "gogo|ort|waifu2x_cunet_art_2x|wasm|t4": {
+  "model": "waifu2x_cunet_art_2x",
+  "ep": "wasm",
+  "tiles": 35,
+  "tilesRun": 35,
+  "partial": false,
+  "tileIn": 256,
+  "tileOut": 440,
+  "modelBytes": 5299512,
+  "effectiveScale": 2,
+  "loadMs": 74.60499999951571,
+  "firstTileMs": 615.519999999553,
+  "tileMs": [
+   615.519999999553,
+   611.7999999998137,
+   620.1300000008196,
+   601.6550000002608,
+   599.0750000001863,
+   661.0800000000745,
+   616.015000000596,
+   626.2599999997765,
+   623.6549999993294,
+   622.1900000004098,
+   626.3700000001118,
+   624.0949999997392,
+   611.1299999998882,
+   612.8449999997392,
+   611.5099999997765,
+   607.9749999996275,
+   610.6849999995902,
+   611.480000000447,
+   638.5400000000373,
+   610.7050000000745,
+   610.929999999702,
+   613.8450000006706,
+   631.429999999702,
+   615.6149999992922,
+   617.4050000002608,
+   611.0300000002608,
+   614.8650000002235,
+   618.0950000006706,
+   614.3700000001118,
+   611.3400000007823,
+   610.3799999998882,
+   613.3449999997392,
+   614.5149999996647,
+   607.6550000002608,
+   613.1049999995157
+  ],
+  "totalMs": 21727.68500000052,
+  "cpuPackMs": 145.63999999780208,
+  "medianTileMs": 613.8450000006706,
+  "metrics": null,
+  "wallMs": 21767,
+  "mem": {
+   "baseMB": {
+    "renderer": 2422,
+    "gpu": 224,
+    "total": 3142
+   },
+   "peakMB": {
+    "renderer": 2422,
+    "gpu": 224,
+    "total": 3142
+   },
+   "deltaMB": {
+    "renderer": 0,
+    "gpu": 0,
+    "total": 0
+   }
+  },
+  "ok": true,
+  "png": "gogo__ort__waifu2x_cunet_art_2x__wasm.png"
+ },
+ "gogo|ort|waifu2x_swin_unet_art_scan_2x|wasm|t4": {
+  "model": "waifu2x_swin_unet_art_scan_2x",
+  "ep": "wasm",
+  "tiles": 30,
+  "tilesRun": 30,
+  "partial": false,
+  "tileIn": 256,
+  "tileOut": 480,
+  "modelBytes": 21292630,
+  "effectiveScale": 2,
+  "loadMs": 548.0500000007451,
+  "firstTileMs": 1906.3349999999627,
+  "tileMs": [
+   1906.3349999999627,
+   1925.714999999851,
+   1918.035000000149,
+   1908.6549999993294,
+   1913.7299999995157,
+   1888.3850000007078,
+   1916.3650000002235,
+   1906.0400000000373,
+   1892.1899999994785,
+   1889.6899999994785,
+   1898.554999999702,
+   1897.2549999998882,
+   1895.804999999702,
+   1931.4749999996275,
+   1950.5449999999255,
+   2031.4050000002608,
+   1948.3600000003353,
+   1994.2900000000373,
+   1960.640000000596,
+   1964.9850000003353,
+   1955.804999999702,
+   1953.125,
+   2005.9599999999627,
+   1919.3899999996647,
+   1920.0599999995902,
+   1925.9500000001863,
+   1900.7999999998137,
+   1899.2549999998882,
+   1934.160000000149,
+   1969.2350000003353
+  ],
+  "totalMs": 58047.520000000484,
+  "cpuPackMs": 124.34999999869615,
+  "medianTileMs": 1919.7249999996275,
+  "metrics": null,
+  "wallMs": 58087,
+  "mem": {
+   "baseMB": {
+    "renderer": 2429,
+    "gpu": 237,
+    "total": 3162
+   },
+   "peakMB": {
+    "renderer": 2429,
+    "gpu": 237,
+    "total": 3162
+   },
+   "deltaMB": {
+    "renderer": 0,
+    "gpu": 0,
+    "total": 0
+   }
+  },
+  "ok": true,
+  "png": "gogo__ort__waifu2x_swin_unet_art_scan_2x__wasm.png"
+ },
+ "gogo|ort|realesrgan_x4plus_anime_6b|wasm|t4": {
+  "model": "realesrgan_x4plus_anime_6b",
+  "ep": "wasm",
+  "tiles": 63,
+  "tilesRun": 63,
+  "partial": false,
+  "tileIn": 192,
+  "tileOut": 768,
+  "modelBytes": 17906556,
+  "effectiveScale": 2,
+  "loadMs": 122.7050000000745,
+  "firstTileMs": 3098.859999999404,
+  "tileMs": [
+   3098.859999999404,
+   2965.6749999998137,
+   2949.800000000745,
+   2965.035000000149,
+   2970.0250000003725,
+   3001.660000000149,
+   2976.3799999998882,
+   2962.5949999997392,
+   2963.4749999996275,
+   2995.1150000002235,
+   2982.5,
+   2979.9950000001118,
+   2958.5099999997765,
+   2981.3499999996275,
+   2988.1450000004843,
+   3058.5300000002608,
+   3078.9749999996275,
+   3019.519999999553,
+   2985.989999999292,
+   2982.355000000447,
+   2944.614999999292,
+   3009.5250000003725,
+   3030.0849999999627,
+   3049.074999999255,
+   2983.7900000000373,
+   2947.8600000003353,
+   2938.725000000559,
+   2929.44000000041,
+   2936.3349999999627,
+   2938.7450000001118,
+   2929.1500000003725,
+   2926.725000000559,
+   2932.9500000001863,
+   2927.510000000708,
+   2928.9550000000745,
+   2985.3849999997765,
+   2936.1299999998882,
+   2925.5300000002608,
+   2980.9350000005215,
+   2987.679999999702,
+   3029.4249999998137,
+   2988.355000000447,
+   2993.0250000003725,
+   2991.5149999996647,
+   2985.7099999999627,
+   2993.93499999959,
+   2997.0099999997765,
+   2993.2050000000745,
+   3004.2099999999627,
+   2995.5750000001863,
+   3007.0300000002608,
+   2992.8300000000745,
+   3091.4749999996275,
+   3125.9399999994785,
+   3062.3300000000745,
+   3045.0049999998882,
+   3070.625,
+   3068.769999999553,
+   3067.8899999996647,
+   3119.7400000002235,
+   3153.3600000003353,
+   3039.3250000001863,
+   3042.945000000298
+  ],
+  "totalMs": 189191.50999999978,
+  "cpuPackMs": 295.7749999994412,
+  "medianTileMs": 2988.1450000004843,
+  "metrics": null,
+  "wallMs": 189230,
+  "mem": {
+   "baseMB": {
+    "renderer": 2469,
+    "gpu": 219,
+    "total": 3181
+   },
+   "peakMB": {
+    "renderer": 2469,
+    "gpu": 219,
+    "total": 3181
+   },
+   "deltaMB": {
+    "renderer": 0,
+    "gpu": 0,
+    "total": 0
+   }
+  },
+  "ok": true,
+  "png": "gogo__ort__realesrgan_x4plus_anime_6b__wasm.png"
+ },
+ "synthetic-crop|ort|realesr_animevideov3_x4|wasm|t1": {
+  "model": "realesr_animevideov3_x4",
+  "ep": "wasm",
+  "tiles": 9,
+  "tilesRun": 9,
+  "partial": false,
+  "tileIn": 256,
+  "tileOut": 1024,
+  "modelBytes": 2495473,
+  "effectiveScale": 2,
+  "loadMs": 432.01999999955297,
+  "firstTileMs": 2256.5750000001863,
+  "tileMs": [
+   2256.5750000001863,
+   2177.8499999996275,
+   2173.06500000041,
+   2189.214999999851,
+   2180.3349999999627,
+   2182.9150000000373,
+   2195.274999999441,
+   2210.9099999992177,
+   2198.4799999995157
+  ],
+  "totalMs": 19877.52999999933,
+  "cpuPackMs": 110.49499999918044,
+  "medianTileMs": 2189.214999999851,
+  "metrics": {
+   "psnr": 24.853901448751312,
+   "ssim": 0.983750780492749
+  },
+  "wallMs": 20364,
+  "mem": {
+   "baseMB": {
+    "renderer": 638,
+    "gpu": 140,
+    "total": 1259
+   },
+   "peakMB": {
+    "renderer": 638,
+    "gpu": 140,
+    "total": 1259
+   },
+   "deltaMB": {
+    "renderer": 0,
+    "gpu": 0,
+    "total": 0
+   }
+  },
+  "ok": true,
+  "png": "synthetic-crop__ort__realesr_animevideov3_x4__wasm.png"
+ },
+ "synthetic-crop|ort|waifu2x_cunet_art_2x|wasm|t1": {
+  "model": "waifu2x_cunet_art_2x",
+  "ep": "wasm",
+  "tiles": 9,
+  "tilesRun": 9,
+  "partial": false,
+  "tileIn": 256,
+  "tileOut": 440,
+  "modelBytes": 5299512,
+  "effectiveScale": 2,
+  "loadMs": 73.28000000026077,
+  "firstTileMs": 2470.140000000596,
+  "tileMs": [
+   2470.140000000596,
+   2292.3149999994785,
+   2288.015000000596,
+   2288.3700000001118,
+   2331.9599999999627,
+   2321.260000000708,
+   2289.4399999994785,
+   2300.114999999292,
+   2292.81500000041
+  ],
+  "totalMs": 20933.294999999925,
+  "cpuPackMs": 58.07499999832362,
+  "medianTileMs": 2292.81500000041,
+  "metrics": {
+   "psnr": 30.496849401394638,
+   "ssim": 0.9923733566910019
+  },
+  "wallMs": 21071,
+  "mem": {
+   "baseMB": {
+    "renderer": 623,
+    "gpu": 147,
+    "total": 1256
+   },
+   "peakMB": {
+    "renderer": 623,
+    "gpu": 147,
+    "total": 1256
+   },
+   "deltaMB": {
+    "renderer": 0,
+    "gpu": 0,
+    "total": 0
+   }
+  },
+  "ok": true,
+  "png": "synthetic-crop__ort__waifu2x_cunet_art_2x__wasm.png"
+ },
+ "synthetic-crop|ort|waifu2x_swin_unet_art_scan_2x|wasm|t1": {
+  "model": "waifu2x_swin_unet_art_scan_2x",
+  "ep": "wasm",
+  "tiles": 9,
+  "tilesRun": 9,
+  "partial": false,
+  "tileIn": 256,
+  "tileOut": 480,
+  "modelBytes": 21292630,
+  "effectiveScale": 2,
+  "loadMs": 554.7099999999627,
+  "firstTileMs": 6486.464999999851,
+  "tileMs": [
+   6486.464999999851,
+   5842.125,
+   5879.959999999963,
+   5906.695000000298,
+   5838.964999999851,
+   5857.25,
+   5820.8849999997765,
+   6366.25,
+   6372.620000000112
+  ],
+  "totalMs": 54420.37999999989,
+  "cpuPackMs": 48.70999999996275,
+  "medianTileMs": 5879.959999999963,
+  "metrics": {
+   "psnr": 29.514960603503255,
+   "ssim": 0.9939089088604269
+  },
+  "wallMs": 55176,
+  "mem": {
+   "baseMB": {
+    "renderer": 2019,
+    "gpu": 155,
+    "total": 2664
+   },
+   "peakMB": {
+    "renderer": 2019,
+    "gpu": 155,
+    "total": 2664
+   },
+   "deltaMB": {
+    "renderer": 0,
+    "gpu": 0,
+    "total": 0
+   }
+  },
+  "ok": true,
+  "png": "synthetic-crop__ort__waifu2x_swin_unet_art_scan_2x__wasm.png"
+ },
+ "synthetic-crop|ort|realesrgan_x4plus_anime_6b|wasm|t1": {
+  "model": "realesrgan_x4plus_anime_6b",
+  "ep": "wasm",
+  "tiles": 9,
+  "tilesRun": 9,
+  "partial": false,
+  "tileIn": 192,
+  "tileOut": 768,
+  "modelBytes": 17906556,
+  "effectiveScale": 2,
+  "loadMs": 126.55999999959022,
+  "firstTileMs": 13258.5,
+  "tileMs": [
+   13258.5,
+   12179.935000000522,
+   12298.820000000298,
+   12497.84500000067,
+   12153.069999999367,
+   12337.120000000112,
+   12211.014999999665,
+   12187.649999999441,
+   12138.240000000224
+  ],
+  "totalMs": 111317.30500000063,
+  "cpuPackMs": 54.790000000968575,
+  "medianTileMs": 12211.014999999665,
+  "metrics": {
+   "psnr": 25.930132654040957,
+   "ssim": 0.9876248861233026
+  },
+  "wallMs": 111521,
+  "mem": {
+   "baseMB": {
+    "renderer": 2056,
+    "gpu": 154,
+    "total": 2702
+   },
+   "peakMB": {
+    "renderer": 2056,
+    "gpu": 154,
+    "total": 2702
+   },
+   "deltaMB": {
+    "renderer": 0,
+    "gpu": 0,
+    "total": 0
+   }
+  },
+  "ok": true,
+  "png": "synthetic-crop__ort__realesrgan_x4plus_anime_6b__wasm.png"
+ },
+ "synthetic-crop|ort|realesr_animevideov3_x4|webgpu|t1|tile128|max2": {
+  "model": "realesr_animevideov3_x4",
+  "ep": "webgpu",
+  "tiles": 25,
+  "tilesRun": 2,
+  "partial": true,
+  "tileIn": 128,
+  "tileOut": 512,
+  "modelBytes": 2495473,
+  "effectiveScale": 2,
+  "loadMs": 490.65500000026077,
+  "firstTileMs": 29123.020000000484,
+  "tileMs": [
+   29123.020000000484,
+   28959.56000000052
+  ],
+  "totalMs": 58096.794999999925,
+  "cpuPackMs": 13.764999999664724,
+  "medianTileMs": 29041.290000000503,
+  "metrics": null,
+  "wallMs": 58601,
+  "mem": {
+   "baseMB": {
+    "renderer": 545,
+    "gpu": 202,
+    "total": 1229
+   },
+   "peakMB": {
+    "renderer": 545,
+    "gpu": 202,
+    "total": 1229
+   },
+   "deltaMB": {
+    "renderer": 0,
+    "gpu": 0,
+    "total": 0
+   }
+  },
+  "ok": true,
+  "png": "synthetic-crop__ort__realesr_animevideov3_x4__webgpu.png"
+ },
+ "synthetic-crop|ort|waifu2x_cunet_art_2x|webgpu|t1|tile128|max2": {
+  "model": "waifu2x_cunet_art_2x",
+  "ep": "webgpu",
+  "tiles": 36,
+  "tilesRun": 2,
+  "partial": true,
+  "tileIn": 128,
+  "tileOut": 184,
+  "modelBytes": 5299512,
+  "effectiveScale": 2,
+  "loadMs": 84.25499999988824,
+  "firstTileMs": 24891.900000000373,
+  "tileMs": [
+   24891.900000000373,
+   24282.830000000075
+  ],
+  "totalMs": 49184.51000000071,
+  "cpuPackMs": 9.254999999888241,
+  "medianTileMs": 24587.365000000224,
+  "metrics": null,
+  "wallMs": 49295,
+  "mem": {
+   "baseMB": {
+    "renderer": 447,
+    "gpu": 383,
+    "total": 1233
+   },
+   "peakMB": {
+    "renderer": 447,
+    "gpu": 383,
+    "total": 1233
+   },
+   "deltaMB": {
+    "renderer": 0,
+    "gpu": 0,
+    "total": 0
+   }
+  },
+  "ok": true,
+  "png": "synthetic-crop__ort__waifu2x_cunet_art_2x__webgpu.png"
+ },
+ "synthetic-crop|ort|waifu2x_swin_unet_art_scan_2x|webgpu|t1|tile128|max2": {
+  "model": "waifu2x_swin_unet_art_scan_2x",
+  "ep": "webgpu",
+  "tiles": 16,
+  "tilesRun": 2,
+  "partial": true,
+  "tileIn": 160,
+  "tileOut": 288,
+  "modelBytes": 21292630,
+  "effectiveScale": 2,
+  "loadMs": 600.4950000001118,
+  "firstTileMs": 85555.05999999959,
+  "tileMs": [
+   85555.05999999959,
+   76745.09499999974
+  ],
+  "totalMs": 162305.17500000075,
+  "cpuPackMs": 4.440000000409782,
+  "medianTileMs": 81150.07749999966,
+  "metrics": null,
+  "wallMs": 162925,
+  "mem": {
+   "baseMB": {
+    "renderer": 568,
+    "gpu": 1217,
+    "total": 2150
+   },
+   "peakMB": {
+    "renderer": 568,
+    "gpu": 1217,
+    "total": 2150
+   },
+   "deltaMB": {
+    "renderer": 0,
+    "gpu": 0,
+    "total": 0
+   }
+  },
+  "ok": true,
+  "png": "synthetic-crop__ort__waifu2x_swin_unet_art_scan_2x__webgpu.png"
+ }
+}

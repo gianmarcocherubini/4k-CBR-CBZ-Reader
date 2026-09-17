@@ -1,0 +1,476 @@
+@import 'tailwindcss';
+
+/*
+ * Apple Books–style design system.
+ * Semantic tokens follow iOS system colours; the appearance follows the system unless the
+ * reader theme forces light/dark via data-theme on <html>.
+ */
+:root {
+  --bg: #ffffff; /* systemBackground */
+  --bg-grouped: #f2f2f7; /* systemGroupedBackground */
+  --bg-card: #ffffff; /* secondarySystemGroupedBackground */
+  --bg-tertiary: #f2f2f7;
+  --fill: rgba(120, 120, 128, 0.16); /* systemFill */
+  --fill-2: rgba(120, 120, 128, 0.12);
+  --label: #000000;
+  --label-2: rgba(60, 60, 67, 0.6); /* secondaryLabel */
+  --label-3: rgba(60, 60, 67, 0.3); /* tertiaryLabel */
+  --separator: rgba(60, 60, 67, 0.29);
+  --tint: #f28c1e; /* Books orange */
+  --tint-soft: rgba(242, 140, 30, 0.14);
+  --green: #34c759;
+  --red: #ff3b30;
+  --material: rgba(249, 249, 249, 0.8);
+  --material-strong: rgba(255, 255, 255, 0.92);
+  --stage: #e9e9ee; /* reader background (pages sit on it like on a table) */
+  --paper: #fbfaf6;
+  --shadow-cover: 0 1px 2px rgba(0, 0, 0, 0.12), 0 6px 16px rgba(0, 0, 0, 0.18);
+  --shadow-spread: 0 6px 24px rgba(0, 0, 0, 0.18), 0 1px 3px rgba(0, 0, 0, 0.12);
+  --shadow-sheet: 0 0 0 1px rgba(0, 0, 0, 0.06), 0 12px 40px rgba(0, 0, 0, 0.18);
+  --seg-selected: #ffffff;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --bg: #000000;
+    --bg-grouped: #000000;
+    --bg-card: #1c1c1e;
+    --bg-tertiary: #2c2c2e;
+    --fill: rgba(120, 120, 128, 0.36);
+    --fill-2: rgba(120, 120, 128, 0.24);
+    --label: #ffffff;
+    --label-2: rgba(235, 235, 245, 0.6);
+    --label-3: rgba(235, 235, 245, 0.3);
+    --separator: rgba(84, 84, 88, 0.6);
+    --tint: #ff9f0a;
+    --tint-soft: rgba(255, 159, 10, 0.18);
+    --green: #30d158;
+    --red: #ff453a;
+    --material: rgba(30, 30, 30, 0.78);
+    --material-strong: rgba(28, 28, 30, 0.94);
+    --stage: #000000;
+    --paper: #f2efe8;
+    --shadow-cover: 0 1px 2px rgba(0, 0, 0, 0.5), 0 6px 16px rgba(0, 0, 0, 0.6);
+    --shadow-spread: 0 6px 24px rgba(0, 0, 0, 0.7);
+    --shadow-sheet: 0 0 0 1px rgba(255, 255, 255, 0.08), 0 12px 40px rgba(0, 0, 0, 0.6);
+    --seg-selected: #636366;
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme='dark'] {
+  --bg: #000000;
+  --bg-grouped: #000000;
+  --bg-card: #1c1c1e;
+  --bg-tertiary: #2c2c2e;
+  --fill: rgba(120, 120, 128, 0.36);
+  --fill-2: rgba(120, 120, 128, 0.24);
+  --label: #ffffff;
+  --label-2: rgba(235, 235, 245, 0.6);
+  --label-3: rgba(235, 235, 245, 0.3);
+  --separator: rgba(84, 84, 88, 0.6);
+  --tint: #ff9f0a;
+  --tint-soft: rgba(255, 159, 10, 0.18);
+  --green: #30d158;
+  --red: #ff453a;
+  --material: rgba(30, 30, 30, 0.78);
+  --material-strong: rgba(28, 28, 30, 0.94);
+  --stage: #000000;
+  --paper: #f2efe8;
+  --shadow-cover: 0 1px 2px rgba(0, 0, 0, 0.5), 0 6px 16px rgba(0, 0, 0, 0.6);
+  --shadow-spread: 0 6px 24px rgba(0, 0, 0, 0.7);
+  --shadow-sheet: 0 0 0 1px rgba(255, 255, 255, 0.08), 0 12px 40px rgba(0, 0, 0, 0.6);
+  --seg-selected: #636366;
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-grouped: var(--bg-grouped);
+  --color-card: var(--bg-card);
+  --color-tertiary: var(--bg-tertiary);
+  --color-fill: var(--fill);
+  --color-fill-2: var(--fill-2);
+  --color-label: var(--label);
+  --color-label-2: var(--label-2);
+  --color-label-3: var(--label-3);
+  --color-separator: var(--separator);
+  --color-tint: var(--tint);
+  --color-tint-soft: var(--tint-soft);
+  --color-green: var(--green);
+  --color-red: var(--red);
+  --color-stage: var(--stage);
+  --color-paper: var(--paper);
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'SF Pro Display', 'Helvetica Neue', 'Segoe UI', Roboto, system-ui,
+    sans-serif;
+  --shadow-cover: var(--shadow-cover);
+  --shadow-spread: var(--shadow-spread);
+  --shadow-sheet: var(--shadow-sheet);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg-grouped);
+  color: var(--label);
+  font-family: var(--font-sans);
+  font-size: 17px;
+  line-height: 1.3;
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior: none;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+  -webkit-text-size-adjust: 100%;
+}
+
+/* Safe areas for the home-screen app (notch / home indicator). */
+.pt-safe {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+.px-safe {
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
+}
+
+/* ---- typography (iOS text styles) ------------------------------------------------------- */
+.text-large-title {
+  font-size: 34px;
+  line-height: 41px;
+  font-weight: 700;
+  letter-spacing: 0.37px;
+}
+.text-title2 {
+  font-size: 22px;
+  line-height: 28px;
+  font-weight: 700;
+  letter-spacing: 0.35px;
+}
+.text-headline {
+  font-size: 17px;
+  line-height: 22px;
+  font-weight: 600;
+  letter-spacing: -0.41px;
+}
+.text-body {
+  font-size: 17px;
+  line-height: 22px;
+  letter-spacing: -0.41px;
+}
+.text-subhead {
+  font-size: 15px;
+  line-height: 20px;
+  letter-spacing: -0.24px;
+}
+.text-footnote {
+  font-size: 13px;
+  line-height: 18px;
+  letter-spacing: -0.08px;
+}
+.text-caption {
+  font-size: 12px;
+  line-height: 16px;
+}
+
+/* ---- materials -------------------------------------------------------------------------- */
+.material {
+  background: var(--material);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  backdrop-filter: saturate(180%) blur(20px);
+}
+.material-strong {
+  background: var(--material-strong);
+  -webkit-backdrop-filter: saturate(180%) blur(24px);
+  backdrop-filter: saturate(180%) blur(24px);
+}
+.hairline-b {
+  box-shadow: inset 0 -0.5px 0 var(--separator);
+}
+.hairline-t {
+  box-shadow: inset 0 0.5px 0 var(--separator);
+}
+
+/* ---- buttons ---------------------------------------------------------------------------- */
+@utility btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.375rem;
+  border-radius: 12px;
+  padding: 0 1.125rem;
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.41px;
+  min-height: 44px;
+  user-select: none;
+  transition:
+    background-color 150ms ease,
+    opacity 150ms ease,
+    transform 120ms ease;
+  &:active {
+    transform: scale(0.98);
+    opacity: 0.85;
+  }
+  &:disabled {
+    opacity: 0.4;
+    transform: none;
+  }
+}
+@utility btn-primary {
+  @apply btn;
+  background: var(--tint);
+  color: #fff;
+}
+@utility btn-ghost {
+  @apply btn;
+  background: var(--fill);
+  color: var(--tint);
+}
+@utility btn-plain {
+  @apply btn;
+  padding: 0 0.5rem;
+  background: transparent;
+  color: var(--tint);
+  font-weight: 400;
+}
+@utility btn-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  border-radius: 9999px;
+  padding: 0 0.875rem;
+  min-height: 34px;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.24px;
+  background: var(--fill);
+  color: var(--label-2);
+  user-select: none;
+  transition:
+    background-color 150ms ease,
+    color 150ms ease;
+  &[aria-pressed='true'] {
+    background: var(--tint-soft);
+    color: var(--tint);
+  }
+  &:disabled {
+    opacity: 0.4;
+  }
+}
+@utility btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  color: var(--tint);
+  width: 44px;
+  height: 44px;
+  transition: background-color 150ms ease;
+  &:active {
+    background: var(--fill);
+  }
+}
+
+/* ---- iOS segmented control -------------------------------------------------------------- */
+.segmented {
+  display: inline-flex;
+  border-radius: 9px;
+  background: var(--fill);
+  padding: 2px;
+  gap: 2px;
+}
+.segmented > button {
+  border-radius: 7px;
+  padding: 0 0.625rem;
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 500;
+  letter-spacing: -0.08px;
+  color: var(--label);
+  min-height: 28px;
+  transition:
+    background-color 150ms ease,
+    box-shadow 150ms ease;
+}
+.segmented > button[aria-pressed='true'] {
+  background: var(--seg-selected);
+  font-weight: 600;
+  box-shadow:
+    0 3px 8px rgba(0, 0, 0, 0.12),
+    0 3px 1px rgba(0, 0, 0, 0.04);
+}
+
+/* ---- iOS switch ------------------------------------------------------------------------- */
+.switch {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  width: 51px;
+  height: 31px;
+  border-radius: 9999px;
+  background: var(--fill);
+  transition: background-color 200ms ease;
+}
+.switch[aria-checked='true'] {
+  background: var(--green);
+}
+.switch > span {
+  display: inline-block;
+  width: 27px;
+  height: 27px;
+  border-radius: 9999px;
+  background: #fff;
+  transform: translateX(2px);
+  box-shadow:
+    0 3px 8px rgba(0, 0, 0, 0.15),
+    0 3px 1px rgba(0, 0, 0, 0.06);
+  transition: transform 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.switch[aria-checked='true'] > span {
+  transform: translateX(22px);
+}
+
+/* ---- grouped inset lists (settings) ----------------------------------------------------- */
+.group-card {
+  background: var(--bg-card);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.group-card > .row + .row {
+  box-shadow: inset 0 0.5px 0 var(--separator);
+}
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.6875rem 1rem;
+  min-height: 44px;
+}
+.group-header {
+  padding: 0 1rem 0.375rem;
+  font-size: 13px;
+  line-height: 18px;
+  letter-spacing: -0.08px;
+  text-transform: uppercase;
+  color: var(--label-2);
+}
+.group-footer {
+  padding: 0.375rem 1rem 0;
+  font-size: 13px;
+  line-height: 18px;
+  letter-spacing: -0.08px;
+  color: var(--label-2);
+}
+
+/* ---- slider (page scrubber) ------------------------------------------------------------- */
+input[type='range'].slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 44px;
+  background: transparent;
+}
+input[type='range'].slider::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--fill);
+}
+input[type='range'].slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 24px;
+  height: 24px;
+  margin-top: -10px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow:
+    0 0.5px 4px rgba(0, 0, 0, 0.12),
+    0 6px 13px rgba(0, 0, 0, 0.12);
+}
+input[type='range'].slider::-moz-range-track {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--fill);
+}
+input[type='range'].slider::-moz-range-thumb {
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow:
+    0 0.5px 4px rgba(0, 0, 0, 0.12),
+    0 6px 13px rgba(0, 0, 0, 0.12);
+}
+
+/* ---- misc ------------------------------------------------------------------------------- */
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.spinner {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 2.5px solid var(--fill);
+  border-top-color: var(--label-2);
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes sheet-in {
+  from {
+    transform: translateX(24px);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+.sheet-enter {
+  animation: sheet-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.fade-enter {
+  animation: fade-in 180ms ease;
+}
+
+/* Cover thumbnails: soft shadow and a subtle paper edge like Apple Books. */
+.cover {
+  border-radius: 6px;
+  box-shadow: var(--shadow-cover);
+  background: var(--bg-tertiary);
+  overflow: hidden;
+}
+
+/* Empty slot shown for a user-inserted blank page. */
+.page-paper {
+  background: var(--paper);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.06);
+}
+
+.reader-stage img {
+  -webkit-user-drag: none;
+  user-select: none;
+  pointer-events: none;
+}
