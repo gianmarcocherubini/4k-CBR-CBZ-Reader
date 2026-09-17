@@ -6,7 +6,7 @@ import { PageCache } from '../../lib/reader/pageCache'
 import { blankBefore, firstPage, isBlank, layoutSpreads, realPages, spreadIndexOf, spreadLabel } from '../../lib/spread'
 import { getBook, getPageSizes, getProgress, putBook, putPageSizes, putProgress } from '../../lib/storage/db'
 import { resolveBookBlob } from '../../lib/storage/importer'
-import { SrAborted, type SrResult } from '../../lib/upscale/srEngine'
+import { SrAborted, type SrOptions, type SrPlan, type SrResult } from '../../lib/upscale/srEngine'
 import { type Book, GUTTER_FRACTION, type PageSize, type ReaderSettings } from '../../types'
 import { MaxQualityControls } from './MaxQualityControls'
 import { SettingsPanel } from './SettingsPanel'
@@ -398,8 +398,12 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose 
 
   useWakeLock(status === 'ready')
 
-  // ---- "Qualità massima" (waifu2x CUNet, cached results take precedence) ----------------------
-  const mq = useMaxQuality(status === 'ready' && settings.maxQuality)
+  // ---- "Qualità massima" (waifu2x CUNet or the heavy GAN; cached results take precedence) -----
+  // The GAN model is only allowed while the standard super resolution is off.
+  const ganActive = settings.ganModel && !settings.superResolution
+  const heavyModel = ganActive ? 'esrgan6b' : 'cunet'
+  const mq = useMaxQuality(status === 'ready' && (settings.maxQuality || ganActive), heavyModel)
+  const heavyLabel = ganActive ? 'GAN' : 'CUNet'
   const [cunetResults, setCunetResults] = useState<Map<number, SrResult>>(() => new Map())
   /** Raw page bytes straight from the archive (no decode), for the CUNet worker. */
   const pageBlob = useCallback(async (index: number): Promise<Blob> => {
@@ -424,19 +428,19 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose 
     for (const index of wanted) {
       const hit = engine.peek(bookId, index)
       if (hit) {
-        setCunetResults((m) => (m.get(index)?.bitmap === hit ? m : new Map(m).set(index, { bitmap: hit, level: 'CUNet', ms: 0 })))
+        setCunetResults((m) => (m.get(index)?.bitmap === hit ? m : new Map(m).set(index, { bitmap: hit, level: heavyLabel, factor: 2, ms: 0 })))
         continue
       }
       void engine.lookup(bookId, index).then((bitmap) => {
         if (cancelled) return
         if (bitmap) {
-          setCunetResults((m) => new Map(m).set(index, { bitmap, level: 'CUNet', ms: 0 }))
+          setCunetResults((m) => new Map(m).set(index, { bitmap, level: heavyLabel, factor: 2, ms: 0 }))
         } else if (engine.prefetchAllowed && !batchRunning) {
           // WebGPU: process the pages ahead while reading (the batch job covers them otherwise).
           engine
             .enhance(bookId, index, () => pageBlob(index))
             .then((b) => {
-              if (!cancelled) setCunetResults((m) => new Map(m).set(index, { bitmap: b, level: 'CUNet', ms: 0 }))
+              if (!cancelled) setCunetResults((m) => new Map(m).set(index, { bitmap: b, level: heavyLabel, factor: 2, ms: 0 }))
             })
             .catch(() => undefined)
         }
@@ -458,7 +462,11 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose 
   }, [mq.engine, mq.tick, mq.batch.running, status, book, spreadKey, spreads, spreadIndex, pageBlob])
 
   // ---- super resolution (Anime4K) ------------------------------------------------------------
-  const sr = useSuperResolution(status === 'ready' && settings.superResolution, settings.srLevel)
+  const srOptions = useMemo<SrOptions>(
+    () => ({ level: settings.srLevel, scale: settings.srScale, restore: settings.srRestore, clean: settings.srClean, always: settings.srAlways }),
+    [settings.srLevel, settings.srScale, settings.srRestore, settings.srClean, settings.srAlways],
+  )
+  const sr = useSuperResolution(status === 'ready' && settings.superResolution, srOptions)
   const [enhanced, setEnhanced] = useState<Map<number, SrResult>>(() => new Map())
   const [srPending, setSrPending] = useState<Set<number>>(() => new Set())
   const [srNative, setSrNative] = useState<Set<number>>(() => new Set())
@@ -485,12 +493,16 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose 
       }
     }
     const wanted: number[] = []
+    const plans = new Map<number, SrPlan>()
     const native = new Set<number>()
     for (const [index, t] of targets) {
-      if (cunetResults.has(index)) continue // the CUNet result wins
-      const decision = engine.decide(t.size, t.devicePx)
-      if (decision === 'enhance') wanted.push(index)
-      else native.add(index)
+      if (cunetResults.has(index)) continue // the heavy-tier result wins
+      const decision = engine.plan(t.size, t.devicePx)
+      if (typeof decision === 'string') native.add(index)
+      else {
+        wanted.push(index)
+        plans.set(index, decision)
+      }
     }
     engine.setWanted(wanted)
     setSrNative(native)
@@ -498,7 +510,8 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose 
     const cache = cacheRef.current
     for (const index of wanted) {
       const t = targets.get(index)!
-      const hit = engine.peek(index, t.size)
+      const plan = plans.get(index)!
+      const hit = engine.peek(index, plan)
       if (hit) {
         setEnhanced((m) => (m.get(index) === hit ? m : new Map(m).set(index, hit)))
         continue
@@ -506,7 +519,7 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose 
       if (!cache) continue
       setSrPending((s) => (s.has(index) ? s : new Set(s).add(index)))
       engine
-        .enhance(index, t.size, async () => createImageBitmap((await cache.get(index)).blob), t.priority)
+        .enhance(index, plan, async () => createImageBitmap((await cache.get(index)).blob), t.priority)
         .then((result) => {
           if (cancelled) return
           setEnhanced((m) => new Map(m).set(index, result))
@@ -537,7 +550,7 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose 
       cancelled = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sr.engine, sr.tick, status, spreadKey, layout, view.zoom, dpr, sizes, spreads, spreadIndex, viewport, settings.fit, settings.direction, settings.srLevel, cunetResults, gutter])
+  }, [sr.engine, sr.tick, status, spreadKey, layout, view.zoom, dpr, sizes, spreads, spreadIndex, viewport, settings.fit, settings.direction, srOptions, cunetResults, gutter])
 
   /** What the view shows: CUNet results first, then Anime4K. */
   const displayed = useMemo(() => {
@@ -546,38 +559,43 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose 
     for (const [k, v] of cunetResults) merged.set(k, v)
     return merged
   }, [enhanced, cunetResults])
-  const showEnhanced = (settings.superResolution && !!sr.engine) || (settings.maxQuality && cunetResults.size > 0)
+  const heavyEnabled = settings.maxQuality || ganActive
+  const showEnhanced = (settings.superResolution && !!sr.engine) || (heavyEnabled && cunetResults.size > 0)
 
   const srBadge = (() => {
     const onScreen = spreadPages.filter((i) => pageStates.get(i)?.status === 'ready')
-    if (onScreen.length > 0 && onScreen.every((i) => cunetResults.has(i))) return 'SR ×2 CUNet'
-    if (!settings.superResolution || sr.status === 'off') return settings.maxQuality ? 'SR…' : undefined
+    if (onScreen.length > 0 && onScreen.every((i) => cunetResults.has(i))) return `SR ×2 ${heavyLabel}`
+    if (!settings.superResolution || sr.status === 'off') return heavyEnabled ? 'SR…' : undefined
     if (sr.status === 'init') return 'SR…'
     if (sr.status === 'unavailable' || !sr.engine) return 'SR n/d'
     if (onScreen.length === 0) return 'SR…'
     if (onScreen.some((i) => srPending.has(i))) return 'SR…'
-    const levels = onScreen.map((i) => displayed.get(i)?.level).filter(Boolean)
-    if (levels.length > 0) return `SR ×2 ${levels[levels.length - 1]}`
+    const results = onScreen.map((i) => displayed.get(i)).filter((r): r is SrResult => !!r)
+    if (results.length > 0) {
+      const last = results[results.length - 1]!
+      return `SR ×${last.factor} ${last.level}${settings.srRestore ? '+' : ''}`
+    }
     if (onScreen.every((i) => srNative.has(i))) return 'SR nativo'
     return 'SR…'
   })()
 
   const mqStatusLine = (() => {
-    if (!settings.maxQuality) return 'Disattivata. Attivandola vengono scaricati il motore (≈ 14–25 MB) e il modello (5 MB), una sola volta.'
+    if (!heavyEnabled) return 'Disattivata. Attivandola vengono scaricati il motore (≈ 14–25 MB) e il modello (5–18 MB), una sola volta.'
+    const modelName = ganActive ? 'Real-ESRGAN anime 6B (GAN)' : 'waifu2x CUNet'
     switch (mq.status) {
       case 'idle':
       case 'loading':
-        return 'Caricamento del motore e del modello…'
+        return `Caricamento del motore e del modello ${modelName}…`
       case 'model-missing':
-        return 'Modello non disponibile su questo server (manca public/models: eseguire npm run setup prima della build).'
+        return `Modello ${modelName} non disponibile su questo server (manca public/models: eseguire npm run setup prima della build).`
       case 'unavailable':
         return `Non disponibile: ${mq.engine?.error ?? 'errore sconosciuto'}`
       case 'ready': {
         const i = mq.engine?.info
         if (!i) return 'Pronta.'
         return i.ep === 'webgpu'
-          ? 'Pronta · WebGPU: le pagine seguenti vengono elaborate in background mentre leggi.'
-          : `Pronta · CPU (WebAssembly, ${i.threads} thread${i.crossOriginIsolated ? '' : ', isolamento cross-origin assente'}): troppo lenta durante la lettura, usa “Pre-elabora questo volume”.`
+          ? `${modelName} · WebGPU: le pagine seguenti vengono elaborate in background mentre leggi.`
+          : `${modelName} · CPU (WebAssembly, ${i.threads} thread${i.crossOriginIsolated ? '' : ', isolamento cross-origin assente'}): troppo lenta durante la lettura, usa “Pre-elabora questo volume”.`
       }
     }
   })()
@@ -586,11 +604,17 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose 
     if (!settings.superResolution) return 'Disattivata.'
     if (sr.status === 'init') return 'Inizializzazione della GPU…'
     if (sr.status === 'unavailable' || !sr.engine) return 'Non disponibile: WebGPU assente (su iPad serve iPadOS 26 o successivo). Le pagine usano il ridimensionamento del browser.'
-    const size = sizes[spreadPages[0] ?? 0] ?? undefined
-    const level = size ? sr.engine.resolveLevel(size) : undefined
-    const est = size ? sr.engine.estimateMs(size) : undefined
+    const first = spreadPages[0]
+    const size = first !== undefined ? sizes[first] : undefined
+    const box = first !== undefined ? layout.pages.find((b) => b.index === first) : undefined
+    const devicePx = box ? { w: box.w * view.zoom * dpr, h: box.h * view.zoom * dpr } : undefined
+    const decision = size && devicePx ? sr.engine.plan(size, devicePx) : undefined
+    const est = size ? sr.engine.estimateMs(size, devicePx) : undefined
     const parts = [`${sr.engine.backend === 'webgpu' ? 'WebGPU' : 'WebGL2'} · ${sr.engine.adapterName}`]
-    if (level) parts.push(`livello ${settings.srLevel === 'auto' ? `auto → ${level}` : level}`)
+    if (decision && typeof decision !== 'string') {
+      parts.push(`livello ${settings.srLevel === 'auto' ? `auto → ${decision.level}` : decision.level}`)
+      parts.push(`×${decision.passes === 2 ? 4 : 2} → ${decision.target.w}×${decision.target.h} px`)
+    } else if (decision === 'native') parts.push('pagina già alla risoluzione dello schermo')
     if (est !== undefined) parts.push(`≈ ${Math.round(est)} ms/pagina`)
     return parts.join(' · ')
   })()
@@ -686,6 +710,9 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose 
                 mq.startBatch(book.id, Array.from({ length: pageCount }, (_, i) => i), pageBlob)
               }}
               onCancel={mq.cancelBatch}
+              gan={settings.ganModel}
+              ganAllowed={!settings.superResolution}
+              onToggleGan={(v) => updateSettings({ ganModel: v })}
             />
           }
         />

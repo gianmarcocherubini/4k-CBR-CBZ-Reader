@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { type BatchProgress, CunetAborted, CunetEngine, type CunetStatus } from '../../lib/upscale/cunet/cunetEngine'
+import type { HeavyModel } from '../../types'
 
 export interface BatchState {
   running: boolean
@@ -17,8 +18,8 @@ export interface MaxQualityHandle {
   cancelBatch: () => void
 }
 
-/** Owns the CUNet engine while "Qualità massima" is enabled, plus the state of the batch job. */
-export function useMaxQuality(enabled: boolean): MaxQualityHandle {
+/** Owns the heavy-tier engine (CUNet or the GAN model) while enabled, plus the state of the batch job. */
+export function useMaxQuality(enabled: boolean, model: HeavyModel): MaxQualityHandle {
   const [engine, setEngine] = useState<CunetEngine | null>(null)
   const [tick, setTick] = useState(0)
   const [batch, setBatch] = useState<BatchState>({ running: false, progress: null, error: null, finished: false })
@@ -29,16 +30,17 @@ export function useMaxQuality(enabled: boolean): MaxQualityHandle {
       setEngine(null)
       return
     }
-    const e = new CunetEngine()
+    const e = new CunetEngine(model)
     e.onChange = () => setTick((t) => t + 1)
     setEngine(e)
+    setBatch({ running: false, progress: null, error: null, finished: false })
     // Start loading the runtime and the model right away so the status line is informative.
     e.init().catch(() => undefined)
     return () => {
       abortRef.current?.abort()
       e.dispose()
     }
-  }, [enabled])
+  }, [enabled, model])
 
   const startBatch = useCallback(
     (bookId: string, pages: number[], source: (page: number) => Promise<Blob>) => {

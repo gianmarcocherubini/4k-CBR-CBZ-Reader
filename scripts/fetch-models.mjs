@@ -18,6 +18,21 @@ mkdirSync(ortDir, { recursive: true })
 const ZIP_URL = 'https://github.com/nagadomi/nunif/releases/download/0.0.0/waifu2x_onnx_models_20250502.zip'
 const ENTRY = 'onnx_models/cunet/art/scale2x.onnx'
 const MODEL = join(modelsDir, 'waifu2x_cunet_art_scale2x.onnx')
+// Heavy GAN tier: dynamic-shape ONNX export of RealESRGAN_x4plus_anime_6B.pth (xinntao/Real-ESRGAN, BSD-3),
+// published as a release asset of this repository (see the models-v1 release notes).
+const GAN_URL = 'https://github.com/gianmarcocherubini/4k-CBR-CBZ-Reader/releases/download/models-v1/realesrgan_x4plus_anime_6b.onnx'
+const GAN_MODEL = join(modelsDir, 'realesrgan_x4plus_anime_6b.onnx')
+
+async function fetchGan() {
+  if (existsSync(GAN_MODEL) && statSync(GAN_MODEL).size > 10_000_000) {
+    console.log('GAN model already present:', GAN_MODEL)
+    return
+  }
+  const res = await fetch(GAN_URL, { redirect: 'follow' })
+  if (!res.ok) throw new Error(`GET ${GAN_URL}: ${res.status}`)
+  writeFileSync(GAN_MODEL, Buffer.from(await res.arrayBuffer()))
+  console.log(`GAN model written: ${GAN_MODEL} (${statSync(GAN_MODEL).size} bytes)`)
+}
 
 async function fetchModel() {
   if (existsSync(MODEL) && statSync(MODEL).size > 1_000_000) {
@@ -57,6 +72,7 @@ function copyOrt() {
 try {
   copyOrt()
   await fetchModel()
+  await fetchGan()
 } catch (e) {
   console.error('setup incomplete:', e instanceof Error ? e.message : e)
   console.error('The app builds and runs without the "Qualità massima" tier; re-run `npm run setup` later.')

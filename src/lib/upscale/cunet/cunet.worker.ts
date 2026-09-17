@@ -1,7 +1,7 @@
 /// <reference lib="webworker" />
 /// <reference types="@webgpu/types" />
 import type { InferenceSession, Tensor } from 'onnxruntime-web'
-import { CUNET_CACHE_DIR, type CunetEp, type CunetInitResult, type CunetRequest, type CunetResponse } from './protocol'
+import { CUNET_CACHE_DIR, type CunetEp, type CunetInitResult, type CunetRequest, type CunetResponse, MODEL_SPECS, type ModelSpec } from './protocol'
 
 /**
  * waifu2x CUNet art/scale2x (nunif ONNX) through onnxruntime-web. Tiled 256 px with an 18 px
@@ -12,10 +12,19 @@ import { CUNET_CACHE_DIR, type CunetEp, type CunetInitResult, type CunetRequest,
 
 type Ort = typeof import('onnxruntime-web')
 
-const TILE = 256
-const CROP_IN = 18
-const STEP = TILE - 2 * CROP_IN // 220 source px advance per tile
-const OUT_TILE = STEP * 2 // 440
+/** Tiling derived from the model spec (set by `init`). Results are always stored at 2x. */
+let spec: ModelSpec = MODEL_SPECS.cunet
+let TILE = spec.tile
+let CROP_IN = spec.cropIn
+let STEP = TILE - 2 * CROP_IN // source px advance per tile
+let OUT_TILE = STEP * 2 // stored (2x) output per tile
+function applySpec(s: ModelSpec): void {
+  spec = s
+  TILE = s.tile
+  CROP_IN = s.cropIn
+  STEP = TILE - 2 * CROP_IN
+  OUT_TILE = STEP * 2
+}
 
 let ort: Ort | null = null
 let session: InferenceSession | null = null
@@ -46,7 +55,9 @@ async function softwareGpu(): Promise<boolean> {
   }
 }
 
-async function init(modelUrl: string, ortPath: string, preferGpu: boolean): Promise<CunetInitResult> {
+async function init(modelUrl: string, ortPath: string, preferGpu: boolean, modelSpec: ModelSpec): Promise<CunetInitResult> {
+  applySpec(modelSpec)
+  session = null
   const head = await fetch(modelUrl, { method: 'HEAD' })
   if (!head.ok) {
     const err = new Error(`Modello non trovato (${head.status})`) as Error & { code: string }
@@ -179,15 +190,21 @@ async function process(id: number, cacheKey: string, page: number, blob: Blob): 
         }
       }
       let tile: Float32Array | null = null
+      // Network output geometry: edge = scale*TILE - shrink; the valid (non-context) region starts
+      // at scale*CROP_IN - shrink/2 and spans scale*STEP pixels; x4 outputs are box-averaged to 2x.
+      const outEdge = spec.scale * TILE - spec.shrink
+      const validOff = spec.scale * CROP_IN - spec.shrink / 2
+      const sub = spec.scale / 2 // 1 for x2 models, 2 for x4 (2x2 box filter)
       if (!single) {
-        const feeds = { x: new ort.Tensor('float32', input, [1, 3, TILE, TILE]) }
+        const feeds = { [session.inputNames[0]!]: new ort.Tensor('float32', input, [1, 3, TILE, TILE]) }
         const result = await session.run(feeds)
-        const y = result.y as Tensor
+        const y = result[session.outputNames[0]!] as Tensor
         tile = y.data as Float32Array
       }
-      // Place the 440x440 output tile (clipped to the page).
+      // Place the (2x) output tile (clipped to the page).
       const ox0 = bj * OUT_TILE
       const oy0 = bi * OUT_TILE
+      const plane = outEdge * outEdge
       for (let y = 0; y < OUT_TILE; y++) {
         const oy = oy0 + y
         if (oy >= outH) break
@@ -199,10 +216,28 @@ async function process(id: number, cacheKey: string, page: number, blob: Blob): 
           let g: number
           let b: number
           if (tile) {
-            const p = y * OUT_TILE + x
-            r = tile[p]! * 255
-            g = tile[OUT_TILE * OUT_TILE + p]! * 255
-            b = tile[2 * OUT_TILE * OUT_TILE + p]! * 255
+            if (sub === 1) {
+              const p = (validOff + y) * outEdge + validOff + x
+              r = tile[p]! * 255
+              g = tile[plane + p]! * 255
+              b = tile[2 * plane + p]! * 255
+            } else {
+              let ar = 0
+              let ag = 0
+              let ab = 0
+              for (let sy = 0; sy < sub; sy++) {
+                for (let sx = 0; sx < sub; sx++) {
+                  const p = (validOff + y * sub + sy) * outEdge + validOff + x * sub + sx
+                  ar += tile[p]!
+                  ag += tile[plane + p]!
+                  ab += tile[2 * plane + p]!
+                }
+              }
+              const n = sub * sub
+              r = (ar / n) * 255
+              g = (ag / n) * 255
+              b = (ab / n) * 255
+            }
           } else {
             r = first[0]!
             g = first[1]!
@@ -294,7 +329,7 @@ self.onmessage = async (ev: MessageEvent<CunetRequest>) => {
     let result: unknown
     switch (msg.type) {
       case 'init':
-        result = await serialized(() => init(msg.modelUrl, msg.ortPath, msg.preferGpu))
+        result = await serialized(() => init(msg.modelUrl, msg.ortPath, msg.preferGpu, msg.spec))
         break
       case 'process':
         result = await serialized(() => process(msg.id, msg.cacheKey, msg.page, msg.blob))

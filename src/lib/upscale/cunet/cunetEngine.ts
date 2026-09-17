@@ -1,6 +1,7 @@
 import type { DistributiveOmit } from '../../archive/rar/protocol'
 import { flags } from '../../flags'
-import { CUNET_CACHE_DIR, type CunetEp, type CunetInitResult, type CunetRequest, type CunetResponse, cacheKeyFor } from './protocol'
+import type { HeavyModel } from '../../../types'
+import { CUNET_CACHE_DIR, type CunetEp, type CunetInitResult, type CunetRequest, type CunetResponse, cacheKeyFor, MODEL_SPECS } from './protocol'
 
 export type CunetStatus = 'idle' | 'loading' | 'ready' | 'model-missing' | 'unavailable'
 
@@ -38,6 +39,7 @@ export class CunetAborted extends Error {
  * per-volume batch job. Cached pages are read straight from OPFS on the main thread.
  */
 export class CunetEngine {
+  readonly model: HeavyModel
   status: CunetStatus = 'idle'
   info: CunetInfo | null = null
   error: string | null = null
@@ -53,6 +55,10 @@ export class CunetEngine {
   private disposed = false
   /** Per-page wall time EMA (seconds), used for the batch estimate. */
   private secondsPerPage: number | undefined
+
+  constructor(model: HeavyModel = 'cunet') {
+    this.model = model
+  }
 
   private ensureWorker(): Worker {
     if (this.worker) return this.worker
@@ -99,9 +105,10 @@ export class CunetEngine {
     const base = new URL(import.meta.env.BASE_URL, location.origin).href
     this.initPromise = this.call<CunetInitResult>({
       type: 'init',
-      modelUrl: `${base}models/waifu2x_cunet_art_scale2x.onnx`,
+      modelUrl: `${base}models/${MODEL_SPECS[this.model].file}`,
       ortPath: `${base}ort/`,
       preferGpu: flags.cunet !== 'wasm',
+      spec: MODEL_SPECS[this.model],
     })
       .promise.then((r) => {
         this.info = r
@@ -164,7 +171,7 @@ export class CunetEngine {
   private async readCache(bookId: string, page: number): Promise<ImageBitmap | null> {
     try {
       const root = await navigator.storage.getDirectory()
-      const dir = await (await root.getDirectoryHandle(CUNET_CACHE_DIR, { create: false })).getDirectoryHandle(cacheKeyFor(bookId), { create: false })
+      const dir = await (await root.getDirectoryHandle(CUNET_CACHE_DIR, { create: false })).getDirectoryHandle(cacheKeyFor(bookId, this.model), { create: false })
       const file = await (await dir.getFileHandle(`${page}`)).getFile()
       if (file.size === 0) return null
       // OPFS files carry no MIME type: sniff so Safari decodes them too.
@@ -181,7 +188,7 @@ export class CunetEngine {
 
   async cachedPages(bookId: string): Promise<number[]> {
     if (this.disposed) return []
-    return this.call<number[]>({ type: 'list', cacheKey: cacheKeyFor(bookId) }).promise
+    return this.call<number[]>({ type: 'list', cacheKey: cacheKeyFor(bookId, this.model) }).promise
   }
 
   /** Processes one page (queued, one at a time) and caches it. */
@@ -204,7 +211,7 @@ export class CunetEngine {
             }
             const blob = await source()
             const t0 = performance.now()
-            const { promise: p } = this.call<Blob>({ type: 'process', cacheKey: cacheKeyFor(bookId), page, blob }, onProgress)
+            const { promise: p } = this.call<Blob>({ type: 'process', cacheKey: cacheKeyFor(bookId, this.model), page, blob }, onProgress)
             const encoded = await p
             const secs = (performance.now() - t0) / 1000
             this.secondsPerPage = this.secondsPerPage === undefined ? secs : this.secondsPerPage * 0.6 + secs * 0.4
@@ -262,7 +269,7 @@ export class CunetEngine {
       if (signal.aborted) throw new CunetAborted()
       const blob = await source(page)
       const t0 = performance.now()
-      const { id, promise } = this.call<Blob>({ type: 'process', cacheKey: cacheKeyFor(bookId), page, blob }, (tilesDone, tilesTotal) =>
+      const { id, promise } = this.call<Blob>({ type: 'process', cacheKey: cacheKeyFor(bookId, this.model), page, blob }, (tilesDone, tilesTotal) =>
         onProgress({ done: count, total, tilesDone, tilesTotal, secondsPerPage: this.secondsPerPage, currentPage: page }),
       )
       const onAbort = () => this.worker?.postMessage({ type: 'cancel', id } satisfies CunetRequest)
@@ -296,11 +303,13 @@ export class CunetEngine {
 
 /** Removes the cached results of a book (called when the book is deleted). */
 export async function deleteCunetCache(bookId: string): Promise<void> {
-  try {
-    const root = await navigator.storage.getDirectory()
-    const base = await root.getDirectoryHandle(CUNET_CACHE_DIR, { create: false })
-    await base.removeEntry(cacheKeyFor(bookId), { recursive: true })
-  } catch {
-    // nothing cached
+  for (const model of Object.keys(MODEL_SPECS) as HeavyModel[]) {
+    try {
+      const root = await navigator.storage.getDirectory()
+      const base = await root.getDirectoryHandle(CUNET_CACHE_DIR, { create: false })
+      await base.removeEntry(cacheKeyFor(bookId, model), { recursive: true })
+    } catch {
+      // nothing cached
+    }
   }
 }

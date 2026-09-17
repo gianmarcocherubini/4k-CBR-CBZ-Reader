@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import type { Direction, FitMode, Gutter, GutterColor, PageMode, ReaderSettings, SrLevel, StageBackground, Theme } from '../../types'
+import type { Direction, FitMode, Gutter, GutterColor, PageMode, ReaderSettings, SrLevel, SrScale, StageBackground, Theme } from '../../types'
 
 interface SettingsPanelProps {
   settings: ReaderSettings
@@ -242,8 +242,13 @@ export function SettingsPanel({
           </Group>
 
           <Group title="Super risoluzione" footer={extra} testId="sr-section">
-            <Row title="Super risoluzione" hint="Anime4K ×2 sulla GPU: linee e lettering più nitidi quando la pagina è mostrata più grande dei suoi pixel.">
-              <Switch checked={settings.superResolution} onChange={(v) => onChange({ superResolution: v })} label="Super risoluzione" />
+            <Row title="Super risoluzione" hint="Anime4K sulla GPU, resa esattamente alla risoluzione dello schermo: linee e lettering più nitidi.">
+              {/* Turning the standard tier on switches the heavy GAN model off: they are exclusive. */}
+              <Switch
+                checked={settings.superResolution}
+                onChange={(v) => onChange(v ? { superResolution: true, ganModel: false } : { superResolution: false })}
+                label="Super risoluzione"
+              />
             </Row>
             <Row title="Livello">
               <Segmented<SrLevel>
@@ -258,6 +263,28 @@ export function SettingsPanel({
                   { value: 'UL', label: 'UL' },
                 ]}
               />
+            </Row>
+            <Row title="Fattore" hint="Auto usa ×2, o ×4 quando lo zoom lo richiede. ×4 = due passaggi, il secondo al livello M.">
+              <Segmented<SrScale>
+                label="Fattore di ingrandimento"
+                idPrefix="scale"
+                value={settings.srScale}
+                onChange={(srScale) => onChange({ srScale })}
+                options={[
+                  { value: 'auto', label: 'Auto' },
+                  { value: 'x2', label: '×2' },
+                  { value: 'x4', label: '×4' },
+                ]}
+              />
+            </Row>
+            <Row title="Linee nitide" hint="Passaggio Restore di Anime4K prima dell’ingrandimento: tratti e testi più marcati (raddoppia il costo).">
+              <Switch checked={settings.srRestore} onChange={(v) => onChange({ srRestore: v })} label="Linee nitide" />
+            </Row>
+            <Row title="Pulizia scansione" hint="Bianco della carta e neri più netti, leggera riduzione del rumore JPEG.">
+              <Switch checked={settings.srClean} onChange={(v) => onChange({ srClean: v })} label="Pulizia scansione" />
+            </Row>
+            <Row title="Sempre attiva" hint="Elabora anche le pagine già alla risoluzione dello schermo (di default vengono lasciate com’erano).">
+              <Switch checked={settings.srAlways} onChange={(v) => onChange({ srAlways: v })} label="Sempre attiva" />
             </Row>
           </Group>
 

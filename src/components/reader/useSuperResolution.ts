@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react'
 import { flags } from '../../lib/flags'
-import { SrEngine } from '../../lib/upscale/srEngine'
-import type { SrLevel } from '../../types'
+import { SrEngine, type SrOptions } from '../../lib/upscale/srEngine'
 
 export type SrStatus = 'off' | 'init' | 'ready' | 'unavailable'
 
@@ -13,7 +12,7 @@ export interface SrHandle {
 }
 
 /** Creates the Anime4K engine while SR is enabled; disposes it (and its GPU device) otherwise. */
-export function useSuperResolution(enabled: boolean, level: SrLevel): SrHandle {
+export function useSuperResolution(enabled: boolean, options: SrOptions): SrHandle {
   const [engine, setEngine] = useState<SrEngine | null>(null)
   const [status, setStatus] = useState<SrStatus>(enabled ? 'init' : 'off')
   const [tick, setTick] = useState(0)
@@ -50,8 +49,8 @@ export function useSuperResolution(enabled: boolean, level: SrLevel): SrHandle {
   }, [enabled])
 
   useEffect(() => {
-    engine?.setLevel(level)
-  }, [engine, level])
+    engine?.setOptions(options)
+  }, [engine, options])
 
   useEffect(() => {
     if (engine && !engine.available) setStatus('unavailable')
