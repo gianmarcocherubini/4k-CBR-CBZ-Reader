@@ -11,6 +11,8 @@ import { type ImportItem, ImportOverlay } from './ImportOverlay'
 
 interface LibraryProps {
   sessionBooks: Book[]
+  /** A new version of the app has been installed by the service worker; a reload applies it. */
+  updateReady?: boolean
   onOpen: (book: Book) => void
   onSessionBook: (book: Book) => void
   onRemoveSessionBook: (id: string) => void
@@ -33,7 +35,7 @@ const PlusIcon = (
   </svg>
 )
 
-export function Library({ sessionBooks, onOpen, onSessionBook, onRemoveSessionBook }: LibraryProps) {
+export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBook, onRemoveSessionBook }: LibraryProps) {
   const [books, setBooks] = useState<Book[] | null>(null)
   const [progress, setProgress] = useState<Map<string, Progress>>(new Map())
   const [estimate, setEstimate] = useState<StorageEstimate | null>(null)
@@ -191,6 +193,14 @@ export function Library({ sessionBooks, onOpen, onSessionBook, onRemoveSessionBo
       </header>
 
       <main className="mx-auto w-full max-w-6xl flex-1 px-5 pb-10 sm:px-8">
+        {updateReady && (
+          <div className="mt-4 flex items-center justify-between gap-3 rounded-2xl bg-tint-soft px-4 py-3" role="status" data-testid="update-banner">
+            <span className="text-subhead">Nuova versione dell’app pronta.</span>
+            <button type="button" className="btn-pill" onClick={() => location.reload()}>
+              Ricarica
+            </button>
+          </div>
+        )}
         {books === null ? (
           <div className="flex h-64 items-center justify-center">
             <div className="spinner" aria-label="Caricamento" />

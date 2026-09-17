@@ -455,6 +455,84 @@ input[type='range'].slider::-moz-range-thumb {
   animation: fade-in 180ms ease;
 }
 
+/* ---- page-turn transitions ------------------------------------------------------------- */
+@keyframes spread-in-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes spread-out-fade {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+@keyframes spread-in-left {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: none;
+  }
+}
+@keyframes spread-in-right {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: none;
+  }
+}
+@keyframes spread-out-left {
+  from {
+    transform: none;
+  }
+  to {
+    transform: translateX(-100%);
+  }
+}
+@keyframes spread-out-right {
+  from {
+    transform: none;
+  }
+  to {
+    transform: translateX(100%);
+  }
+}
+.spread-anim {
+  animation-duration: 260ms;
+  animation-timing-function: cubic-bezier(0.2, 0.8, 0.2, 1);
+  animation-fill-mode: both;
+}
+.spread-in-fade {
+  animation-name: spread-in-fade;
+}
+.spread-out-fade {
+  animation-name: spread-out-fade;
+}
+.spread-in-left {
+  animation-name: spread-in-left;
+}
+.spread-in-right {
+  animation-name: spread-in-right;
+}
+.spread-out-left {
+  animation-name: spread-out-left;
+}
+.spread-out-right {
+  animation-name: spread-out-right;
+}
+@media (prefers-reduced-motion: reduce) {
+  .spread-anim {
+    animation-duration: 1ms;
+  }
+}
+
 /* Cover thumbnails: soft shadow and a subtle paper edge like Apple Books. */
 .cover {
   border-radius: 6px;

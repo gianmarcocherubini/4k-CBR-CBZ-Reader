@@ -1,5 +1,18 @@
 import type { ReactNode } from 'react'
-import type { Direction, FitMode, Gutter, GutterColor, PageMode, ReaderSettings, SrLevel, SrScale, StageBackground, Theme } from '../../types'
+import type {
+  Direction,
+  FitMode,
+  Gutter,
+  GutterColor,
+  PageMode,
+  PageTransition,
+  ReaderSettings,
+  SrLevel,
+  SrScale,
+  StageBackground,
+  Theme,
+} from '../../types'
+import { fullscreenSupported } from '../../lib/fullscreen'
 
 interface SettingsPanelProps {
   settings: ReaderSettings
@@ -58,10 +71,10 @@ export function Switch({ checked, onChange, label }: { checked: boolean; onChang
   )
 }
 
-/** One line of a grouped inset list. */
-export function Row({ title, hint, children }: { title: string; hint?: string; children?: ReactNode }) {
+/** One line of a grouped inset list; `stacked` puts the control full-width under the title. */
+export function Row({ title, hint, stacked = false, children }: { title: string; hint?: string; stacked?: boolean; children?: ReactNode }) {
   return (
-    <div className="row">
+    <div className={stacked ? 'row flex-col !items-stretch gap-2.5' : 'row'}>
       <div className="min-w-0">
         <div className="text-body">{title}</div>
         {hint && <div className="mt-0.5 text-footnote text-label-2">{hint}</div>}
@@ -138,6 +151,19 @@ export function SettingsPanel({
                 ]}
               />
             </Row>
+            <Row
+              title="Schermo intero durante la lettura"
+              hint={
+                fullscreenSupported()
+                  ? 'Nasconde la barra di stato dell’iPad (ora, Wi-Fi, batteria) e l’indicatore Home mentre leggi.'
+                  : 'Non disponibile in questo browser.'
+              }
+            >
+              <Switch checked={settings.fullscreenReading} onChange={(v) => onChange({ fullscreenReading: v })} label="Schermo intero durante la lettura" />
+            </Row>
+            <Row title="Indicatore SR" hint="Piccolo segnale in alto a destra quando la super risoluzione o il modello pesante sono applicati alla pagina.">
+              <Switch checked={settings.srIndicator} onChange={(v) => onChange({ srIndicator: v })} label="Indicatore SR" />
+            </Row>
           </Group>
 
           <Group title="Direzione di lettura">
@@ -173,6 +199,19 @@ export function SettingsPanel({
                 ]}
               />
             </div>
+            <Row title="Transizione" stacked>
+              <Segmented<PageTransition>
+                label="Transizione tra le pagine"
+                idPrefix="tr"
+                value={settings.transition}
+                onChange={(transition) => onChange({ transition })}
+                options={[
+                  { value: 'none', label: 'Nessuna' },
+                  { value: 'fade', label: 'Dissolvenza' },
+                  { value: 'slide', label: 'Scorrimento' },
+                ]}
+              />
+            </Row>
             <Row title="Sfasa coppie" hint="Copertina da sola, poi coppie 2-3, 4-5… Vale per questo volume.">
               <Switch checked={coverOffset} onChange={onCoverOffset} label="Sfasa coppie" />
             </Row>

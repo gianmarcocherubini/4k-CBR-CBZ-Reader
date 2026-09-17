@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Library } from './components/Library'
 import { Reader } from './components/reader/Reader'
+import { enterFullscreen, exitFullscreen } from './lib/fullscreen'
 import { navigateTo, parseRoute, type Route } from './lib/router'
 import { useSettings } from './lib/settings'
+import { useServiceWorkerUpdate } from './lib/swUpdate'
 import type { Book } from './types'
 
 export default function App() {
@@ -10,6 +12,7 @@ export default function App() {
   const [settings, updateSettings] = useSettings()
   /** Books opened with "Apri senza importare": not in IndexedDB, alive for this tab only. */
   const [sessionBooks, setSessionBooks] = useState<Map<string, Book>>(() => new Map())
+  const updateReady = useServiceWorkerUpdate()
 
   useEffect(() => {
     const onHash = () => setRoute(parseRoute(location.hash))
@@ -35,6 +38,19 @@ export default function App() {
     })
   }, [])
 
+  const openBook = useCallback(
+    (book: Book) => {
+      // Called from the tap on the book: a user gesture, which the Fullscreen API requires.
+      if (settings.fullscreenReading) void enterFullscreen()
+      navigateTo({ view: 'reader', bookId: book.id })
+    },
+    [settings.fullscreenReading],
+  )
+  const closeBook = useCallback(() => {
+    void exitFullscreen()
+    navigateTo({ view: 'library' })
+  }, [])
+
   if (route.view === 'reader') {
     return (
       <Reader
@@ -43,14 +59,15 @@ export default function App() {
         sessionBook={sessionBooks.get(route.bookId)}
         settings={settings}
         updateSettings={updateSettings}
-        onClose={() => navigateTo({ view: 'library' })}
+        onClose={closeBook}
       />
     )
   }
   return (
     <Library
       sessionBooks={[...sessionBooks.values()]}
-      onOpen={(book) => navigateTo({ view: 'reader', bookId: book.id })}
+      updateReady={updateReady}
+      onOpen={openBook}
       onSessionBook={addSessionBook}
       onRemoveSessionBook={removeSessionBook}
     />

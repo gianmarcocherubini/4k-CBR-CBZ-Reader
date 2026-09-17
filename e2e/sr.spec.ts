@@ -124,6 +124,23 @@ test('Anime4K super resolution: enhanced canvas, badge, level probe, faithful ou
   await expect(page.getByTestId('page-label')).toHaveText('2-3')
   await expect(page.locator('[data-testid=page][data-page="2"] canvas[data-testid=enhanced]')).toBeVisible({ timeout: 45_000 })
   await expect(page.locator('[data-testid=page][data-page="3"] canvas[data-testid=enhanced]')).toBeVisible({ timeout: 45_000 })
+
+  // Tiny corner indicator: shown once the toolbars hide, green when the enhancement is applied.
+  const mini = page.getByTestId('sr-mini')
+  await page.mouse.move(600, 430) // off the toolbars (hovering them keeps them visible)
+  await expect(page.getByTestId('toolbar-top')).toHaveClass(/opacity-0/, { timeout: 6_000 })
+  await expect(mini).toBeVisible()
+  await expect(mini).toHaveAttribute('data-state', 'applied', { timeout: 45_000 })
+  await expect(mini).toHaveText(/×2 M/)
+  // Hidden while the toolbars (with the full badge) are visible, and when switched off.
+  await page.mouse.move(640, 450)
+  await expect(mini).toHaveCount(0)
+  await page.getByTestId('settings').click()
+  await page.getByRole('switch', { name: 'Indicatore SR' }).click()
+  await page.getByRole('button', { name: 'Chiudi impostazioni' }).click()
+  await page.mouse.move(600, 430)
+  await expect(page.getByTestId('toolbar-top')).toHaveClass(/opacity-0/, { timeout: 6_000 })
+  await expect(mini).toHaveCount(0)
 })
 
 test('pages already at display resolution are left native', async ({ page }) => {

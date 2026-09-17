@@ -17,21 +17,24 @@ export function EnhancedCanvas({ bitmap, width, height, alt }: EnhancedCanvasPro
     const canvas = ref.current
     if (!canvas) return
     let cancelled = false
-    void createImageBitmap(bitmap).then((copy) => {
-      if (cancelled) {
-        copy.close()
-        return
-      }
-      const ctx = canvas.getContext('bitmaprenderer')
-      if (ctx) {
-        ctx.transferFromImageBitmap(copy)
-      } else {
-        canvas.width = copy.width
-        canvas.height = copy.height
-        canvas.getContext('2d')?.drawImage(copy, 0, 0)
-        copy.close()
-      }
-    })
+    createImageBitmap(bitmap)
+      .then((copy) => {
+        if (cancelled) {
+          copy.close()
+          return
+        }
+        const ctx = canvas.getContext('bitmaprenderer')
+        if (ctx) {
+          ctx.transferFromImageBitmap(copy)
+        } else {
+          canvas.width = copy.width
+          canvas.height = copy.height
+          canvas.getContext('2d')?.drawImage(copy, 0, 0)
+          copy.close()
+        }
+      })
+      // The source may have been evicted (closed) meanwhile, e.g. under a page-turn ghost.
+      .catch(() => {})
     return () => {
       cancelled = true
     }

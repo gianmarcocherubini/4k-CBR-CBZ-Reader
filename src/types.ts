@@ -47,6 +47,8 @@ export const GUTTER_FRACTION: Record<Gutter, number> = { none: 0, s: 0.015, m: 0
 export type GutterColor = 'white' | 'paper' | 'dark'
 /** Reader background behind the pages: default = follows the appearance (light grey / black). */
 export type StageBackground = 'default' | 'black' | 'white'
+/** Page-turn animation. */
+export type PageTransition = 'none' | 'fade' | 'slide'
 /** screen = whole spread visible (contain); height/width = fill that axis; original = 1:1 device pixels. */
 export type FitMode = 'screen' | 'height' | 'width' | 'original'
 export type SrLevel = 'auto' | 'M' | 'VL' | 'UL'
@@ -80,6 +82,11 @@ export interface ReaderSettings {
   /** Centre margin between the two pages in double-page mode. */
   gutter: Gutter
   gutterColor: GutterColor
+  transition: PageTransition
+  /** Request full screen while reading (hides the iPad status bar). */
+  fullscreenReading: boolean
+  /** Tiny corner indicator showing when the enhancement is actually applied. */
+  srIndicator: boolean
 }
 
 export const DEFAULT_SETTINGS: ReaderSettings = {
@@ -99,4 +106,7 @@ export const DEFAULT_SETTINGS: ReaderSettings = {
   stageBackground: 'default',
   gutter: 'm',
   gutterColor: 'white',
+  transition: 'slide',
+  fullscreenReading: true,
+  srIndicator: true,
 }

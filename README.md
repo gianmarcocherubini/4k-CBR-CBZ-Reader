@@ -64,6 +64,13 @@ scuro); in **Impostazioni → Aspetto** si può forzare, e lo **sfondo di lettur
   per pixel dello schermo).
 - **Segnalibro**, dimensioni delle pagine e pagine bianche vengono salvati per ogni volume: si riprende dove si era
   rimasti e la suddivisione in coppie è stabile tra una sessione e l'altra.
+- **Transizione** tra le pagine: scorrimento (default), dissolvenza o nessuna (cambio istantaneo).
+- **Schermo intero durante la lettura** (attivo di default): aprendo un volume l'app chiede lo schermo intero, quindi
+  la barra di stato dell'iPad (ora, Wi-Fi, batteria) e l'indicatore Home scompaiono; si torna alla vista normale
+  chiudendo il volume. Dove il browser non lo consente l'impostazione lo segnala.
+- **Indicatore SR**: un piccolo segnale in alto a destra (nascosto quando le barre sono visibili, disattivabile) che
+  diventa verde con il fattore e il livello quando la super risoluzione o il modello pesante sono effettivamente
+  applicati a tutte le pagine sullo schermo; con i puntini indica che l'elaborazione è in corso.
 - Lo schermo resta acceso durante la lettura (Wake Lock).
 
 ## Super risoluzione
@@ -144,6 +151,11 @@ proprio impostare `VITE_BASE=/` nella build.
 Il service worker aggiunge le intestazioni COOP/COEP (isolamento cross-origin) a tutte le risposte: GitHub Pages non
 può impostarle, e servono ai thread WebAssembly di "Qualità massima". Diventano attive dal secondo caricamento. Il
 motore ONNX e il modello non vengono precaricati: finiscono in cache alla prima attivazione.
+
+**Aggiornamenti**: l'app installata si aggiorna da sola. A ogni avvio il service worker controlla se su Pages c'è una
+versione nuova, la scarica in background e la attiva subito; la libreria mostra il banner "Nuova versione dell'app
+pronta · Ricarica", altrimenti la versione nuova è in uso dall'avvio successivo. Non serve rimuovere e ri-aggiungere
+l'app alla schermata Home; libri, segnalibri e cache restano al loro posto.
 
 ## Flag per i test
 

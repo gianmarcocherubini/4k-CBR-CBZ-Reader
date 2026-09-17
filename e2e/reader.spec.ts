@@ -34,6 +34,9 @@ async function openBook(page: Page, title: string) {
 
 const label = (page: Page) => page.getByTestId('page-label')
 const pageBox = async (page: Page, n: number) => {
+  // Geometry is measured once the page-turn animation has finished.
+  await expect(page.getByTestId('spread-ghost')).toHaveCount(0)
+  await page.waitForFunction(() => document.getAnimations().every((a) => a.playState === 'finished' || a.playState === 'idle'))
   const box = await page.locator(`[data-testid=page][data-page="${n}"]`).boundingBox()
   expect(box, `page ${n} should be on screen`).not.toBeNull()
   return box!
@@ -348,6 +351,62 @@ test.describe('reader', () => {
     await page.reload()
     await expect(page.getByTestId('reader')).toHaveAttribute('data-status', 'ready', { timeout: 20_000 })
     await expect(page.getByTestId('stage')).toHaveCSS('background-color', 'rgb(0, 0, 0)')
+  })
+
+  test('page-turn transitions: slide (default) and fade animate a ghost of the leaving spread, none does not', async ({ page }) => {
+    await page.goto('/')
+    await importBooks(page, ['manga-vol-01.cbz'])
+    await openBook(page, 'manga-vol-01')
+    await expect(page.locator('[data-testid=page][data-page="1"] img')).toBeVisible()
+    const ghost = page.getByTestId('spread-ghost')
+    // Slide (default): RTL forward turn -> the old spread leaves to the right.
+    await page.keyboard.press('ArrowLeft')
+    await expect(ghost).toHaveClass(/spread-out-right/)
+    await expect(ghost).toHaveCount(0, { timeout: 2000 })
+    await expect(label(page)).toHaveText('2-3')
+    // Backwards: leaves to the left.
+    await page.keyboard.press('ArrowRight')
+    await expect(ghost).toHaveClass(/spread-out-left/)
+    await expect(ghost).toHaveCount(0, { timeout: 2000 })
+
+    await page.mouse.move(CENTER.x, CENTER.y)
+    await page.getByTestId('settings').click()
+    await page.getByTestId('tr-fade').click()
+    await page.getByRole('button', { name: 'Chiudi impostazioni' }).click()
+    await page.keyboard.press('ArrowLeft')
+    await expect(ghost).toHaveClass(/spread-out-fade/)
+    await expect(ghost).toHaveCount(0, { timeout: 2000 })
+
+    await page.mouse.move(CENTER.x, CENTER.y)
+    await page.getByTestId('settings').click()
+    await page.getByTestId('tr-none').click()
+    await page.getByRole('button', { name: 'Chiudi impostazioni' }).click()
+    await page.keyboard.press('ArrowLeft')
+    await expect(label(page)).toHaveText('4-5')
+    await expect(ghost).toHaveCount(0)
+  })
+
+  test('full screen while reading (hides the status bar), off when leaving or disabled', async ({ page }) => {
+    await page.goto('/')
+    const supported = await page.evaluate(() => document.fullscreenEnabled)
+    test.skip(!supported, 'Fullscreen API not available in this browser')
+    await importBooks(page, ['short-book.cbz'])
+    await openBook(page, 'short-book')
+    await expect.poll(() => page.evaluate(() => document.fullscreenElement !== null)).toBe(true)
+    await page.getByTestId('back').click()
+    await expect(page.getByTestId('book-card')).toHaveCount(1)
+    await expect.poll(() => page.evaluate(() => document.fullscreenElement !== null)).toBe(false)
+    // Disabled in the settings: opening a book stays in the normal window.
+    await openBook(page, 'short-book')
+    await page.mouse.move(CENTER.x, CENTER.y)
+    await page.getByTestId('settings').click()
+    await page.getByRole('switch', { name: 'Schermo intero durante la lettura' }).click()
+    await page.getByRole('button', { name: 'Chiudi impostazioni' }).click()
+    await page.getByTestId('back').click()
+    await expect(page.getByTestId('book-card')).toHaveCount(1)
+    await openBook(page, 'short-book')
+    await page.waitForTimeout(300)
+    expect(await page.evaluate(() => document.fullscreenElement !== null)).toBe(false)
   })
 
   test('a missing book shows a clear error', async ({ page }) => {

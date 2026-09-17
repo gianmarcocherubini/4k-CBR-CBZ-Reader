@@ -9,8 +9,9 @@ import { resolveBookBlob } from '../../lib/storage/importer'
 import { SrAborted, type SrOptions, type SrPlan, type SrResult } from '../../lib/upscale/srEngine'
 import { type Book, GUTTER_FRACTION, type PageSize, type ReaderSettings } from '../../types'
 import { MaxQualityControls } from './MaxQualityControls'
+import { enterFullscreen, isFullscreen } from '../../lib/fullscreen'
 import { SettingsPanel } from './SettingsPanel'
-import { type PageState, SpreadView, STAGE_BG } from './SpreadView'
+import { type PageState, type SpreadGhost, SpreadView, STAGE_BG } from './SpreadView'
 import { Toolbars } from './Toolbars'
 import { type TapZone, useGestures, type ViewState } from './useGestures'
 import { useMaxQuality } from './useMaxQuality'
@@ -155,19 +156,58 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose 
   )
   const content = useMemo(() => ({ w: layout.w * view.zoom, h: layout.h * view.zoom }), [layout.w, layout.h, view.zoom])
 
+  // ---- page-turn transition -------------------------------------------------------------------
+  // The leaving spread is kept as a "ghost" layer for one animation; the new one animates in.
+  const [ghost, setGhost] = useState<SpreadGhost | null>(null)
+  const [enterClass, setEnterClass] = useState<string | undefined>(undefined)
+  const prevSpread = useRef<{ index: number; layout: typeof layout; view: ViewState; pages: Map<number, PageState>; enhanced: Map<number, SrResult> } | null>(null)
+  const ghostTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const ghostId = useRef(0)
+
   // Reset zoom when the spread changes; re-clamp the offset when the layout/viewport change.
   const lastSpreadKey = useRef(spreadKey)
   useEffect(() => {
     if (lastSpreadKey.current !== spreadKey) {
       lastSpreadKey.current = spreadKey
       setView({ zoom: 1, offset: clampOffset({ x: 0, y: 0 }, { w: layout.w, h: layout.h }, viewport) })
+      const prev = prevSpread.current
+      const mode = settings.transition
+      if (prev && mode !== 'none' && status === 'ready' && prev.layout.pages.length > 0) {
+        const forward = spreadIndex > prev.index
+        // In RTL the next spread lies to the left: it enters from the left while the old one leaves rightwards.
+        const fromLeft = forward === (settings.direction === 'rtl')
+        const ready = prev.layout.pages.every((b) => b.index < 0 || prev.pages.get(b.index)?.status === 'ready')
+        if (ready) {
+          ghostId.current += 1
+          setGhost({
+            id: ghostId.current,
+            layout: prev.layout,
+            view: prev.view,
+            pages: prev.pages,
+            enhanced: prev.enhanced,
+            exitClass: mode === 'fade' ? 'spread-out-fade' : fromLeft ? 'spread-out-right' : 'spread-out-left',
+          })
+        }
+        setEnterClass(mode === 'fade' ? 'spread-in-fade' : fromLeft ? 'spread-in-left' : 'spread-in-right')
+        if (ghostTimer.current) clearTimeout(ghostTimer.current)
+        ghostTimer.current = setTimeout(() => {
+          setGhost(null)
+          setEnterClass(undefined)
+        }, 300)
+      }
       return
     }
     setView((v) => {
       const next = clampOffset(v.offset, { w: layout.w * v.zoom, h: layout.h * v.zoom }, viewport)
       return next.x === v.offset.x && next.y === v.offset.y ? v : { ...v, offset: next }
     })
-  }, [spreadKey, layout.w, layout.h, viewport])
+  }, [spreadKey, layout.w, layout.h, viewport, status, spreadIndex, settings.transition, settings.direction])
+  useEffect(
+    () => () => {
+      if (ghostTimer.current) clearTimeout(ghostTimer.current)
+    },
+    [],
+  )
 
   // ---- page loading & preloading -------------------------------------------------------------
   useEffect(() => {
@@ -562,6 +602,23 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose 
   const heavyEnabled = settings.maxQuality || ganActive
   const showEnhanced = (settings.superResolution && !!sr.engine) || (heavyEnabled && cunetResults.size > 0)
 
+  // Snapshot of what is on screen, taken after every render: the source of the transition ghost.
+  useEffect(() => {
+    prevSpread.current = { index: spreadIndex, layout, view, pages: pageStates, enhanced: showEnhanced ? displayed : new Map() }
+  })
+
+  // Fallback for books opened without a synchronous gesture (session files): the first tap in
+  // the reader requests full screen.
+  useEffect(() => {
+    const el = stageRef.current
+    if (!el || !settings.fullscreenReading || status !== 'ready') return
+    const onFirst = () => {
+      if (!isFullscreen()) void enterFullscreen()
+    }
+    el.addEventListener('pointerdown', onFirst, { once: true })
+    return () => el.removeEventListener('pointerdown', onFirst)
+  }, [settings.fullscreenReading, status])
+
   const srBadge = (() => {
     const onScreen = spreadPages.filter((i) => pageStates.get(i)?.status === 'ready')
     if (onScreen.length > 0 && onScreen.every((i) => cunetResults.has(i))) return `SR ×2 ${heavyLabel}`
@@ -640,6 +697,13 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose 
   }
 
   const label = spread.length ? spreadLabel(spread) : '–'
+  /** Tiny corner indicator: green when the enhancement is applied to every page on screen. */
+  const mini = (() => {
+    if (!settings.srIndicator || !srBadge) return null
+    if (srBadge.startsWith('SR ×')) return { state: 'applied' as const, text: srBadge.slice(3) }
+    if (srBadge === 'SR…') return { state: 'pending' as const, text: '…' }
+    return null
+  })()
 
   return (
     <div
@@ -657,8 +721,23 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose 
         enhanced={showEnhanced ? displayed : undefined}
         gutterColor={settings.gutterColor}
         background={settings.stageBackground}
+        spreadKey={spreadKey}
+        enterClass={enterClass}
+        ghost={ghost}
         onRetry={retryPage}
       />
+      {mini && !barsVisible && (
+        <div
+          className="material pointer-events-none absolute right-2 z-10 flex items-center gap-1 rounded-full px-1.5 py-[2px] text-[10px] leading-none font-semibold text-label-2 tabular-nums"
+          style={{ top: 'calc(env(safe-area-inset-top, 0px) + 6px)' }}
+          data-testid="sr-mini"
+          data-state={mini.state}
+          aria-hidden
+        >
+          <span className={`inline-block h-1.5 w-1.5 rounded-full ${mini.state === 'applied' ? 'bg-green' : 'bg-label-3'}`} />
+          {mini.text}
+        </div>
+      )}
       {status === 'loading' && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
           <div className="spinner" aria-label="Apertura del volume" />
