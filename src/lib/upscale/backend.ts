@@ -13,6 +13,19 @@ export const CORE = STRIP_ROWS - 2 * OVERLAP
 /** Safari caps canvas/bitmap area around 16.7 MP. */
 export const MAX_OUTPUT_PIXELS = 16 * 1024 * 1024
 
+/**
+ * Memory a cache of enhanced bitmaps may hold. Results are kept at their full factor (a x4 page
+ * of 800x1200 is 61 MB), so the bound is in bytes; Safari does not expose deviceMemory, so the
+ * middle value is what an iPad gets.
+ */
+export function cacheBudgetBytes(): number {
+  const mem = (navigator as Navigator & { deviceMemory?: number }).deviceMemory
+  if (mem !== undefined && mem <= 2) return 96 * 1024 * 1024
+  if (mem !== undefined && mem <= 4) return 192 * 1024 * 1024
+  if (mem !== undefined && mem >= 8) return 512 * 1024 * 1024
+  return 256 * 1024 * 1024
+}
+
 export interface Size {
   w: number
   h: number

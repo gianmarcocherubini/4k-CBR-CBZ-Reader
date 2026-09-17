@@ -281,7 +281,7 @@ export function SettingsPanel({
           </Group>
 
           <Group title="Super risoluzione" footer={extra} testId="sr-section">
-            <Row title="Super risoluzione" hint="Anime4K sulla GPU, resa esattamente alla risoluzione dello schermo: linee e lettering più nitidi.">
+            <Row title="Super risoluzione" hint="Anime4K sulla GPU: la pagina viene ingrandita ×2 o ×4 rispetto all’originale e poi adattata allo schermo. Linee e lettering più nitidi a ogni zoom.">
               {/* Turning the standard tier on switches the heavy GAN model off: they are exclusive. */}
               <Switch
                 checked={settings.superResolution}
@@ -303,7 +303,10 @@ export function SettingsPanel({
                 ]}
               />
             </Row>
-            <Row title="Fattore" hint="Auto usa ×2, o ×4 quando lo zoom lo richiede. ×4 = due passaggi, il secondo al livello M.">
+            <Row
+              title="Fattore"
+              hint="Ingrandimento rispetto alla pagina originale, indipendente dallo schermo. Auto: ×4 quando GPU e memoria lo consentono (pagine fino a ~1 MP), altrimenti ×2. Vale anche per Qualità massima e modello GAN."
+            >
               <Segmented<SrScale>
                 label="Fattore di ingrandimento"
                 idPrefix="scale"
@@ -321,9 +324,6 @@ export function SettingsPanel({
             </Row>
             <Row title="Pulizia scansione" hint="Bianco della carta e neri più netti, leggera riduzione del rumore JPEG.">
               <Switch checked={settings.srClean} onChange={(v) => onChange({ srClean: v })} label="Pulizia scansione" />
-            </Row>
-            <Row title="Sempre attiva" hint="Elabora anche le pagine già alla risoluzione dello schermo (di default vengono lasciate com’erano).">
-              <Switch checked={settings.srAlways} onChange={(v) => onChange({ srAlways: v })} label="Sempre attiva" />
             </Row>
           </Group>
 

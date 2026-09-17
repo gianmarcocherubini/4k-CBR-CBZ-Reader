@@ -1,29 +1,40 @@
 /// <reference lib="webworker" />
 /// <reference types="@webgpu/types" />
 import type { InferenceSession, Tensor } from 'onnxruntime-web'
-import { CUNET_CACHE_DIR, type CunetEp, type CunetInitResult, type CunetRequest, type CunetResponse, MODEL_SPECS, type ModelSpec } from './protocol'
+import {
+  cacheDirFor,
+  CUNET_CACHE_DIR,
+  type CunetEp,
+  type CunetInitResult,
+  type CunetRequest,
+  type CunetResponse,
+  type HeavyFactor,
+  heavyFactor,
+  MODEL_SPECS,
+  type ModelSpec,
+} from './protocol'
 
 /**
- * waifu2x CUNet art/scale2x (nunif ONNX) through onnxruntime-web. Tiled 256 px with an 18 px
- * receptive-field crop per side (output tile 440 px), replicate padding, single-colour tile
- * shortcut and a grayscale guard against colour drift. Results are encoded as WebP and stored in
- * OPFS under sr-cache/<book>/<page>.webp so they are computed once, forever.
+ * Heavy models (waifu2x CUNet art/scale2x, Real-ESRGAN anime 6B; nunif/official ONNX) through
+ * onnxruntime-web. Tiled with a receptive-field crop per side, replicate padding, single-colour
+ * tile shortcut and a grayscale guard against colour drift. The result is a fixed factor of the
+ * source: x4 is Real-ESRGAN's native output or two passes of CUNet; x2 is CUNet's native output
+ * or a 2x2 box of Real-ESRGAN's. Results are encoded as WebP and stored in OPFS under
+ * sr-cache/<book>[.model][.x4]/<page> so they are computed once, forever.
  */
 
 type Ort = typeof import('onnxruntime-web')
 
-/** Tiling derived from the model spec (set by `init`). Results are always stored at 2x. */
+/** Tiling derived from the model spec (set by `init`). */
 let spec: ModelSpec = MODEL_SPECS.cunet
 let TILE = spec.tile
 let CROP_IN = spec.cropIn
 let STEP = TILE - 2 * CROP_IN // source px advance per tile
-let OUT_TILE = STEP * 2 // stored (2x) output per tile
 function applySpec(s: ModelSpec): void {
   spec = s
   TILE = s.tile
   CROP_IN = s.cropIn
   STEP = TILE - 2 * CROP_IN
-  OUT_TILE = STEP * 2
 }
 
 let ort: Ort | null = null
@@ -137,42 +148,39 @@ async function cached(cacheKey: string, page: number): Promise<Blob | null> {
   }
 }
 
-async function process(id: number, cacheKey: string, page: number, blob: Blob): Promise<Blob> {
-  if (!ort || !session) throw Object.assign(new Error('Motore non inizializzato'), { code: 'unavailable' })
-  if (cancelled.has(id)) throw Object.assign(new Error('Annullato'), { code: 'aborted' })
-  // Another request (reading ahead vs. batch) may have produced this page while we waited.
-  const hit = await cached(cacheKey, page)
-  if (hit) return hit
-  const bitmap = await createImageBitmap(blob)
-  const W = bitmap.width
-  const H = bitmap.height
-  const canvas = new OffscreenCanvas(W, H)
-  const ctx = canvas.getContext('2d', { willReadFrequently: true })!
-  ctx.drawImage(bitmap, 0, 0)
-  bitmap.close()
-  const src = ctx.getImageData(0, 0, W, H)
-  const gray = isGrayscale(src)
+const tilesFor = (W: number, H: number) => Math.ceil(W / STEP) * Math.ceil(H / STEP)
 
+/**
+ * One pass of the network over `src`, producing `outFactor` × src (outFactor ≤ the model scale;
+ * a x4 model asked for x2 gets a 2x2 box filter). `onTile` is called after every tile.
+ */
+async function runNetwork(id: number, src: ImageData, gray: boolean, outFactor: HeavyFactor, onTile: () => void): Promise<ImageData> {
+  if (!ort || !session) throw Object.assign(new Error('Motore non inizializzato'), { code: 'unavailable' })
+  const { width: W, height: H } = src
   const blocksW = Math.ceil(W / STEP)
   const blocksH = Math.ceil(H / STEP)
   const padW = blocksW * STEP + 2 * CROP_IN
   const padH = blocksH * STEP + 2 * CROP_IN
   const padded = replicatePad(src, CROP_IN, CROP_IN, padW, padH)
 
-  const outW = W * 2
-  const outH = H * 2
+  const outW = W * outFactor
+  const outH = H * outFactor
+  const outTile = STEP * outFactor
   const out = new Uint8ClampedArray(outW * outH * 4)
   const input = new Float32Array(3 * TILE * TILE)
-  const tilesTotal = blocksW * blocksH
-  let tilesDone = 0
-  post({ type: 'progress', id, tilesDone, tilesTotal })
+  // Network output geometry: edge = scale*TILE - shrink; the valid (non-context) region starts at
+  // scale*CROP_IN - shrink/2 and spans scale*STEP pixels; `sub` output pixels per stored pixel.
+  const outEdge = spec.scale * TILE - spec.shrink
+  const validOff = spec.scale * CROP_IN - spec.shrink / 2
+  const sub = spec.scale / outFactor
+  const plane = outEdge * outEdge
 
   for (let bi = 0; bi < blocksH; bi++) {
     for (let bj = 0; bj < blocksW; bj++) {
       if (cancelled.has(id)) throw Object.assign(new Error('Annullato'), { code: 'aborted' })
       const x0 = bj * STEP
       const y0 = bi * STEP
-      // Extract the 256x256 tile as planar RGB in [0,1]; detect single-colour tiles on the way.
+      // Extract the tile as planar RGB in [0,1]; detect single-colour tiles on the way.
       let single = true
       const first = [padded[(y0 * padW + x0) * 4]!, padded[(y0 * padW + x0) * 4 + 1]!, padded[(y0 * padW + x0) * 4 + 2]!]
       for (let y = 0; y < TILE; y++) {
@@ -190,25 +198,19 @@ async function process(id: number, cacheKey: string, page: number, blob: Blob): 
         }
       }
       let tile: Float32Array | null = null
-      // Network output geometry: edge = scale*TILE - shrink; the valid (non-context) region starts
-      // at scale*CROP_IN - shrink/2 and spans scale*STEP pixels; x4 outputs are box-averaged to 2x.
-      const outEdge = spec.scale * TILE - spec.shrink
-      const validOff = spec.scale * CROP_IN - spec.shrink / 2
-      const sub = spec.scale / 2 // 1 for x2 models, 2 for x4 (2x2 box filter)
       if (!single) {
         const feeds = { [session.inputNames[0]!]: new ort.Tensor('float32', input, [1, 3, TILE, TILE]) }
         const result = await session.run(feeds)
         const y = result[session.outputNames[0]!] as Tensor
         tile = y.data as Float32Array
       }
-      // Place the (2x) output tile (clipped to the page).
-      const ox0 = bj * OUT_TILE
-      const oy0 = bi * OUT_TILE
-      const plane = outEdge * outEdge
-      for (let y = 0; y < OUT_TILE; y++) {
+      // Place the output tile (clipped to the page).
+      const ox0 = bj * outTile
+      const oy0 = bi * outTile
+      for (let y = 0; y < outTile; y++) {
         const oy = oy0 + y
         if (oy >= outH) break
-        for (let x = 0; x < OUT_TILE; x++) {
+        for (let x = 0; x < outTile; x++) {
           const ox = ox0 + x
           if (ox >= outW) break
           const d = (oy * outW + ox) * 4
@@ -253,13 +255,57 @@ async function process(id: number, cacheKey: string, page: number, blob: Blob): 
           out[d + 3] = 255
         }
       }
-      tilesDone++
-      post({ type: 'progress', id, tilesDone, tilesTotal })
+      onTile()
     }
   }
+  return new ImageData(out, outW, outH)
+}
 
-  const outCanvas = new OffscreenCanvas(outW, outH)
-  outCanvas.getContext('2d')!.putImageData(new ImageData(out, outW, outH), 0, 0)
+async function process(id: number, cacheKeyBase: string, page: number, blob: Blob, maxFactor: HeavyFactor): Promise<Blob> {
+  if (!ort || !session) throw Object.assign(new Error('Motore non inizializzato'), { code: 'unavailable' })
+  if (cancelled.has(id)) throw Object.assign(new Error('Annullato'), { code: 'aborted' })
+  const bitmap = await createImageBitmap(blob)
+  const W = bitmap.width
+  const H = bitmap.height
+  const factor = heavyFactor(W, H, maxFactor)
+  const cacheKey = cacheDirFor(cacheKeyBase, factor)
+  // Another request (reading ahead vs. batch) may have produced this page while we waited.
+  const hit = await cached(cacheKey, page)
+  if (hit) {
+    bitmap.close()
+    return hit
+  }
+  const canvas = new OffscreenCanvas(W, H)
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })!
+  ctx.drawImage(bitmap, 0, 0)
+  bitmap.close()
+  const src = ctx.getImageData(0, 0, W, H)
+  const gray = isGrayscale(src)
+
+  // A x2 model reaches x4 with a second pass over its own output (4x the tiles).
+  const stages: HeavyFactor[] = spec.scale === 4 ? [factor] : factor === 4 ? [2, 2] : [2]
+  let tilesTotal = 0
+  {
+    let w = W
+    let h = H
+    for (const s of stages) {
+      tilesTotal += tilesFor(w, h)
+      w *= s
+      h *= s
+    }
+  }
+  let tilesDone = 0
+  post({ type: 'progress', id, tilesDone, tilesTotal })
+  let img = src
+  for (const s of stages) {
+    img = await runNetwork(id, img, gray, s, () => {
+      tilesDone++
+      post({ type: 'progress', id, tilesDone, tilesTotal })
+    })
+  }
+
+  const outCanvas = new OffscreenCanvas(img.width, img.height)
+  outCanvas.getContext('2d')!.putImageData(img, 0, 0)
   let encoded = await outCanvas.convertToBlob({ type: 'image/webp', quality: 0.92 })
   if (encoded.type !== 'image/webp') encoded = await outCanvas.convertToBlob({ type: 'image/jpeg', quality: 0.92 })
   await store(cacheKey, page, encoded)
@@ -332,7 +378,7 @@ self.onmessage = async (ev: MessageEvent<CunetRequest>) => {
         result = await serialized(() => init(msg.modelUrl, msg.ortPath, msg.preferGpu, msg.spec))
         break
       case 'process':
-        result = await serialized(() => process(msg.id, msg.cacheKey, msg.page, msg.blob))
+        result = await serialized(() => process(msg.id, msg.cacheKeyBase, msg.page, msg.blob, msg.maxFactor))
         break
       case 'list':
         result = await list(msg.cacheKey)

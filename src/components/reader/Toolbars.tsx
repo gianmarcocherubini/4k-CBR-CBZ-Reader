@@ -13,6 +13,10 @@ interface ToolbarsProps {
   /** The current spread contains a user-inserted blank page. */
   blankHere: boolean
   badge?: string
+  /** An enhanced page is on screen: the "Originale" hold-to-compare button makes sense. */
+  compareAvailable: boolean
+  comparing: boolean
+  onCompare: (active: boolean) => void
   onBack: () => void
   onSettings: () => void
   onSeek: (spreadIndex: number) => void
@@ -49,6 +53,9 @@ export function Toolbars({
   coverOffset,
   blankHere,
   badge,
+  compareAvailable,
+  comparing,
+  onCompare,
   onBack,
   onSettings,
   onSeek,
@@ -135,6 +142,26 @@ export function Toolbars({
               data-testid="toggle-blank"
             >
               {blankHere ? 'Togli pagina bianca' : 'Pagina bianca qui'}
+            </button>
+          )}
+          {compareAvailable && (
+            <button
+              type="button"
+              className="btn-pill select-none"
+              style={{ WebkitTouchCallout: 'none' }}
+              aria-pressed={comparing}
+              title="Tieni premuto per vedere la pagina originale, senza super risoluzione (tasto O)"
+              onPointerDown={(e) => {
+                e.preventDefault()
+                onCompare(true)
+              }}
+              onPointerUp={() => onCompare(false)}
+              onPointerCancel={() => onCompare(false)}
+              onPointerLeave={() => onCompare(false)}
+              onContextMenu={(e) => e.preventDefault()}
+              data-testid="compare"
+            >
+              {comparing ? 'Originale' : 'Confronta'}
             </button>
           )}
         </div>

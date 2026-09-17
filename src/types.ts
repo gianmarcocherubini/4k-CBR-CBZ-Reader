@@ -52,7 +52,10 @@ export type PageTransition = 'none' | 'fade' | 'slide'
 /** screen = whole spread visible (contain); height/width = fill that axis; original = 1:1 device pixels. */
 export type FitMode = 'screen' | 'height' | 'width' | 'original'
 export type SrLevel = 'auto' | 'M' | 'VL' | 'UL'
-/** Upscale factor: auto = what the display needs (up to x4), or a fixed x2 / x4. */
+/**
+ * Upscale factor relative to the source page (the view then fits the result into its box):
+ * auto = x4 when memory and GPU allow (heavy models: their native factor), else x2.
+ */
 export type SrScale = 'auto' | 'x2' | 'x4'
 /** Model of the heavy "Qualità massima" tier. */
 export type HeavyModel = 'cunet' | 'esrgan6b'
@@ -71,8 +74,6 @@ export interface ReaderSettings {
   srRestore: boolean
   /** Scan clean-up: paper levels + light denoise ("Pulizia scansione"). */
   srClean: boolean
-  /** Enhance also pages shown at or below their native size ("Sempre attiva"). */
-  srAlways: boolean
   /** "Qualità massima (lenta)": waifu2x CUNet, experimental, off by default. */
   maxQuality: boolean
   /** Heavy GAN model (Real-ESRGAN anime 6B) for the max-quality tier; only when superResolution is off. */
@@ -99,7 +100,6 @@ export const DEFAULT_SETTINGS: ReaderSettings = {
   srScale: 'auto',
   srRestore: false,
   srClean: false,
-  srAlways: false,
   maxQuality: false,
   ganModel: false,
   theme: 'system',

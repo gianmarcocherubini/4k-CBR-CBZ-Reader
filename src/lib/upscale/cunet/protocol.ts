@@ -1,6 +1,7 @@
 import type { HeavyModel } from '../../../types'
 
 export type CunetEp = 'webgpu' | 'wasm'
+export type HeavyFactor = 2 | 4
 
 /** How a heavy model is tiled and interpreted by the worker. */
 export interface ModelSpec {
@@ -24,9 +25,20 @@ export const MODEL_SPECS: Record<HeavyModel, ModelSpec> = {
   esrgan6b: { id: 'esrgan6b', file: 'realesrgan_x4plus_anime_6b.onnx', scale: 4, tile: 192, cropIn: 16, shrink: 0 },
 }
 
+/** Safari caps canvas/bitmap area around 16.7 MP: results must be encodable and decodable there. */
+export const HEAVY_MAX_OUTPUT_PIXELS = 16 * 1024 * 1024
+
+/**
+ * Factor actually produced for a page: the requested maximum, unless a x4 result would exceed the
+ * canvas cap (then x2). x4 is the native output of Real-ESRGAN and two passes of CUNet.
+ */
+export function heavyFactor(w: number, h: number, maxFactor: HeavyFactor): HeavyFactor {
+  return maxFactor === 4 && w * h * 16 <= HEAVY_MAX_OUTPUT_PIXELS ? 4 : 2
+}
+
 export type CunetRequest =
   | { type: 'init'; id: number; modelUrl: string; ortPath: string; preferGpu: boolean; spec: ModelSpec }
-  | { type: 'process'; id: number; cacheKey: string; page: number; blob: Blob }
+  | { type: 'process'; id: number; cacheKeyBase: string; page: number; blob: Blob; maxFactor: HeavyFactor }
   | { type: 'cancel'; id: number }
   | { type: 'list'; id: number; cacheKey: string }
   | { type: 'delete'; id: number; cacheKey: string }
@@ -49,5 +61,12 @@ export function cacheKeyFor(bookId: string, model: HeavyModel = 'cunet'): string
   const base = `${bookId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 48)}-${(h >>> 0).toString(16)}`
   return model === 'cunet' ? base : `${base}.${model}`
 }
+
+/** Directory of the results of one factor: x2 keeps the historical name, x4 gets a suffix. */
+export function cacheDirFor(base: string, factor: HeavyFactor): string {
+  return factor === 4 ? `${base}.x4` : base
+}
+
+export const HEAVY_FACTORS: readonly HeavyFactor[] = [4, 2]
 
 export const CUNET_CACHE_DIR = 'sr-cache'

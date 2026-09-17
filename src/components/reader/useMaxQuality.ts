@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { type BatchProgress, CunetAborted, CunetEngine, type CunetStatus } from '../../lib/upscale/cunet/cunetEngine'
+import type { HeavyFactor } from '../../lib/upscale/cunet/protocol'
 import type { HeavyModel } from '../../types'
 
 export interface BatchState {
@@ -14,7 +15,7 @@ export interface MaxQualityHandle {
   status: CunetStatus
   tick: number
   batch: BatchState
-  startBatch: (bookId: string, pages: number[], source: (page: number) => Promise<Blob>) => void
+  startBatch: (bookId: string, pages: number[], source: (page: number) => Promise<Blob>, maxFactor: HeavyFactor) => void
   cancelBatch: () => void
 }
 
@@ -43,13 +44,13 @@ export function useMaxQuality(enabled: boolean, model: HeavyModel): MaxQualityHa
   }, [enabled, model])
 
   const startBatch = useCallback(
-    (bookId: string, pages: number[], source: (page: number) => Promise<Blob>) => {
+    (bookId: string, pages: number[], source: (page: number) => Promise<Blob>, maxFactor: HeavyFactor) => {
       if (!engine || batch.running) return
       const controller = new AbortController()
       abortRef.current = controller
       setBatch({ running: true, progress: null, error: null, finished: false })
       engine
-        .preprocess(bookId, pages, source, (progress) => setBatch((b) => ({ ...b, progress })), controller.signal)
+        .preprocess(bookId, pages, source, maxFactor, (progress) => setBatch((b) => ({ ...b, progress })), controller.signal)
         .then(() => setBatch((b) => ({ ...b, running: false, finished: true })))
         .catch((e) =>
           setBatch((b) => ({

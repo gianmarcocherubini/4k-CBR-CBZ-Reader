@@ -1,7 +1,19 @@
 import type { DistributiveOmit } from '../../archive/rar/protocol'
 import { flags } from '../../flags'
 import type { HeavyModel } from '../../../types'
-import { CUNET_CACHE_DIR, type CunetEp, type CunetInitResult, type CunetRequest, type CunetResponse, cacheKeyFor, MODEL_SPECS } from './protocol'
+import { cacheBudgetBytes } from '../backend'
+import {
+  cacheDirFor,
+  cacheKeyFor,
+  CUNET_CACHE_DIR,
+  type CunetEp,
+  type CunetInitResult,
+  type CunetRequest,
+  type CunetResponse,
+  HEAVY_FACTORS,
+  type HeavyFactor,
+  MODEL_SPECS,
+} from './protocol'
 
 export type CunetStatus = 'idle' | 'loading' | 'ready' | 'model-missing' | 'unavailable'
 
@@ -35,8 +47,9 @@ export class CunetAborted extends Error {
 }
 
 /**
- * "Qualità massima": drives the CUNet worker, keeps a small LRU of decoded results and runs the
- * per-volume batch job. Cached pages are read straight from OPFS on the main thread.
+ * "Qualità massima": drives the heavy-model worker, keeps a byte-bounded LRU of decoded results
+ * and runs the per-volume batch job. Cached pages are read straight from OPFS on the main thread;
+ * the x4 result of a page is preferred over its x2 one whenever both exist.
  */
 export class CunetEngine {
   readonly model: HeavyModel
@@ -49,6 +62,9 @@ export class CunetEngine {
   private nextId = 1
   private initPromise: Promise<void> | null = null
   private readonly bitmaps = new Map<string, ImageBitmap>()
+  private bitmapBytes = 0
+  /** Half the budget of the Anime4K cache: both tiers may be alive at once. */
+  private readonly budget = cacheBudgetBytes() / 2
   private readonly inflight = new Map<string, Promise<ImageBitmap>>()
   private queue: Array<{ key: string; run: () => Promise<void> }> = []
   private running = false
@@ -149,12 +165,18 @@ export class CunetEngine {
   }
 
   private remember(k: string, bitmap: ImageBitmap): void {
+    const old = this.bitmaps.get(k)
+    if (old && old !== bitmap) {
+      this.bitmapBytes -= old.width * old.height * 4
+      old.close()
+    }
     this.bitmaps.set(k, bitmap)
-    while (this.bitmaps.size > 4) {
-      const oldest = this.bitmaps.keys().next().value
-      if (oldest === undefined) break
-      this.bitmaps.get(oldest)?.close()
-      this.bitmaps.delete(oldest)
+    this.bitmapBytes += bitmap.width * bitmap.height * 4
+    for (const [key, b] of this.bitmaps) {
+      if (this.bitmapBytes <= this.budget || this.bitmaps.size <= 2) break
+      this.bitmaps.delete(key)
+      this.bitmapBytes -= b.width * b.height * 4
+      b.close()
     }
   }
 
@@ -167,32 +189,43 @@ export class CunetEngine {
     return this.readCache(bookId, page)
   }
 
-  /** Pure OPFS read (no queue interaction), so it is safe to call from inside a queued task. */
+  /** Pure OPFS read (no queue interaction), so it is safe to call from inside a queued task. x4 first. */
   private async readCache(bookId: string, page: number): Promise<ImageBitmap | null> {
-    try {
-      const root = await navigator.storage.getDirectory()
-      const dir = await (await root.getDirectoryHandle(CUNET_CACHE_DIR, { create: false })).getDirectoryHandle(cacheKeyFor(bookId, this.model), { create: false })
-      const file = await (await dir.getFileHandle(`${page}`)).getFile()
-      if (file.size === 0) return null
-      // OPFS files carry no MIME type: sniff so Safari decodes them too.
-      const head = new Uint8Array(await file.slice(0, 12).arrayBuffer())
-      const isWebp = head[0] === 0x52 && head[1] === 0x49 && head[8] === 0x57 && head[9] === 0x45
-      const typed = file.type ? file : new Blob([file], { type: isWebp ? 'image/webp' : 'image/jpeg' })
-      const bitmap = await createImageBitmap(typed)
-      this.remember(this.key(bookId, page), bitmap)
-      return bitmap
-    } catch {
-      return null
+    for (const factor of HEAVY_FACTORS) {
+      try {
+        const root = await navigator.storage.getDirectory()
+        const dir = await (await root.getDirectoryHandle(CUNET_CACHE_DIR, { create: false })).getDirectoryHandle(
+          cacheDirFor(cacheKeyFor(bookId, this.model), factor),
+          { create: false },
+        )
+        const file = await (await dir.getFileHandle(`${page}`)).getFile()
+        if (file.size === 0) continue
+        // OPFS files carry no MIME type: sniff so Safari decodes them too.
+        const head = new Uint8Array(await file.slice(0, 12).arrayBuffer())
+        const isWebp = head[0] === 0x52 && head[1] === 0x49 && head[8] === 0x57 && head[9] === 0x45
+        const typed = file.type ? file : new Blob([file], { type: isWebp ? 'image/webp' : 'image/jpeg' })
+        const bitmap = await createImageBitmap(typed)
+        this.remember(this.key(bookId, page), bitmap)
+        return bitmap
+      } catch {
+        // not cached at this factor
+      }
     }
+    return null
   }
 
-  async cachedPages(bookId: string): Promise<number[]> {
+  /** Pages with a result at `factor` (x4 requests are only satisfied by x4 results; x2 by either). */
+  async cachedPages(bookId: string, factor: HeavyFactor): Promise<number[]> {
     if (this.disposed) return []
-    return this.call<number[]>({ type: 'list', cacheKey: cacheKeyFor(bookId, this.model) }).promise
+    const base = cacheKeyFor(bookId, this.model)
+    const factors = factor === 4 ? [4 as HeavyFactor] : HEAVY_FACTORS
+    const pages = new Set<number>()
+    for (const f of factors) for (const p of await this.call<number[]>({ type: 'list', cacheKey: cacheDirFor(base, f) }).promise) pages.add(p)
+    return [...pages].sort((a, b) => a - b)
   }
 
-  /** Processes one page (queued, one at a time) and caches it. */
-  enhance(bookId: string, page: number, source: () => Promise<Blob>, onProgress?: (d: number, t: number) => void): Promise<ImageBitmap> {
+  /** Processes one page (queued, one at a time) at up to `maxFactor` and caches it. */
+  enhance(bookId: string, page: number, source: () => Promise<Blob>, maxFactor: HeavyFactor, onProgress?: (d: number, t: number) => void): Promise<ImageBitmap> {
     const k = this.key(bookId, page)
     const hit = this.peek(bookId, page)
     if (hit) return Promise.resolve(hit)
@@ -211,7 +244,7 @@ export class CunetEngine {
             }
             const blob = await source()
             const t0 = performance.now()
-            const { promise: p } = this.call<Blob>({ type: 'process', cacheKey: cacheKeyFor(bookId, this.model), page, blob }, onProgress)
+            const { promise: p } = this.call<Blob>({ type: 'process', cacheKeyBase: cacheKeyFor(bookId, this.model), page, blob, maxFactor }, onProgress)
             const encoded = await p
             const secs = (performance.now() - t0) / 1000
             this.secondsPerPage = this.secondsPerPage === undefined ? secs : this.secondsPerPage * 0.6 + secs * 0.4
@@ -256,21 +289,23 @@ export class CunetEngine {
     bookId: string,
     pages: number[],
     source: (page: number) => Promise<Blob>,
+    maxFactor: HeavyFactor,
     onProgress: (p: BatchProgress) => void,
     signal: AbortSignal,
   ): Promise<void> {
     await this.init()
-    const done = new Set(await this.cachedPages(bookId))
+    const done = new Set(await this.cachedPages(bookId, maxFactor))
     const todo = pages.filter((p) => !done.has(p))
     const total = pages.length
-    let count = done.size
+    let count = pages.length - todo.length
     onProgress({ done: count, total, tilesDone: 0, tilesTotal: 0, secondsPerPage: this.secondsPerPage })
     for (const page of todo) {
       if (signal.aborted) throw new CunetAborted()
       const blob = await source(page)
       const t0 = performance.now()
-      const { id, promise } = this.call<Blob>({ type: 'process', cacheKey: cacheKeyFor(bookId, this.model), page, blob }, (tilesDone, tilesTotal) =>
-        onProgress({ done: count, total, tilesDone, tilesTotal, secondsPerPage: this.secondsPerPage, currentPage: page }),
+      const { id, promise } = this.call<Blob>(
+        { type: 'process', cacheKeyBase: cacheKeyFor(bookId, this.model), page, blob, maxFactor },
+        (tilesDone, tilesTotal) => onProgress({ done: count, total, tilesDone, tilesTotal, secondsPerPage: this.secondsPerPage, currentPage: page }),
       )
       const onAbort = () => this.worker?.postMessage({ type: 'cancel', id } satisfies CunetRequest)
       signal.addEventListener('abort', onAbort)
@@ -295,21 +330,24 @@ export class CunetEngine {
     this.queue = []
     for (const b of this.bitmaps.values()) b.close()
     this.bitmaps.clear()
+    this.bitmapBytes = 0
     this.worker?.terminate()
     this.worker = null
     this.pending.clear()
   }
 }
 
-/** Removes the cached results of a book (called when the book is deleted). */
+/** Removes the cached results of a book, every model and factor (called when the book is deleted). */
 export async function deleteCunetCache(bookId: string): Promise<void> {
   for (const model of Object.keys(MODEL_SPECS) as HeavyModel[]) {
-    try {
-      const root = await navigator.storage.getDirectory()
-      const base = await root.getDirectoryHandle(CUNET_CACHE_DIR, { create: false })
-      await base.removeEntry(cacheKeyFor(bookId, model), { recursive: true })
-    } catch {
-      // nothing cached
+    for (const factor of HEAVY_FACTORS) {
+      try {
+        const root = await navigator.storage.getDirectory()
+        const base = await root.getDirectoryHandle(CUNET_CACHE_DIR, { create: false })
+        await base.removeEntry(cacheDirFor(cacheKeyFor(bookId, model), factor), { recursive: true })
+      } catch {
+        // nothing cached
+      }
     }
   }
 }

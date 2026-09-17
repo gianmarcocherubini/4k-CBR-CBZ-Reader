@@ -48,7 +48,7 @@ export function MaxQualityControls({
         hint={
           gan && ganAllowed
             ? 'Sostituita dal modello GAN pesante qui sotto.'
-            : 'Sperimentale. waifu2x CUNet ×2: il risultato più fedele (conserva i retini), ma richiede secondi per pagina. I risultati restano in cache per sempre.'
+            : 'Sperimentale. waifu2x CUNet: il risultato più fedele (conserva i retini), ma richiede secondi per pagina. ×2 nativo; con Fattore ×4 fa due passaggi. I risultati restano in cache per sempre.'
         }
       >
         <Switch checked={enabled} onChange={onToggle} label="Qualità massima" />
@@ -95,7 +95,7 @@ export function MaxQualityControls({
         title="Modello GAN pesante"
         hint={
           ganAllowed
-            ? 'Real-ESRGAN anime 6B (×4, ridotto a ×2): aspetto “stampato”, molto nitido; tende a cancellare i retini fini. Decine di secondi per pagina sulla GPU, minuti sulla CPU: usalo con “Pre-elabora questo volume”.'
+            ? 'Real-ESRGAN anime 6B, ×4 nativo (×2 con Fattore ×2): aspetto “stampato”, molto nitido; tende a cancellare i retini fini. Decine di secondi per pagina sulla GPU, minuti sulla CPU: usalo con “Pre-elabora questo volume”.'
             : 'Disponibile solo con la Super risoluzione standard spenta: i due sistemi sono alternativi.'
         }
       >

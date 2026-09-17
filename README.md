@@ -77,36 +77,42 @@ scuro); in **Impostazioni → Aspetto** si può forzare, e lo **sfondo di lettur
 
 ### "Super risoluzione" (Anime4K, attiva di default)
 
-Quando una pagina è mostrata più grande dei suoi pixel (iPad ad alta densità, zoom), viene ingrandita con la rete
-**Anime4K Upscale_CNN_x2** sulla GPU, a strisce di 288 righe per usare poca memoria, e **resa esattamente alla
-risoluzione dello schermo** (ricampionamento con sovracampionamento 2×2, niente sfocatura bilineare del browser).
-Linee e lettering escono più nitidi; le pagine già alla risoluzione dello schermo non vengono toccate (indicatore
-`SR nativo`) a meno di attivare **Sempre attiva**. Funziona con lo zoom e con la doppia pagina; le pagine seguenti
-vengono elaborate in anticipo.
+Ogni pagina viene ingrandita con la rete **Anime4K Upscale_CNN_x2** sulla GPU, a strisce di 288 righe per usare poca
+memoria, **a un fattore fisso rispetto all'originale (×2 o ×4)**, indipendente dallo schermo; il risultato viene poi
+**adattato al riquadro** con un ricampionamento Lanczos di alta qualità (mai la sfocatura bilineare del browser). È
+il modello "prima la super risoluzione, poi l'adattamento": un solo risultato per pagina serve ogni zoom,
+orientamento e impaginazione (lo zoom non ricalcola nulla), e ridurre un ×4 ai pixel dello schermo è ciò che rende
+le linee pulite. Funziona con la doppia pagina; le pagine seguenti vengono elaborate in anticipo. Il pulsante
+**Confronta** nella barra in basso (o il tasto `O`) mostra l'originale finché resta premuto.
 
 - **Livello**: `Auto` parte da VL, misura il tempo della prima pagina e sceglie il livello più forte che sta sotto
   100 ms per pagina (UL solo se la GPU lo consente; con 2–4 GB di RAM si ferma a M/VL). Si può forzare M, VL o UL.
-- **Fattore**: `Auto` usa ×2, o **×4** (due passaggi, il secondo al livello M) quando lo zoom lo richiede; si può
-  fissare ×2 o ×4.
+- **Fattore**: `Auto` usa **×4** (due passaggi, il secondo al livello M) quando il risultato sta nel limite di 16 MP
+  dei canvas di Safari e nel bilancio di memoria (pagine fino a ~1 MP, cioè i tipici 800×1200), altrimenti ×2; si
+  può fissare ×2 o ×4. Vale anche per Qualità massima e modello GAN. La cache dei risultati è limitata in byte
+  (96–512 MB a seconda della RAM del dispositivo).
 - **Linee nitide**: passaggio *Restore_CNN_Soft* di Anime4K prima dell'ingrandimento, tratti e testi più marcati
   (raddoppia il costo). **Pulizia scansione**: bianco della carta e neri più netti, leggera riduzione del rumore JPEG.
 - **Backend automatico**: WebGPU (iPadOS 26+); su iPadOS 17/18 gli stessi shader ufficiali girano su **WebGL2**
   (risultato verificato equivalente: 54,6 dB tra i due backend); senza GPU utilizzabile, ridimensionamento del browser.
   Le impostazioni dicono sempre backend, livello, fattore, dimensione di uscita e tempo stimato.
 - **Indicatore** nella barra in alto: `SR ×2 VL` / `SR ×4 UL` (fattore e livello in uso, `+` con Linee nitide),
-  `SR ×2 CUNet`, `SR ×2 GAN`, `SR…` (in elaborazione), `SR nativo`, `SR n/d` (nessuna GPU utilizzabile).
+  `SR ×2 CUNet`, `SR ×4 GAN`, `SR…` (in elaborazione), `SR n/d` (nessuna GPU utilizzabile o pagina troppo grande).
 
 ### "Qualità massima (lenta)" (sperimentale, spenta di default)
 
 Modelli pesanti tramite onnxruntime-web, con risultati salvati per sempre nell'archiviazione dell'app
-(`sr-cache/<volume>[.modello]/<pagina>.webp`) e precedenza su Anime4K; eliminando il volume si cancellano.
-Attivandola vengono scaricati una volta sola il motore (14–27 MB) e il modello, poi restano in cache.
+(`sr-cache/<volume>[.modello][.x4]/<pagina>.webp`) e precedenza su Anime4K; eliminando il volume si cancellano.
+Attivandola vengono scaricati una volta sola il motore (14–27 MB) e il modello, poi restano in cache. Anche qui il
+risultato è un fattore fisso della pagina, poi adattato allo schermo (se esistono sia il ×4 sia il ×2, si usa il ×4).
 
-- **waifu2x CUNet art/scale2x** (5 MB): il risultato più fedele (conserva i retini), secondi per pagina.
-- **Modello GAN pesante** — *Real-ESRGAN anime 6B* (18 MB, ×4 ridotto a ×2): aspetto "stampato", molto nitido, ma
-  tende a cancellare i retini fini; **decine di secondi per pagina** anche su GPU (≈ 90 s per una pagina 1000×1500 su
-  una Intel Arc integrata), minuti sulla CPU. È l'ultimo interruttore delle impostazioni e si può accendere **solo con
-  la Super risoluzione standard spenta**: i due sistemi sono alternativi (riaccendendo la standard, il GAN si spegne).
+- **waifu2x CUNet art/scale2x** (5 MB): il risultato più fedele (conserva i retini), secondi per pagina. ×2 nativo;
+  con Fattore ×4 fa due passaggi (circa 5 volte più lento).
+- **Modello GAN pesante** — *Real-ESRGAN anime 6B* (18 MB): **×4 nativo** (con Fattore ×2 viene ridotto), aspetto
+  "stampato", molto nitido, ma tende a cancellare i retini fini e a "ridisegnare" il lettering minuscolo; **decine di
+  secondi per pagina** anche su GPU, minuti sulla CPU. È l'ultimo interruttore delle impostazioni e si può accendere
+  **solo con la Super risoluzione standard spenta**: i due sistemi sono alternativi (riaccendendo la standard, il GAN
+  si spegne). Per scansioni di manga con retini CUNet dà in genere il risultato migliore.
 - Con WebGPU le pagine seguenti vengono pre-elaborate in background mentre leggi; con la sola CPU (WebAssembly,
   fino a 4 thread) si usa **Pre-elabora questo volume**, che elabora tutto il volume con barra di avanzamento, tempo
   stimato e Annulla (lo schermo resta acceso). Per il GAN conviene sempre la pre-elaborazione.

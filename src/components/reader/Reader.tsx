@@ -6,6 +6,7 @@ import { PageCache } from '../../lib/reader/pageCache'
 import { blankBefore, firstPage, isBlank, layoutSpreads, realPages, spreadIndexOf, spreadLabel } from '../../lib/spread'
 import { getBook, getPageSizes, getProgress, putBook, putPageSizes, putProgress } from '../../lib/storage/db'
 import { resolveBookBlob } from '../../lib/storage/importer'
+import type { HeavyFactor } from '../../lib/upscale/cunet/protocol'
 import { SrAborted, type SrOptions, type SrPlan, type SrResult } from '../../lib/upscale/srEngine'
 import { type Book, GUTTER_FRACTION, type PageSize, type ReaderSettings } from '../../types'
 import { MaxQualityControls } from './MaxQualityControls'
@@ -444,7 +445,17 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose 
   const heavyModel = ganActive ? 'esrgan6b' : 'cunet'
   const mq = useMaxQuality(status === 'ready' && (settings.maxQuality || ganActive), heavyModel)
   const heavyLabel = ganActive ? 'GAN' : 'CUNet'
+  /** Factor asked of the heavy model: the setting, or its native output (GAN x4, CUNet x2) on Auto. */
+  const heavyMaxFactor: HeavyFactor = settings.srScale === 'x4' ? 4 : settings.srScale === 'x2' ? 2 : ganActive ? 4 : 2
   const [cunetResults, setCunetResults] = useState<Map<number, SrResult>>(() => new Map())
+  /** A heavy result as shown: its factor is read off the bitmap (x4 results are preferred when cached). */
+  const heavyResult = useCallback(
+    (index: number, bitmap: ImageBitmap): SrResult => {
+      const size = sizes[index]
+      return { bitmap, level: heavyLabel, factor: size ? Math.max(1, Math.round(bitmap.width / size.w)) : 2, ms: 0 }
+    },
+    [sizes, heavyLabel],
+  )
   /** Raw page bytes straight from the archive (no decode), for the CUNet worker. */
   const pageBlob = useCallback(async (index: number): Promise<Blob> => {
     const opened = archiveRef.current
@@ -468,19 +479,19 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose 
     for (const index of wanted) {
       const hit = engine.peek(bookId, index)
       if (hit) {
-        setCunetResults((m) => (m.get(index)?.bitmap === hit ? m : new Map(m).set(index, { bitmap: hit, level: heavyLabel, factor: 2, ms: 0 })))
+        setCunetResults((m) => (m.get(index)?.bitmap === hit ? m : new Map(m).set(index, heavyResult(index, hit))))
         continue
       }
       void engine.lookup(bookId, index).then((bitmap) => {
         if (cancelled) return
         if (bitmap) {
-          setCunetResults((m) => new Map(m).set(index, { bitmap, level: heavyLabel, factor: 2, ms: 0 }))
+          setCunetResults((m) => new Map(m).set(index, heavyResult(index, bitmap)))
         } else if (engine.prefetchAllowed && !batchRunning) {
           // WebGPU: process the pages ahead while reading (the batch job covers them otherwise).
           engine
-            .enhance(bookId, index, () => pageBlob(index))
+            .enhance(bookId, index, () => pageBlob(index), heavyMaxFactor)
             .then((b) => {
-              if (!cancelled) setCunetResults((m) => new Map(m).set(index, { bitmap: b, level: heavyLabel, factor: 2, ms: 0 }))
+              if (!cancelled) setCunetResults((m) => new Map(m).set(index, heavyResult(index, b)))
             })
             .catch(() => undefined)
         }
@@ -499,12 +510,12 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose 
       cancelled = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mq.engine, mq.tick, mq.batch.running, status, book, spreadKey, spreads, spreadIndex, pageBlob])
+  }, [mq.engine, mq.tick, mq.batch.running, status, book, spreadKey, spreads, spreadIndex, pageBlob, heavyMaxFactor])
 
   // ---- super resolution (Anime4K) ------------------------------------------------------------
   const srOptions = useMemo<SrOptions>(
-    () => ({ level: settings.srLevel, scale: settings.srScale, restore: settings.srRestore, clean: settings.srClean, always: settings.srAlways }),
-    [settings.srLevel, settings.srScale, settings.srRestore, settings.srClean, settings.srAlways],
+    () => ({ level: settings.srLevel, scale: settings.srScale, restore: settings.srRestore, clean: settings.srClean }),
+    [settings.srLevel, settings.srScale, settings.srRestore, settings.srClean],
   )
   const sr = useSuperResolution(status === 'ready' && settings.superResolution, srOptions)
   const [enhanced, setEnhanced] = useState<Map<number, SrResult>>(() => new Map())
@@ -516,20 +527,17 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose 
       setEnhanced((m) => (m.size ? new Map() : m))
       return
     }
-    // Displayed device pixels for the pages on screen (their spread layout × zoom × DPR),
-    // and for the next spreads at zoom 1 so they are ready when the page turns.
-    const targets = new Map<number, { size: PageSize; devicePx: { w: number; h: number }; priority: number }>()
-    for (const box of layout.pages) {
-      const size = sizes[box.index]
-      if (size) targets.set(box.index, { size, devicePx: { w: box.w * view.zoom * dpr, h: box.h * view.zoom * dpr }, priority: 0 })
+    // The result is a fixed factor of the source, so only the pages matter (not how large they
+    // are shown): the current spread first, then the next spreads so they are ready on the turn.
+    const targets = new Map<number, { size: PageSize; priority: number }>()
+    for (const index of spreadPages) {
+      const size = sizes[index]
+      if (size) targets.set(index, { size, priority: 0 })
     }
     for (let k = 1; k <= PRELOAD_AHEAD; k++) {
-      const sp = spreads[spreadIndex + k]
-      if (!sp) continue
-      const l = layoutSpread(sp, sizes, viewport, settings.fit, dpr, settings.direction, gutter)
-      for (const box of l.pages) {
-        const size = sizes[box.index]
-        if (size && !targets.has(box.index)) targets.set(box.index, { size, devicePx: { w: box.w * dpr, h: box.h * dpr }, priority: k })
+      for (const index of realPages(spreads[spreadIndex + k] ?? [])) {
+        const size = sizes[index]
+        if (size && !targets.has(index)) targets.set(index, { size, priority: k })
       }
     }
     const wanted: number[] = []
@@ -537,7 +545,7 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose 
     const native = new Set<number>()
     for (const [index, t] of targets) {
       if (cunetResults.has(index)) continue // the heavy-tier result wins
-      const decision = engine.plan(t.size, t.devicePx)
+      const decision = engine.plan(t.size)
       if (typeof decision === 'string') native.add(index)
       else {
         wanted.push(index)
@@ -590,7 +598,7 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose 
       cancelled = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sr.engine, sr.tick, status, spreadKey, layout, view.zoom, dpr, sizes, spreads, spreadIndex, viewport, settings.fit, settings.direction, srOptions, cunetResults, gutter])
+  }, [sr.engine, sr.tick, status, spreadKey, spreadPages, sizes, spreads, spreadIndex, srOptions, cunetResults])
 
   /** What the view shows: CUNet results first, then Anime4K. */
   const displayed = useMemo(() => {
@@ -601,6 +609,22 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose 
   }, [enhanced, cunetResults])
   const heavyEnabled = settings.maxQuality || ganActive
   const showEnhanced = (settings.superResolution && !!sr.engine) || (heavyEnabled && cunetResults.size > 0)
+  /** "Originale" held down: the plain page is shown instead of the enhanced one, to compare. */
+  const [compare, setCompare] = useState(false)
+  useEffect(() => {
+    const down = (e: KeyboardEvent) => {
+      if (e.key === 'o' && !e.repeat && !settingsOpen) setCompare(true)
+    }
+    const up = (e: KeyboardEvent) => {
+      if (e.key === 'o') setCompare(false)
+    }
+    window.addEventListener('keydown', down)
+    window.addEventListener('keyup', up)
+    return () => {
+      window.removeEventListener('keydown', down)
+      window.removeEventListener('keyup', up)
+    }
+  }, [settingsOpen])
 
   // Snapshot of what is on screen, taken after every render: the source of the transition ghost.
   useEffect(() => {
@@ -621,7 +645,10 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose 
 
   const srBadge = (() => {
     const onScreen = spreadPages.filter((i) => pageStates.get(i)?.status === 'ready')
-    if (onScreen.length > 0 && onScreen.every((i) => cunetResults.has(i))) return `SR ×2 ${heavyLabel}`
+    if (onScreen.length > 0 && onScreen.every((i) => cunetResults.has(i))) {
+      const f = Math.min(...onScreen.map((i) => cunetResults.get(i)!.factor))
+      return `SR ×${f} ${heavyLabel}`
+    }
     if (!settings.superResolution || sr.status === 'off') return heavyEnabled ? 'SR…' : undefined
     if (sr.status === 'init') return 'SR…'
     if (sr.status === 'unavailable' || !sr.engine) return 'SR n/d'
@@ -632,7 +659,7 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose 
       const last = results[results.length - 1]!
       return `SR ×${last.factor} ${last.level}${settings.srRestore ? '+' : ''}`
     }
-    if (onScreen.every((i) => srNative.has(i))) return 'SR nativo'
+    if (onScreen.every((i) => srNative.has(i))) return 'SR n/d'
     return 'SR…'
   })()
 
@@ -650,9 +677,10 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose 
       case 'ready': {
         const i = mq.engine?.info
         if (!i) return 'Pronta.'
+        const factorNote = `Fattore ×${heavyMaxFactor}${heavyMaxFactor === 4 && !ganActive ? ' (due passaggi, circa 5 volte più lento)' : ''}.`
         return i.ep === 'webgpu'
-          ? `${modelName} · WebGPU: le pagine seguenti vengono elaborate in background mentre leggi.`
-          : `${modelName} · CPU (WebAssembly, ${i.threads} thread${i.crossOriginIsolated ? '' : ', isolamento cross-origin assente'}): troppo lenta durante la lettura, usa “Pre-elabora questo volume”.`
+          ? `${modelName} · WebGPU: le pagine seguenti vengono elaborate in background mentre leggi. ${factorNote}`
+          : `${modelName} · CPU (WebAssembly, ${i.threads} thread${i.crossOriginIsolated ? '' : ', isolamento cross-origin assente'}): troppo lenta durante la lettura, usa “Pre-elabora questo volume”. ${factorNote}`
       }
     }
   })()
@@ -663,15 +691,13 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose 
     if (sr.status === 'unavailable' || !sr.engine) return 'Non disponibile: WebGPU assente (su iPad serve iPadOS 26 o successivo). Le pagine usano il ridimensionamento del browser.'
     const first = spreadPages[0]
     const size = first !== undefined ? sizes[first] : undefined
-    const box = first !== undefined ? layout.pages.find((b) => b.index === first) : undefined
-    const devicePx = box ? { w: box.w * view.zoom * dpr, h: box.h * view.zoom * dpr } : undefined
-    const decision = size && devicePx ? sr.engine.plan(size, devicePx) : undefined
-    const est = size ? sr.engine.estimateMs(size, devicePx) : undefined
+    const decision = size ? sr.engine.plan(size) : undefined
+    const est = size ? sr.engine.estimateMs(size) : undefined
     const parts = [`${sr.engine.backend === 'webgpu' ? 'WebGPU' : 'WebGL2'} · ${sr.engine.adapterName}`]
     if (decision && typeof decision !== 'string') {
       parts.push(`livello ${settings.srLevel === 'auto' ? `auto → ${decision.level}` : decision.level}`)
-      parts.push(`×${decision.passes === 2 ? 4 : 2} → ${decision.target.w}×${decision.target.h} px`)
-    } else if (decision === 'native') parts.push('pagina già alla risoluzione dello schermo')
+      parts.push(`×${decision.passes === 2 ? 4 : 2} → ${decision.target.w}×${decision.target.h} px, adattata allo schermo`)
+    } else if (decision === 'too-big') parts.push('pagina troppo grande per la GPU, mostrata com’è')
     if (est !== undefined) parts.push(`≈ ${Math.round(est)} ms/pagina`)
     return parts.join(' · ')
   })()
@@ -718,7 +744,7 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose 
         layout={layout}
         view={view}
         pages={pageStates}
-        enhanced={showEnhanced ? displayed : undefined}
+        enhanced={showEnhanced && !compare ? displayed : undefined}
         gutterColor={settings.gutterColor}
         background={settings.stageBackground}
         spreadKey={spreadKey}
@@ -755,6 +781,9 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose 
         coverOffset={coverOffset}
         blankHere={spreadHasBlank}
         badge={srBadge}
+        compareAvailable={showEnhanced && spreadPages.some((i) => displayed.has(i))}
+        comparing={compare}
+        onCompare={setCompare}
         onBack={onClose}
         onSettings={() => setSettingsOpen((o) => !o)}
         onSeek={goToSpread}
@@ -786,7 +815,7 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose 
               onToggle={(v) => updateSettings({ maxQuality: v })}
               onStart={() => {
                 if (!book) return
-                mq.startBatch(book.id, Array.from({ length: pageCount }, (_, i) => i), pageBlob)
+                mq.startBatch(book.id, Array.from({ length: pageCount }, (_, i) => i), pageBlob, heavyMaxFactor)
               }}
               onCancel={mq.cancelBatch}
               gan={settings.ganModel}

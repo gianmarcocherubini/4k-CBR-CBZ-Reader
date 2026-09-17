@@ -1,6 +1,6 @@
 import type { PageSize, SrLevel, SrScale } from '../../types'
 import { Anime4KUpscaler } from './anime4k'
-import { type Anime4KLevel, LEVEL_COST, MAX_OUTPUT_PIXELS, RESTORE_COST, type Size, type UpscaleBackend } from './backend'
+import { type Anime4KLevel, cacheBudgetBytes, LEVEL_COST, MAX_OUTPUT_PIXELS, RESTORE_COST, type Size, type UpscaleBackend } from './backend'
 import { WebGL2Backend } from './webgl2Backend'
 
 export type SrBackendPreference = 'auto' | 'webgpu' | 'webgl2'
@@ -19,7 +19,6 @@ export interface SrOptions {
   scale: SrScale
   restore: boolean
   clean: boolean
-  always: boolean
 }
 
 /** What will be done for one page: the network passes and the output size. */
@@ -29,10 +28,12 @@ export interface SrPlan {
   passes: 1 | 2
   restore: boolean
   clean: boolean
+  /** Output size: the factor times the source, unless capped by texture/canvas limits. */
   target: Size
 }
 
-export type SrDecision = SrPlan | 'native' | 'too-big'
+/** 'too-big': the page does not fit the strip pipeline of this GPU even at 2x. */
+export type SrDecision = SrPlan | 'too-big'
 
 interface Task {
   key: string
@@ -46,9 +47,9 @@ interface Task {
 
 /** Budget per page for the automatic level (ms). */
 const AUTO_BUDGET_MS = 100
-const CACHE_CAPACITY = 4
-/** Displayed/native ratio under which a page is left alone (unless "always"). */
-const NATIVE_TOLERANCE = 1.1
+
+/** Bytes of an RGBA bitmap. */
+const bytesOf = (b: { width: number; height: number }) => b.width * b.height * 4
 
 export class SrAborted extends Error {
   constructor() {
@@ -65,14 +66,20 @@ export function planUnits(level: Anime4KLevel, restore: boolean, passes: 1 | 2):
 /**
  * Serialises Anime4K work on the GPU with a priority queue (current spread first), keeps an LRU
  * of enhanced bitmaps and picks the automatic level from measured throughput.
+ *
+ * The output is always a fixed factor of the source (x2 or x4), never the size of the screen:
+ * the view fits the result into its box afterwards. One result per page therefore serves every
+ * zoom level, orientation and layout, and downsampling a x4 result is what gives clean lines.
  */
 export class SrEngine {
   readonly upscaler: UpscaleBackend
   private readonly cache = new Map<string, SrResult>()
+  private cacheBytes = 0
+  private readonly budget = cacheBudgetBytes()
   private queue: Task[] = []
   private running = false
   private wanted = new Set<number>()
-  private options: SrOptions = { level: 'auto', scale: 'auto', restore: false, clean: false, always: false }
+  private options: SrOptions = { level: 'auto', scale: 'auto', restore: false, clean: false }
   /** EMA of ms per (megapixel × plan unit). */
   private msPerUnit: number | undefined
   private disposed = false
@@ -109,7 +116,7 @@ export class SrEngine {
 
   setOptions(next: SrOptions): void {
     const o = this.options
-    if (o.level === next.level && o.scale === next.scale && o.restore === next.restore && o.clean === next.clean && o.always === next.always) return
+    if (o.level === next.level && o.scale === next.scale && o.restore === next.restore && o.clean === next.clean) return
     this.options = { ...next }
     this.onChange?.()
   }
@@ -137,38 +144,44 @@ export class SrEngine {
   }
 
   /** Measured cost estimate for the UI, ms per page (undefined before the probe). */
-  estimateMs(size: PageSize, displayedDevicePx?: Size): number | undefined {
+  estimateMs(size: PageSize): number | undefined {
     if (this.msPerUnit === undefined) return undefined
-    const plan = displayedDevicePx ? this.plan(size, displayedDevicePx) : null
-    const passes = plan && typeof plan !== 'string' ? plan.passes : 1
-    const level = plan && typeof plan !== 'string' ? plan.level : this.resolveLevel(size)
+    const plan = this.plan(size)
+    const passes = typeof plan !== 'string' ? plan.passes : 1
+    const level = typeof plan !== 'string' ? plan.level : this.resolveLevel(size)
     return this.msPerUnit * planUnits(level, this.options.restore, passes) * ((size.w * size.h) / 1e6)
   }
 
+  /** Whether a x4 result of this page fits the canvas limit, the GPU textures and the memory budget. */
+  private x4Fits(size: PageSize): boolean {
+    const px = size.w * size.h * 16
+    return px <= MAX_OUTPUT_PIXELS && size.w * 4 <= this.upscaler.info.maxTextureDimension && px * 4 <= this.budget / 3
+  }
+
   /**
-   * Decides what to do for a page displayed at `displayedDevicePx`: nothing when it is already at
-   * native resolution (unless "always"), otherwise a plan whose output is exactly the displayed
-   * size (quantised in 1/16 steps so small zoom changes reuse the cache), capped at x2 or x4.
+   * Decides the work for a page: x2 or x4 of the source, independent of how large it is shown.
+   * Auto takes x4 whenever it fits (canvas cap, textures, memory): the second pass runs at level M
+   * and costs about as much as one VL pass, and the automatic level keeps the total within the
+   * time budget. x4 is what makes lines clean once fitted to the screen.
    */
-  plan(size: PageSize, displayedDevicePx: Size): SrDecision {
+  plan(size: PageSize): SrDecision {
     if (!this.upscaler.canUpscale(size)) return 'too-big'
-    const needed = Math.max(displayedDevicePx.w / size.w, displayedDevicePx.h / size.h)
-    if (!this.options.always && needed <= NATIVE_TOLERANCE) return 'native'
     const maxTex = this.upscaler.info.maxTextureDimension
-    let passes: 1 | 2 = this.options.scale === 'x4' || (this.options.scale === 'auto' && needed > 2) ? 2 : 1
-    // The second pass runs the strip pipeline on the 2x image: its width must fit too.
-    if (passes === 2 && size.w * 4 > maxTex) passes = 1
-    const maxFactor = passes === 2 ? 4 : 2
-    let f = Math.min(Math.ceil(Math.max(needed, 0.5) * 16) / 16, maxFactor)
-    // Fixed factors render at that factor even when the display needs less (sharper downsampling).
-    if (this.options.scale === 'x2') f = 2
-    if (this.options.scale === 'x4' && passes === 2) f = 4
-    // Keep the output within canvas/texture limits.
-    const area = size.w * size.h * f * f
-    if (area > MAX_OUTPUT_PIXELS) f = Math.sqrt(MAX_OUTPUT_PIXELS / (size.w * size.h))
-    if (size.w * f > maxTex || size.h * f > maxTex) f = Math.min(maxTex / size.w, maxTex / size.h)
+    const { scale, restore, clean } = this.options
+    let passes: 1 | 2 = 1
+    if (scale === 'x4') passes = size.w * 4 <= maxTex ? 2 : 1
+    else if (scale === 'auto' && this.x4Fits(size)) passes = 2
+    let f = passes === 2 ? 4 : 2
+    // Keep the output within canvas/texture limits: a x4 that does not fit becomes an exact x2
+    // (integer factors are rendered as texel copies, without resampling blur); only pages too
+    // large even for x2 get a fractional factor.
+    const cap = Math.min(Math.sqrt(MAX_OUTPUT_PIXELS / (size.w * size.h)), maxTex / size.w, maxTex / size.h)
+    if (f > cap) {
+      passes = 1
+      f = Math.min(2, cap)
+    }
     const target = { w: Math.max(1, Math.round(size.w * f)), h: Math.max(1, Math.round(size.h * f)) }
-    return { level: this.resolveLevel(size, passes), passes, restore: this.options.restore, clean: this.options.clean, target }
+    return { level: this.resolveLevel(size, passes), passes, restore, clean, target }
   }
 
   private key(index: number, plan: SrPlan): string {
@@ -236,13 +249,8 @@ export class SrEngine {
         try {
           const result = await this.run(task)
           this.cache.set(task.key, result)
-          while (this.cache.size > CACHE_CAPACITY) {
-            const oldest = this.cache.keys().next().value
-            if (oldest === undefined) break
-            if (this.wanted.has(Number(oldest.split(':')[0])) && this.cache.size <= CACHE_CAPACITY + 2) break
-            this.cache.get(oldest)?.bitmap.close()
-            this.cache.delete(oldest)
-          }
+          this.cacheBytes += bytesOf(result.bitmap)
+          this.evict()
           task.resolve(result)
           this.onChange?.()
         } catch (e) {
@@ -252,6 +260,22 @@ export class SrEngine {
     } finally {
       this.running = false
     }
+  }
+
+  /** LRU eviction by bytes; pages still wanted are spared unless the cache is far over budget. */
+  private evict(): void {
+    for (const [key, r] of this.cache) {
+      if (this.cacheBytes <= this.budget) break
+      if (this.wanted.has(Number(key.split(':')[0])) && this.cacheBytes <= this.budget * 1.5) continue
+      this.cache.delete(key)
+      this.cacheBytes -= bytesOf(r.bitmap)
+      r.bitmap.close()
+    }
+  }
+
+  /** Bytes currently held by enhanced bitmaps (for the settings status line). */
+  get cacheSizeBytes(): number {
+    return this.cacheBytes
   }
 
   private async run(task: Task): Promise<SrResult> {
@@ -297,6 +321,7 @@ export class SrEngine {
     this.queue = []
     for (const r of this.cache.values()) r.bitmap.close()
     this.cache.clear()
+    this.cacheBytes = 0
     this.upscaler.dispose()
   }
 }

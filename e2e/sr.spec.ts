@@ -22,12 +22,12 @@ async function importAndOpen(page: Page, name: string, title: string) {
 
 const badge = (page: Page) => page.getByTestId('sr-badge')
 
-/** Width the engine renders for page n: displayed device px / source, quantised in 1/16 steps, capped at 2x. */
-async function expectedWidth(page: Page, n: number, srcW: number, srcH: number): Promise<number> {
-  const box = (await page.locator(`[data-testid=page][data-page="${n}"]`).boundingBox())!
-  const needed = Math.max((box.width * 2) / srcW, (box.height * 2) / srcH)
-  const f = Math.min(Math.ceil(needed * 16) / 16, 2)
-  return Math.round(srcW * f)
+/**
+ * Width the engine renders on "Auto": a fixed factor of the source, independent of the display.
+ * x4 when the result stays within the 16 MP canvas cap (800x1200 -> 3200), else x2 (1000x1500 -> 2000).
+ */
+function autoWidth(srcW: number, srcH: number): number {
+  return srcW * srcH * 16 <= 16 * 1024 * 1024 ? srcW * 4 : srcW * 2
 }
 
 test('Anime4K super resolution: enhanced canvas, badge, level probe, faithful output (or clean fallback)', async ({ page }) => {
@@ -47,9 +47,12 @@ test('Anime4K super resolution: enhanced canvas, badge, level probe, faithful ou
 
   // First page: pipeline build + VL probe, then the enhanced canvas replaces the <img>.
   const enhanced = page.locator('[data-testid=page][data-page="1"] canvas[data-testid=enhanced]')
-  await expect(enhanced).toBeVisible({ timeout: 45_000 })
-  // Rendered exactly at the displayed device pixels (quantised in 1/16 steps), not at a fixed 2x.
-  await expect(enhanced).toHaveAttribute('data-sr-width', String(await expectedWidth(page, 1, 800, 1200)))
+  await expect(enhanced).toBeVisible({ timeout: 90_000 })
+  // Rendered at a fixed factor of the source (x4 for an 800x1200 page), then fitted to the box:
+  // the canvas holds exactly the displayed device pixels, never more than the result itself.
+  await expect(enhanced).toHaveAttribute('data-sr-width', String(autoWidth(800, 1200)))
+  const box = (await enhanced.boundingBox())!
+  await expect.poll(() => enhanced.evaluate((c: HTMLCanvasElement) => c.width)).toBe(Math.round(box.width * 2))
   // The auto level starts at VL and may re-enhance at a stronger level once the probe is in:
   // badge and page attribute must agree once the queue is idle.
   await page.mouse.move(600, 420)
@@ -58,12 +61,24 @@ test('Anime4K super resolution: enhanced canvas, badge, level probe, faithful ou
       async () => {
         const l = await page.locator('[data-testid=page][data-page="1"]').getAttribute('data-sr')
         const b = await badge(page).textContent()
-        return l && ['M', 'VL', 'UL'].includes(l) && b === `SR ×2 ${l}` ? l : null
+        return l && ['M', 'VL', 'UL'].includes(l) && b === `SR ×4 ${l}` ? l : null
       },
-      { timeout: 45_000 },
+      { timeout: 90_000 },
     )
     .not.toBeNull()
   const level = await page.locator('[data-testid=page][data-page="1"]').getAttribute('data-sr')
+
+  // "Confronta" (hold): the plain page is shown while pressed, the enhanced one comes back on release.
+  const compare = page.getByTestId('compare')
+  await expect(compare).toBeVisible()
+  const cb = (await compare.boundingBox())!
+  await page.mouse.move(cb.x + cb.width / 2, cb.y + cb.height / 2)
+  await page.mouse.down()
+  await expect(page.locator('[data-testid=page][data-page="1"] img')).toBeVisible()
+  await expect(compare).toHaveText('Originale')
+  await page.mouse.up()
+  await expect(enhanced).toBeVisible()
+  await expect(compare).toHaveText('Confronta')
 
   await page.mouse.move(700, 450) // toolbars auto-hide after 2.5 s; a mouse move reveals them
   await page.getByTestId('settings').click()
@@ -131,7 +146,7 @@ test('Anime4K super resolution: enhanced canvas, badge, level probe, faithful ou
   await expect(page.getByTestId('toolbar-top')).toHaveClass(/opacity-0/, { timeout: 6_000 })
   await expect(mini).toBeVisible()
   await expect(mini).toHaveAttribute('data-state', 'applied', { timeout: 45_000 })
-  await expect(mini).toHaveText(/×2 M/)
+  await expect(mini).toHaveText(/×4 M/)
   // Hidden while the toolbars (with the full badge) are visible, and when switched off.
   await page.mouse.move(640, 450)
   await expect(mini).toHaveCount(0)
@@ -143,18 +158,23 @@ test('Anime4K super resolution: enhanced canvas, badge, level probe, faithful ou
   await expect(mini).toHaveCount(0)
 })
 
-test('pages already at display resolution are left native', async ({ page }) => {
+test('SR first, fit after: a page already at screen size is enhanced x2, and zooming reuses the result', async ({ page }) => {
   await page.goto('/')
   const hasWebGPU = await page.evaluate(async () => !!(navigator as Navigator & { gpu?: GPU }).gpu && !!(await (navigator as Navigator & { gpu?: GPU }).gpu!.requestAdapter()))
   test.skip(!hasWebGPU, 'needs WebGPU')
-  // 1000x1500 pages at 1640 device px tall are within 10% of native: no upscale, badge says so.
+  // 1000x1500 pages at 1640 device px tall: x4 would exceed the 16 MP cap, so the engine runs x2.
   await importAndOpen(page, 'short-book.cbz', 'short-book')
+  const enhanced = page.locator('[data-testid=page][data-page="1"] canvas[data-testid=enhanced]')
+  await expect(enhanced).toBeVisible({ timeout: 60_000 })
+  await expect(enhanced).toHaveAttribute('data-sr-width', String(autoWidth(1000, 1500)))
   await page.mouse.move(590, 410)
-  await expect(badge(page)).toHaveText('SR nativo', { timeout: 20_000 })
-  await expect(page.locator('[data-testid=page][data-page="1"] img')).toBeVisible()
-  // Zooming in makes the displayed size exceed the source: now it gets enhanced.
+  await expect(badge(page)).toHaveText(/^SR ×2 (M|VL|UL)$/, { timeout: 60_000 })
+  const before = await enhanced.evaluate((c: HTMLCanvasElement) => c.width)
+  // Zooming in does not recompute anything: same result, refitted at the larger displayed size.
   await page.mouse.dblclick(590, 410)
-  await expect(page.locator('[data-testid=page][data-page="1"] canvas[data-testid=enhanced]')).toBeVisible({ timeout: 45_000 })
+  await expect.poll(() => enhanced.evaluate((c: HTMLCanvasElement) => c.width), { timeout: 5_000 }).toBeGreaterThan(before)
+  await expect(enhanced).toHaveAttribute('data-sr-width', String(autoWidth(1000, 1500)))
+  await expect(badge(page)).toHaveText(/^SR ×2 (M|VL|UL)$/)
 })
 
 test('WebGL2 fallback runs the same shaders and matches the WebGPU output', async ({ page }) => {
@@ -163,12 +183,14 @@ test('WebGL2 fallback runs the same shaders and matches the WebGPU output', asyn
   await page.mouse.move(590, 410)
   await page.getByTestId('settings').click()
   await expect(page.getByTestId('sr-status')).toContainText('WebGL2', { timeout: 30_000 })
-  await page.getByTestId('sr-M').click() // deterministic level for the comparison
+  await page.getByTestId('sr-M').click() // deterministic level and factor for the comparison
+  await page.getByTestId('scale-x2').click()
   await page.getByRole('button', { name: 'Chiudi impostazioni' }).click()
   const enhanced = page.locator('[data-testid=page][data-page="1"] canvas[data-testid=enhanced]')
   await expect(enhanced).toBeVisible({ timeout: 45_000 })
   await expect(page.locator('[data-testid=page][data-page="1"]')).toHaveAttribute('data-sr', 'M', { timeout: 45_000 })
-  await expect(enhanced).toHaveAttribute('data-sr-width', String(await expectedWidth(page, 1, 800, 1200)))
+  await expect(enhanced).toHaveAttribute('data-sr-width', '1600')
+  await page.waitForTimeout(500) // let the high-quality fit replace the quick preview
   const webgl2Png = await page.evaluate(() => {
     const c = document.querySelector('[data-testid=page][data-page="1"] canvas') as HTMLCanvasElement
     const copy = document.createElement('canvas')
@@ -193,6 +215,8 @@ test('WebGL2 fallback runs the same shaders and matches the WebGPU output', asyn
   await page.getByRole('button', { name: 'Apri manga-vol-01' }).click()
   await expect(page.getByTestId('reader')).toHaveAttribute('data-status', 'ready', { timeout: 20_000 })
   await expect(page.locator('[data-testid=page][data-page="1"]')).toHaveAttribute('data-sr', 'M', { timeout: 45_000 })
+  await expect(page.locator('[data-testid=page][data-page="1"] canvas[data-testid=enhanced]')).toHaveAttribute('data-sr-width', '1600')
+  await page.waitForTimeout(500)
   const psnr = await page.evaluate(async (dataUrl: string) => {
     const img = new Image()
     img.src = dataUrl
@@ -311,32 +335,34 @@ test('Qualità massima on the CPU (WebAssembly threads): batch job only', async 
   await expect(page.locator('[data-testid=page][data-page="1"]')).toHaveAttribute('data-sr', 'CUNet', { timeout: 30_000 })
 })
 
-test('factor x4, "Linee nitide", "Pulizia scansione" and "Sempre attiva"', async ({ page }) => {
+test('factor x4 / x2 / auto, "Linee nitide", "Pulizia scansione"', async ({ page }) => {
   await page.goto('/')
   const hasWebGPU = await page.evaluate(async () => !!(navigator as Navigator & { gpu?: GPU }).gpu && !!(await (navigator as Navigator & { gpu?: GPU }).gpu!.requestAdapter()))
   test.skip(!hasWebGPU, 'needs WebGPU')
   await importAndOpen(page, 'manga-vol-01.cbz', 'manga-vol-01')
   const p1 = page.locator('[data-testid=page][data-page="1"]')
   const enhanced = p1.locator('canvas[data-testid=enhanced]')
-  await expect(enhanced).toBeVisible({ timeout: 45_000 })
-  const baseWidth = Number(await enhanced.getAttribute('data-sr-width'))
+  await expect(enhanced).toBeVisible({ timeout: 90_000 })
+  // Auto picks x4 for this page (fits the 16 MP cap and the memory budget).
+  await expect(enhanced).toHaveAttribute('data-sr-width', '3200', { timeout: 90_000 })
 
-  // x4: two network passes, output 4x the source (3200 px for an 800 px page).
+  // x4 explicit: two network passes, output 4x the source (3200 px for an 800 px page).
   await page.mouse.move(600, 420)
   await page.getByTestId('settings').click()
   await page.getByTestId('scale-x4').click()
   await expect(enhanced).toHaveAttribute('data-sr-width', '3200', { timeout: 90_000 })
   await expect(badge(page)).toHaveText(/^SR ×4 (M|VL|UL)$/)
   await expect(page.getByTestId('sr-status')).toContainText('×4 → 3200×4800 px')
-  // x2 fixed: exactly twice the source even though the display needs less.
+  // x2 fixed: exactly twice the source.
   await page.getByTestId('scale-x2').click()
   await expect(enhanced).toHaveAttribute('data-sr-width', '1600', { timeout: 60_000 })
+  await expect(badge(page)).toHaveText(/^SR ×2 (M|VL|UL)$/)
   await page.getByTestId('scale-auto').click()
-  await expect(enhanced).toHaveAttribute('data-sr-width', String(baseWidth), { timeout: 60_000 })
+  await expect(enhanced).toHaveAttribute('data-sr-width', '3200', { timeout: 60_000 })
 
   // Restore pass ("Linee nitide"): re-enhanced, badge marks it with "+", output still faithful.
   await page.getByRole('switch', { name: 'Linee nitide' }).click()
-  await expect(badge(page)).toHaveText(/^SR ×2 (M|VL|UL)\+$/, { timeout: 60_000 })
+  await expect(badge(page)).toHaveText(/^SR ×4 (M|VL|UL)\+$/, { timeout: 90_000 })
   await expect(enhanced).toBeVisible()
   // Scan clean-up: paper goes to pure white on the (already white) page background.
   await page.getByRole('switch', { name: 'Pulizia scansione' }).click()
@@ -350,8 +376,8 @@ test('factor x4, "Linee nitide", "Pulizia scansione" and "Sempre attiva"', async
           t.width = 8
           t.height = 8
           const ctx = t.getContext('2d')!
-          // A patch inside the first empty panel (the fixture pages are light paper there).
-          ctx.drawImage(c, Math.round(c.width * 0.12), Math.round(c.height * 0.09), 8, 8, 0, 0, 8, 8)
+          // A patch inside the first empty (untoned) panel of page 1: top-right, plain paper.
+          ctx.drawImage(c, Math.round(c.width * 0.7), Math.round(c.height * 0.19), 8, 8, 0, 0, 8, 8)
           const d = ctx.getImageData(0, 0, 8, 8).data
           let min = 255
           for (let i = 0; i < d.length; i += 4) min = Math.min(min, d[i]!, d[i + 1]!, d[i + 2]!)
@@ -362,20 +388,7 @@ test('factor x4, "Linee nitide", "Pulizia scansione" and "Sempre attiva"', async
     .toBeGreaterThanOrEqual(250)
   await page.getByRole('switch', { name: 'Linee nitide' }).click()
   await page.getByRole('switch', { name: 'Pulizia scansione' }).click()
-
-  // "Sempre attiva": a page already at native size (short-book, 1000x1500) gets processed too.
-  await page.getByRole('switch', { name: 'Sempre attiva' }).click()
-  await page.getByRole('button', { name: 'Chiudi impostazioni' }).click()
-  await page.getByTestId('back').click()
-  await page.setInputFiles('[data-testid=import-input]', fx('short-book.cbz'))
-  await expect(page.getByTestId('import-overlay').getByText('Importazione completata')).toBeVisible({ timeout: 30_000 })
-  await page.getByTestId('import-overlay').getByTestId('import-close').click()
-  await page.getByRole('button', { name: 'Apri short-book' }).click()
-  await expect(page.getByTestId('reader')).toHaveAttribute('data-status', 'ready', { timeout: 20_000 })
-  const sb = page.locator('[data-testid=page][data-page="1"] canvas[data-testid=enhanced]')
-  await expect(sb).toBeVisible({ timeout: 45_000 })
-  // Native-size page: the output is the displayed size (≈ source), not 2x.
-  expect(Number(await sb.getAttribute('data-sr-width'))).toBeLessThan(1500)
+  await expect(badge(page)).toHaveText(/^SR ×4 (M|VL|UL)$/, { timeout: 90_000 })
 })
 
 test('heavy GAN model: gated by the standard SR switch, batch job, cached results', async ({ page }) => {
@@ -410,9 +423,10 @@ test('heavy GAN model: gated by the standard SR switch, batch job, cached result
   await page.getByRole('button', { name: 'Chiudi impostazioni' }).click()
   const p1 = page.locator('[data-testid=page][data-page="1"]')
   await expect(p1).toHaveAttribute('data-sr', 'GAN', { timeout: 30_000 })
-  await expect(p1.locator('canvas[data-testid=enhanced]')).toHaveAttribute('data-sr-width', '600') // stored at 2x
+  // Real-ESRGAN's native x4 output is kept (300 px pages -> 1200), then fitted to the box.
+  await expect(p1.locator('canvas[data-testid=enhanced]')).toHaveAttribute('data-sr-width', '1200')
   await page.mouse.move(600, 420)
-  await expect(badge(page)).toHaveText('SR ×2 GAN')
+  await expect(badge(page)).toHaveText('SR ×4 GAN')
   const stats = await page.evaluate(() => {
     const canvas = document.querySelector('[data-testid=page][data-page="1"] canvas') as HTMLCanvasElement
     const c = document.createElement('canvas')
