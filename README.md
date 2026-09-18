@@ -1,7 +1,8 @@
 # 4K CBR/CBZ Reader
 
 Lettore di fumetti e manga per iPad, come **web app installabile (PWA)** con un'interfaccia nello stile di Apple
-Libri: tutto gira nel browser, nessun server. Importa file **CBZ** (ZIP) e **CBR** (RAR) fino a 10 GB ciascuno, li
+Libri: tutto gira nel browser, nessun server. Importa file **CBZ/ZIP** (anche protetti da password) e **CBR** (RAR)
+fino a 10 GB ciascuno, li
 tiene nell'archiviazione dell'app anche offline e li mostra a piena risoluzione con lettura da destra a sinistra,
 doppia pagina intelligente e super risoluzione AI sulla GPU.
 
@@ -133,18 +134,36 @@ repository (export ONNX a dimensioni dinamiche del `.pth` ufficiale, licenza BSD
 | Formato | Supporto |
 | --- | --- |
 | CBZ / ZIP, anche ZIP64 | Sì. Lettura voce per voce dal file, senza caricarlo in memoria. |
+| ZIP con password | Sì: AES e ZipCrypto, una password per archivio. L'app la chiede e ripropone il campo se è errata. |
 | CBR / RAR 4 e RAR 5 | Sì, tramite unrar (WebAssembly) in un worker con letture a finestra sul file. |
 | RAR "solido" o multi-volume | No: messaggio esplicito. Ricomprimere senza l'opzione solido. |
-| Archivi cifrati | No. |
+| RAR cifrati / directory centrale ZIP cifrata | No: messaggio esplicito. |
 | 7z, PDF | No. |
 | Immagini | JPEG, PNG, GIF, WebP, BMP, AVIF, HEIC (quelle che il browser sa decodificare). |
 
 Le pagine sono ordinate in modo naturale (`2.jpg` prima di `10.jpg`), ignorando `__MACOSX`, file nascosti e
 `ComicInfo.xml`.
 
-**Spazio**: l'import copia il file nell'Origin Private File System (OPFS) a blocchi di 8 MB da un worker; se OPFS
-manca il file finisce in IndexedDB. Prima di copiare viene controllato lo spazio disponibile. Un file da 4,5 GB si
-importa con la memoria del renderer che resta a poche decine di MB.
+**Password e riservatezza**: la password resta soltanto nella memoria della pagina e viene dimenticata al reload o
+alla chiusura dell'app; non finisce in IndexedDB, OPFS, log o copertina. Per questo gli ZIP protetti non hanno
+miniatura persistente e le pagine di Qualità massima restano solo in RAM (la pre-elaborazione permanente è
+disabilitata). Alla riapertura l'app chiede nuovamente la password.
+
+**Spazio e file multi-GB**: l'import copia il file nell'Origin Private File System (OPFS) da un worker con letture
+`Blob.slice()` seriali da 4 MB e `flush()` ogni 64 MB. Non usa `File.stream()`, che su WebKit può ignorare la
+backpressure e accumulare centinaia di MB fino a far chiudere la PWA. Prima di copiare chiede lo storage persistente
+e controlla quota + 256 MB di margine per i file da almeno 1 GB. Se OPFS manca, IndexedDB è usato solo fino a 256 MB:
+oltre viene mostrato un errore invece di rischiare il crash. Le copie parziali vengono eliminate su errore; un Web
+Lock (lease con heartbeat sui browser più vecchi) coordina le tab e la pulizia periodica rimuove gli orfani lasciati
+da un crash. Verifiche: copia OPFS reale da 1 GiB in
+7,0 s; simulazione completa degli offset di 8 GiB con al massimo 4 MB in memoria.
+
+Il parser ZIP usa un `BlobReader` limitato che impedisce a qualunque EOCD/ZIP64 scelto da zip.js di richiedere una
+singola allocazione oltre 64 MB, parsing bilanciato, massimo 50.000 voci / 20.000 pagine e 64 MB per pagina. Password
+e integrità sono verificate sull'intera prima pagina cifrata (CRC per ZipCrypto, codice di autenticazione per AES),
+non soltanto sull'header. Prima della decodifica vengono controllate le dimensioni JPEG/PNG/GIF/WebP/BMP/AVIF/HEIF
+(massimo 32 MP); i formati di cui non si possono verificare le dimensioni vengono rifiutati. La cache pagine usa al
+massimo due decodifiche contemporanee e un budget di 256 MB, proteggendo solo lo spread visibile.
 
 ## Installazione su iPad
 

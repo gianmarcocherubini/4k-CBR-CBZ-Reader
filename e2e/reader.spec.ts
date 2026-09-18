@@ -50,16 +50,14 @@ test.describe('library', () => {
       'manga-vol-01.cbz',
       'short-book.cbz',
       'zip64-book.cbz',
-      'protected.cbz',
       'no-images.cbz',
       'corrupt.cbz',
       'archive.7z',
     ])
     expect(statuses.slice(0, 3)).toEqual(['Importato', 'Importato', 'Importato'])
-    expect(statuses[3]).toContain('protetto da password')
-    expect(statuses[4]).toContain('non contiene immagini')
-    expect(statuses[5]).toContain('danneggiato')
-    expect(statuses[6]).toContain('non è un archivio CBZ')
+    expect(statuses[3]).toContain('non contiene immagini')
+    expect(statuses[4]).toContain('danneggiato')
+    expect(statuses[5]).toContain('non è un archivio CBZ')
 
     await expect(page.getByTestId('book-card')).toHaveCount(3)
     await expect(page.locator('[data-testid=book-card] img')).toHaveCount(3)
@@ -70,6 +68,55 @@ test.describe('library', () => {
     const again = await importBooks(page, ['short-book.cbz'])
     expect(again[0]).toContain('già nella libreria')
     await expect(page.getByTestId('book-card')).toHaveCount(3)
+  })
+
+  test('imports a password-protected ZIP, retries a wrong password and keeps it in memory only', async ({ page }) => {
+    await page.goto('/')
+    await page.setInputFiles('[data-testid=import-input]', fx('protected.zip'))
+    const password = page.getByTestId('password-dialog')
+    await expect(password).toBeVisible()
+    await password.getByLabel('Password dell’archivio').fill('sbagliata')
+    await password.getByRole('button', { name: 'Sblocca' }).click()
+    await expect(password.getByRole('heading')).toHaveText('Password non corretta')
+    await password.getByLabel('Password dell’archivio').fill('segreto')
+    await password.getByRole('button', { name: 'Sblocca' }).click()
+
+    const overlay = page.getByTestId('import-overlay')
+    await expect(overlay.getByText('Importazione completata')).toBeVisible({ timeout: 30_000 })
+    await expect(overlay.getByTestId('import-status')).toHaveText('Importato')
+    await overlay.getByTestId('import-close').click()
+    const stored = await page.evaluate(
+      () =>
+        new Promise<{ passwordProtected: boolean; hasPassword: boolean; hasCover: boolean }>((resolve, reject) => {
+          const request = indexedDB.open('cbz-reader')
+          request.onerror = () => reject(request.error)
+          request.onsuccess = () => {
+            const get = request.result.transaction('books').objectStore('books').getAll()
+            get.onerror = () => reject(get.error)
+            get.onsuccess = () => {
+              const book = get.result[0] as Record<string, unknown>
+              resolve({
+                passwordProtected: book.passwordProtected === true,
+                hasPassword: Object.hasOwn(book, 'archivePassword'),
+                hasCover: book.cover instanceof Blob,
+              })
+            }
+          }
+        }),
+    )
+    expect(stored).toEqual({ passwordProtected: true, hasPassword: false, hasCover: false })
+    await openBook(page, 'protected')
+    await expect(page.locator('[data-testid=page][data-page="1"] img')).toBeVisible()
+
+    // A reload deliberately forgets the password; the encrypted file remains, decrypted data does not.
+    await page.getByTestId('back').click()
+    await page.reload()
+    await page.getByRole('button', { name: 'Apri protected' }).click()
+    await expect(page.getByTestId('password-dialog')).toBeVisible()
+    await page.getByLabel('Password dell’archivio').fill('segreto')
+    await page.getByRole('button', { name: 'Sblocca' }).click()
+    await expect(page.getByTestId('reader')).toHaveAttribute('data-status', 'ready', { timeout: 20_000 })
+    await expect(page.locator('[data-testid=page][data-page="1"] img')).toBeVisible()
   })
 
   test('deletes a book together with its data', async ({ page }) => {
@@ -91,6 +138,47 @@ test.describe('library', () => {
     await page.keyboard.press('End')
     await expect(label(page)).toHaveText('4')
     await expect(page.locator('[data-testid=page][data-page="4"] img')).toBeVisible()
+  })
+
+  test('orphan cleanup never deletes a file protected by an import lock in another tab', async ({ page }) => {
+    await page.goto('/')
+    await page.evaluate(async () => {
+      let release!: () => void
+      const hold = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      ;(window as unknown as { __releaseImportLock: () => void }).__releaseImportLock = release
+      void navigator.locks.request('reader:opfs-import:locked-import', async () => {
+        const root = await navigator.storage.getDirectory()
+        const books = await root.getDirectoryHandle('books', { create: true })
+        await books.getFileHandle('locked-import', { create: true })
+        ;(window as unknown as { __importLockHeld: boolean }).__importLockHeld = true
+        await hold
+      })
+    })
+    await expect.poll(() => page.evaluate(() => (window as unknown as { __importLockHeld?: boolean }).__importLockHeld)).toBe(true)
+
+    const other = await page.context().newPage()
+    await other.goto('/')
+    await expect(other.getByTestId('empty-library')).toBeVisible()
+    const exists = () =>
+      other.evaluate(async () => {
+        try {
+          const root = await navigator.storage.getDirectory()
+          const books = await root.getDirectoryHandle('books')
+          await books.getFileHandle('locked-import')
+          return true
+        } catch {
+          return false
+        }
+      })
+    await expect.poll(exists).toBe(true)
+
+    await page.evaluate(() => (window as unknown as { __releaseImportLock: () => void }).__releaseImportLock())
+    await other.reload()
+    await expect(other.getByTestId('empty-library')).toBeVisible()
+    await expect.poll(exists).toBe(false)
+    await other.close()
   })
 
   test('"Apri senza importare" reads the file directly and leaves the library untouched', async ({ page }) => {

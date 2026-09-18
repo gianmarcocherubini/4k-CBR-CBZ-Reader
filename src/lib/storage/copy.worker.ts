@@ -1,14 +1,16 @@
 /// <reference lib="webworker" />
 import type { CopyRequest, CopyResponse } from './copyProtocol'
+import { readBlobSlices } from './blobSlices'
 
 /**
- * Copies a picked File into OPFS with a sync access handle, streaming through one reusable
- * 8 MB buffer (BYOB reader when available) so a 10 GB import never inflates the heap.
+ * Copies a picked File into OPFS with a sync access handle. Explicit serial Blob slices avoid
+ * WebKit's Blob.stream() backpressure bug, which can retain hundreds of MB and kill an iPad PWA.
  */
 
-const CHUNK = 8 * 1024 * 1024
 const PROGRESS_EVERY_BYTES = 16 * 1024 * 1024
 const PROGRESS_EVERY_MS = 120
+/** Bound dirty OPFS/OS pages as well as JS heap growth during multi-GB copies. */
+const FLUSH_EVERY_BYTES = 64 * 1024 * 1024
 
 let aborted = false
 
@@ -46,6 +48,7 @@ async function copy(bookId: string, file: File, dirName: string): Promise<void> 
   }
 
   let offset = 0
+  let lastFlush = 0
   let lastReport = 0
   let lastReportAt = performance.now()
   const report = (force = false) => {
@@ -69,41 +72,15 @@ async function copy(bookId: string, file: File, dirName: string): Promise<void> 
 
   try {
     await access.truncate(0)
-    const stream = file.stream()
-    let byobFailed = false
-    try {
-      // Bring-your-own-buffer: the same 8 MB ArrayBuffer travels back and forth.
-      const reader = stream.getReader({ mode: 'byob' })
-      let buffer = new ArrayBuffer(CHUNK)
-      for (;;) {
-        if (aborted) {
-          await reader.cancel()
-          throw new DOMException('Annullato', 'AbortError')
-        }
-        const { value, done } = await reader.read(new Uint8Array(buffer))
-        if (done) break
-        await writeChunk(value)
-        buffer = value.buffer as ArrayBuffer
-        report()
+    for await (const chunk of readBlobSlices(file)) {
+      if (aborted) throw new DOMException('Annullato', 'AbortError')
+      if (chunk.offset !== offset) throw new DOMException(`Offset sorgente ${chunk.offset}, destinazione ${offset}`, 'NotReadableError')
+      await writeChunk(chunk.bytes)
+      if (offset - lastFlush >= FLUSH_EVERY_BYTES) {
+        await access.flush()
+        lastFlush = offset
       }
-    } catch (e) {
-      if ((e as DOMException)?.name === 'AbortError' || (e as DOMException)?.name === 'QuotaExceededError') throw e
-      if (offset > 0) throw e
-      byobFailed = true
-    }
-    if (byobFailed) {
-      // Fallback for engines without BYOB readers on Blob streams: default chunks (~64 KB–1 MB).
-      const reader = file.stream().getReader()
-      for (;;) {
-        if (aborted) {
-          await reader.cancel()
-          throw new DOMException('Annullato', 'AbortError')
-        }
-        const { value, done } = await reader.read()
-        if (done) break
-        await writeChunk(value)
-        report()
-      }
+      report()
     }
     await access.flush()
     await access.close()

@@ -42,13 +42,15 @@ export const HEAVY_MAX_OUTPUT_PIXELS = 16 * 1024 * 1024
  * Factor actually produced for a page: the requested maximum, unless a x4 result would exceed the
  * canvas cap (then x2). x4 is the native output of Real-ESRGAN and two passes of CUNet.
  */
-export function heavyFactor(w: number, h: number, maxFactor: HeavyFactor): HeavyFactor {
-  return maxFactor === 4 && w * h * 16 <= HEAVY_MAX_OUTPUT_PIXELS ? 4 : 2
+export function heavyFactor(w: number, h: number, maxFactor: HeavyFactor): HeavyFactor | null {
+  if (maxFactor === 4 && w * h * 16 <= HEAVY_MAX_OUTPUT_PIXELS) return 4
+  if (w * h * 4 <= HEAVY_MAX_OUTPUT_PIXELS) return 2
+  return null
 }
 
 export type CunetRequest =
   | { type: 'init'; id: number; modelUrl: string; ortPath: string; preferGpu: boolean; spec: ModelSpec }
-  | { type: 'process'; id: number; cacheKeyBase: string; page: number; blob: Blob; maxFactor: HeavyFactor }
+  | { type: 'process'; id: number; cacheKeyBase: string; page: number; blob: Blob; maxFactor: HeavyFactor; persist: boolean }
   | { type: 'cancel'; id: number }
   | { type: 'list'; id: number; cacheKey: string }
   | { type: 'delete'; id: number; cacheKey: string }

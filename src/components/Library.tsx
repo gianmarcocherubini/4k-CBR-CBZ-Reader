@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ArchiveError, describeError, isArchiveError } from '../lib/archive/types'
 import { flags, isIOS, isStandalone } from '../lib/flags'
-import { getAllProgress, listBooks } from '../lib/storage/db'
-import { deleteBook, importFile, openSessionBook } from '../lib/storage/importer'
-import { estimateStorage, formatBytes, requestPersistentStorage, type StorageEstimate } from '../lib/storage/opfs'
+import { getAllProgress, getBook, listBooks } from '../lib/storage/db'
+import { type ArchivePasswordRequest, deleteBook, importFile, openSessionBook } from '../lib/storage/importer'
+import { cleanupOrphanedBookFiles, estimateStorage, formatBytes, ORPHAN_RETRY_MS, type StorageEstimate } from '../lib/storage/opfs'
 import type { Book, Progress } from '../types'
 import { BookCard } from './BookCard'
 import { Dialog, DialogAction } from './Dialog'
@@ -16,6 +16,7 @@ interface LibraryProps {
   onOpen: (book: Book) => void
   onSessionBook: (book: Book) => void
   onRemoveSessionBook: (id: string) => void
+  requestPassword: (request: ArchivePasswordRequest) => Promise<string | null>
 }
 
 declare global {
@@ -35,7 +36,7 @@ const PlusIcon = (
   </svg>
 )
 
-export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBook, onRemoveSessionBook }: LibraryProps) {
+export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBook, onRemoveSessionBook, requestPassword }: LibraryProps) {
   const [books, setBooks] = useState<Book[] | null>(null)
   const [progress, setProgress] = useState<Map<string, Progress>>(new Map())
   const [estimate, setEstimate] = useState<StorageEstimate | null>(null)
@@ -47,9 +48,23 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
   const abortRef = useRef<AbortController | null>(null)
   const importInput = useRef<HTMLInputElement>(null)
   const sessionInput = useRef<HTMLInputElement>(null)
+  const orphanCleanupDone = useRef(false)
 
   const refresh = useCallback(async () => {
-    const [b, p, e] = await Promise.all([listBooks(), getAllProgress(), estimateStorage()])
+    const b = await listBooks()
+    if (!orphanCleanupDone.current) {
+      orphanCleanupDone.current = true
+      const protectedIds = b.filter((book) => book.passwordProtected).map((book) => book.id)
+      if (protectedIds.length > 0) {
+        const { deleteCunetCache } = await import('../lib/upscale/cunet/cunetEngine')
+        await Promise.all(protectedIds.map((id) => deleteCunetCache(id)))
+      }
+      await cleanupOrphanedBookFiles(
+        new Set(b.filter((book) => book.storage === 'opfs').map((book) => book.id)),
+        async (bookId) => (await getBook(bookId))?.storage === 'opfs',
+      )
+    }
+    const [p, e] = await Promise.all([getAllProgress(), estimateStorage()])
     setBooks(b)
     setProgress(p)
     setEstimate(e)
@@ -59,9 +74,17 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
     void refresh()
   }, [refresh])
 
+  useEffect(() => {
+    const timer = setInterval(() => {
+      orphanCleanupDone.current = false
+      void refresh()
+    }, ORPHAN_RETRY_MS)
+    return () => clearInterval(timer)
+  }, [refresh])
+
   const startImport = useCallback(
     async (files: File[]) => {
-      if (files.length === 0) return
+      if (files.length === 0 || abortRef.current) return
       const controller = new AbortController()
       abortRef.current = controller
       const items: ImportItem[] = files.map((f, i) => ({
@@ -83,33 +106,33 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
           await importFile(file, {
             signal: controller.signal,
             forceIdb: flags.forceIdb,
+            requestPassword,
             onStatus: (s) => update({ stage: s.stage, bytes: s.bytes, total: s.total, error: s.error }),
           })
         } catch (e) {
           const err = isArchiveError(e) ? e : new ArchiveError('read', String(e))
           update({ stage: 'errore', error: { code: err.code, message: err.message } })
         }
-        if (i === 0 || i === files.length - 1) void requestPersistentStorage()
       }
       setImporting(false)
       abortRef.current = null
       await refresh()
     },
-    [refresh],
+    [refresh, requestPassword],
   )
 
   const openSession = useCallback(
     async (file: File) => {
       try {
-        const book = await openSessionBook(file)
+        const book = await openSessionBook(file, { requestPassword })
         onSessionBook(book)
         onOpen(book)
       } catch (e) {
         const err = isArchiveError(e) ? e : new ArchiveError('read', String(e))
-        setError({ title: 'Impossibile aprire il file', message: describeError(err.code, file.name) })
+        if (err.code !== 'aborted') setError({ title: 'Impossibile aprire il file', message: describeError(err.code, file.name) })
       }
     },
-    [onOpen, onSessionBook],
+    [onOpen, onSessionBook, requestPassword],
   )
 
   // Test hooks (dev / ?test): drive imports without a file picker.

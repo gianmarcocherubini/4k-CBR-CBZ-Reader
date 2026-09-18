@@ -1,4 +1,5 @@
 import type { PageSize } from '../../types'
+import { assertSafeEncodedImage, assertSafeImageSize } from '../imageDimensions'
 
 export interface DecodedImage {
   bitmap: ImageBitmap
@@ -7,9 +8,12 @@ export interface DecodedImage {
 
 /** Decodes an image Blob. Falls back to an <img> element when createImageBitmap refuses the format. */
 export async function decodeImage(blob: Blob): Promise<DecodedImage> {
+  await assertSafeEncodedImage(blob)
+  let bitmap: ImageBitmap
+  let size: PageSize
   try {
-    const bitmap = await createImageBitmap(blob)
-    return { bitmap, size: { w: bitmap.width, h: bitmap.height } }
+    bitmap = await createImageBitmap(blob)
+    size = { w: bitmap.width, h: bitmap.height }
   } catch {
     const url = URL.createObjectURL(blob)
     try {
@@ -17,12 +21,19 @@ export async function decodeImage(blob: Blob): Promise<DecodedImage> {
       img.decoding = 'async'
       img.src = url
       await img.decode()
-      const bitmap = await createImageBitmap(img)
-      return { bitmap, size: { w: img.naturalWidth, h: img.naturalHeight } }
+      size = { w: img.naturalWidth, h: img.naturalHeight }
+      bitmap = await createImageBitmap(img)
     } finally {
       URL.revokeObjectURL(url)
     }
   }
+  try {
+    assertSafeImageSize(size)
+  } catch (e) {
+    bitmap.close()
+    throw e
+  }
+  return { bitmap, size }
 }
 
 function makeCanvas(w: number, h: number): OffscreenCanvas | HTMLCanvasElement {

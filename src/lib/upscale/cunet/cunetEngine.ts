@@ -1,5 +1,6 @@
 import type { DistributiveOmit } from '../../archive/rar/protocol'
 import { flags } from '../../flags'
+import { assertSafeEncodedImage } from '../../imageDimensions'
 import type { HeavyModel } from '../../../types'
 import { cacheBudgetBytes } from '../backend'
 import {
@@ -189,9 +190,10 @@ export class CunetEngine {
   }
 
   /** Cached result from OPFS, decoded; null when the page was never processed. */
-  lookup(bookId: string, page: number): Promise<ImageBitmap | null> {
+  lookup(bookId: string, page: number, persist = true): Promise<ImageBitmap | null> {
     const hit = this.peek(bookId, page)
     if (hit) return Promise.resolve(hit)
+    if (!persist) return Promise.resolve(null)
     const pending = this.inflight.get(this.key(bookId, page))
     if (pending) return pending.then((b) => b, () => null)
     return this.readCache(bookId, page)
@@ -212,6 +214,7 @@ export class CunetEngine {
         const head = new Uint8Array(await file.slice(0, 12).arrayBuffer())
         const isWebp = head[0] === 0x52 && head[1] === 0x49 && head[8] === 0x57 && head[9] === 0x45
         const typed = file.type ? file : new Blob([file], { type: isWebp ? 'image/webp' : 'image/jpeg' })
+        await assertSafeEncodedImage(typed)
         const bitmap = await createImageBitmap(typed)
         this.remember(this.key(bookId, page), bitmap)
         return bitmap
@@ -237,7 +240,15 @@ export class CunetEngine {
    * the reading distance (0 = the visible page): the queue always runs the lowest number next, so
    * the page in front of the reader is never made to wait behind a stale read-ahead job.
    */
-  enhance(bookId: string, page: number, source: () => Promise<Blob>, maxFactor: HeavyFactor, priority = 0, onProgress?: (d: number, t: number) => void): Promise<ImageBitmap> {
+  enhance(
+    bookId: string,
+    page: number,
+    source: () => Promise<Blob>,
+    maxFactor: HeavyFactor,
+    priority = 0,
+    persist = true,
+    onProgress?: (d: number, t: number) => void,
+  ): Promise<ImageBitmap> {
     const k = this.key(bookId, page)
     const hit = this.peek(bookId, page)
     if (hit) return Promise.resolve(hit)
@@ -256,14 +267,17 @@ export class CunetEngine {
         run: async () => {
           try {
             await this.init()
-            const cached = await this.readCache(bookId, page)
+            const cached = persist ? await this.readCache(bookId, page) : null
             if (cached) {
               resolve(cached)
               return
             }
             const blob = await source()
             const t0 = performance.now()
-            const { promise: p } = this.call<Blob>({ type: 'process', cacheKeyBase: cacheKeyFor(bookId, this.model), page, blob, maxFactor }, onProgress)
+            const { promise: p } = this.call<Blob>(
+              { type: 'process', cacheKeyBase: cacheKeyFor(bookId, this.model), page, blob, maxFactor, persist },
+              onProgress,
+            )
             const encoded = await p
             const secs = (performance.now() - t0) / 1000
             this.secondsPerPage = this.secondsPerPage === undefined ? secs : this.secondsPerPage * 0.6 + secs * 0.4
@@ -312,11 +326,12 @@ export class CunetEngine {
     pages: number[],
     source: (page: number) => Promise<Blob>,
     maxFactor: HeavyFactor,
+    persist: boolean,
     onProgress: (p: BatchProgress) => void,
     signal: AbortSignal,
   ): Promise<void> {
     await this.init()
-    const done = new Set(await this.cachedPages(bookId, maxFactor))
+    const done = new Set(persist ? await this.cachedPages(bookId, maxFactor) : [])
     const todo = pages.filter((p) => !done.has(p))
     const total = pages.length
     let count = pages.length - todo.length
@@ -326,7 +341,7 @@ export class CunetEngine {
       const blob = await source(page)
       const t0 = performance.now()
       const { id, promise } = this.call<Blob>(
-        { type: 'process', cacheKeyBase: cacheKeyFor(bookId, this.model), page, blob, maxFactor },
+        { type: 'process', cacheKeyBase: cacheKeyFor(bookId, this.model), page, blob, maxFactor, persist },
         (tilesDone, tilesTotal) => onProgress({ done: count, total, tilesDone, tilesTotal, secondsPerPage: this.secondsPerPage, currentPage: page }),
       )
       const onAbort = () => this.worker?.postMessage({ type: 'cancel', id } satisfies CunetRequest)

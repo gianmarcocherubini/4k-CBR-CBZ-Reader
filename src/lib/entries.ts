@@ -5,11 +5,13 @@ export interface ArchiveEntry {
   name: string
   /** Uncompressed size in bytes (may be 0 when unknown). */
   size: number
+  /** Compressed size when the container exposes it (ZIP). */
+  compressedSize?: number
   directory: boolean
   encrypted: boolean
 }
 
-const IMAGE_EXT = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'avif', 'heic', 'heif', 'jxl'])
+const IMAGE_EXT = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'avif', 'heic', 'heif'])
 
 export function mimeForName(name: string): string {
   const ext = name.slice(name.lastIndexOf('.') + 1).toLowerCase()
@@ -30,8 +32,6 @@ export function mimeForName(name: string): string {
     case 'heic':
     case 'heif':
       return 'image/heic'
-    case 'jxl':
-      return 'image/jxl'
     default:
       return 'application/octet-stream'
   }

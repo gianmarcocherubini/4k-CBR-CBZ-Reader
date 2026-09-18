@@ -24,6 +24,8 @@ export interface Book {
   lastReadAt: number
   /** Thumbnail of the first page (JPEG/WebP blob), if it could be decoded. */
   cover?: Blob
+  /** The ZIP is encrypted; its password is intentionally kept in memory only. */
+  passwordProtected?: boolean
 }
 
 export interface Progress {

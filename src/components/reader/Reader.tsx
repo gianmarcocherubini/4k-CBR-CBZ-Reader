@@ -1,12 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { openArchive, type OpenedArchive } from '../../lib/archive/openArchive'
 import { ArchiveError, describeError, isArchiveError } from '../../lib/archive/types'
+import { assertSafeEncodedImage } from '../../lib/imageDimensions'
 import { clampOffset, clampZoom, layoutSpread, type Size, zoomAround } from '../../lib/reader/layout'
 import { PageCache } from '../../lib/reader/pageCache'
 import { blankBefore, firstPage, isBlank, layoutSpreads, realPages, spreadIndexOf, spreadLabel } from '../../lib/spread'
 import { getBook, getPageSizes, getProgress, putBook, putPageSizes, putProgress } from '../../lib/storage/db'
-import { resolveBookBlob } from '../../lib/storage/importer'
+import {
+  type ArchivePasswordRequest,
+  getArchivePassword,
+  rememberArchivePassword,
+  resolveBookBlob,
+} from '../../lib/storage/importer'
 import { cacheBudgetBytes } from '../../lib/upscale/backend'
+import { deleteCunetCache } from '../../lib/upscale/cunet/cunetEngine'
 import type { HeavyFactor } from '../../lib/upscale/cunet/protocol'
 import { SrAborted, type SrOptions, type SrPlan, type SrResult } from '../../lib/upscale/srEngine'
 import { type Book, GUTTER_FRACTION, type PageSize, type ReaderSettings } from '../../types'
@@ -27,6 +34,7 @@ interface ReaderProps {
   settings: ReaderSettings
   updateSettings: (patch: Partial<ReaderSettings>) => void
   onClose: () => void
+  requestPassword: (request: ArchivePasswordRequest) => Promise<string | null>
 }
 
 const BARS_HIDE_MS = 2500
@@ -38,7 +46,7 @@ function toArchiveError(e: unknown): ArchiveError {
   return new ArchiveError('read', e instanceof Error ? e.message : String(e))
 }
 
-export function Reader({ bookId, sessionBook, settings, updateSettings, onClose }: ReaderProps) {
+export function Reader({ bookId, sessionBook, settings, updateSettings, onClose, requestPassword }: ReaderProps) {
   const [book, setBook] = useState<Book | null>(sessionBook ?? null)
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [error, setError] = useState<ArchiveError | null>(null)
@@ -63,13 +71,54 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose 
   // ---- open the book -------------------------------------------------------------------------
   useEffect(() => {
     let cancelled = false
+    const controller = new AbortController()
     const run = async () => {
-      const b = sessionBook ?? (await getBook(bookId))
+      let b = sessionBook ?? (await getBook(bookId))
       if (!b) throw new ArchiveError('missing', 'Libro non trovato nella libreria.')
       if (cancelled) return
+      const legacy = b as Book & { archivePassword?: unknown }
+      if (Object.hasOwn(legacy, 'archivePassword') || (legacy.passwordProtected && legacy.cover)) {
+        const cleaned = { ...legacy } as Book & { archivePassword?: unknown }
+        delete cleaned.archivePassword
+        cleaned.passwordProtected = true
+        delete cleaned.cover
+        b = cleaned
+        if (b.storage !== 'session') await putBook(b)
+        await deleteCunetCache(b.id)
+      }
       setBook(b)
       const blob = await resolveBookBlob(b)
-      const opened = await openArchive(blob)
+      let password = getArchivePassword(b.id)
+      let opened: OpenedArchive
+      for (;;) {
+        try {
+          opened = await openArchive(blob, password, controller.signal)
+          break
+        } catch (e) {
+          const err = toArchiveError(e)
+          const canRetry = b.format === 'cbz' && (err.code === 'encrypted' || err.code === 'invalid-password')
+          if (!canRetry) throw err
+          const entered = await requestPassword({
+            fileName: b.fileName,
+            invalid: err.code === 'invalid-password',
+            signal: controller.signal,
+          })
+          if (entered === null) {
+            if (!cancelled) onClose()
+            return
+          }
+          password = entered
+        }
+      }
+      if (password !== undefined) {
+        rememberArchivePassword(b.id, password)
+        if (!b.passwordProtected || b.cover) {
+          b = { ...b, passwordProtected: true, cover: undefined }
+          setBook(b)
+          if (b.storage !== 'session') await putBook(b)
+          await deleteCunetCache(b.id)
+        }
+      }
       if (cancelled) {
         await opened.reader.close()
         return
@@ -105,12 +154,13 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose 
     })
     return () => {
       cancelled = true
+      controller.abort()
       cacheRef.current?.dispose()
       cacheRef.current = null
       void archiveRef.current?.reader.close()
       archiveRef.current = null
     }
-  }, [bookId, sessionBook])
+  }, [bookId, sessionBook, onClose, requestPassword])
 
   // ---- viewport ------------------------------------------------------------------------------
   useEffect(() => {
@@ -219,7 +269,9 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose 
     const wanted = new Set<number>(spreadPages)
     for (let k = 1; k <= PRELOAD_AHEAD; k++) for (const p of realPages(spreads[spreadIndex + k] ?? [])) wanted.add(p)
     for (let k = 1; k <= PRELOAD_BEHIND; k++) for (const p of realPages(spreads[spreadIndex - k] ?? [])) wanted.add(p)
-    cache.protect(wanted)
+    // Only pages currently on screen are unevictable. Read-ahead pages are opportunistic and must
+    // never override the PageCache byte budget (two 32 MP pages already occupy ~256 MiB).
+    cache.protect(spreadPages)
     let cancelled = false
     const request = (index: number, visible: boolean) => {
       if (visible) {
@@ -447,6 +499,8 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose 
   const heavyLabel = 'GAN'
   /** The GAN's native factor; the worker drops to x2 only when x4 would exceed the canvas cap. */
   const heavyMaxFactor: HeavyFactor = 4
+  /** Never persist decrypted derivatives of protected or session-only books. */
+  const persistHeavy = Boolean(book && book.storage !== 'session' && !book.passwordProtected)
   const [cunetResults, setCunetResults] = useState<Map<number, SrResult>>(() => new Map())
   /** A heavy result as shown: its factor is read off the bitmap (x4 results are preferred when cached). */
   const heavyResult = useCallback(
@@ -462,7 +516,9 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose 
     if (!opened) throw new ArchiveError('aborted')
     const entry = opened.pages[index]
     if (!entry) throw new ArchiveError('missing')
-    return opened.reader.extract(entry.name)
+    const blob = await opened.reader.extract(entry.name)
+    await assertSafeEncodedImage(blob)
+    return blob
   }, [])
   useEffect(() => {
     const engine = mq.engine
@@ -495,14 +551,14 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose 
       if (engine.prefetchAllowed && !batchRunning) {
         // WebGPU: enqueued in reading order, so the current page is processed before the next ones.
         engine
-          .enhance(bookId, index, () => pageBlob(index), heavyMaxFactor, priority)
+          .enhance(bookId, index, () => pageBlob(index), heavyMaxFactor, priority, persistHeavy)
           .then((b) => {
             if (!cancelled) apply(index, b)
           })
           .catch(() => undefined)
       } else {
         // CPU (too slow to process on demand) or batch running: only show what is already cached.
-        void engine.lookup(bookId, index).then((bitmap) => {
+        void engine.lookup(bookId, index, persistHeavy).then((bitmap) => {
           if (!cancelled && bitmap) apply(index, bitmap)
         })
       }
@@ -807,10 +863,11 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose 
               ready={mq.status === 'ready'}
               batch={mq.batch}
               pageCount={pageCount}
+              persistentCache={persistHeavy}
               onToggle={(v) => updateSettings({ maxQuality: v })}
               onStart={() => {
                 if (!book) return
-                mq.startBatch(book.id, Array.from({ length: pageCount }, (_, i) => i), pageBlob, heavyMaxFactor)
+                mq.startBatch(book.id, Array.from({ length: pageCount }, (_, i) => i), pageBlob, heavyMaxFactor, persistHeavy)
               }}
               onCancel={mq.cancelBatch}
             />

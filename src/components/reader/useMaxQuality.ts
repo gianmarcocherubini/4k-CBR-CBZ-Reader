@@ -15,7 +15,7 @@ export interface MaxQualityHandle {
   status: CunetStatus
   tick: number
   batch: BatchState
-  startBatch: (bookId: string, pages: number[], source: (page: number) => Promise<Blob>, maxFactor: HeavyFactor) => void
+  startBatch: (bookId: string, pages: number[], source: (page: number) => Promise<Blob>, maxFactor: HeavyFactor, persist: boolean) => void
   cancelBatch: () => void
 }
 
@@ -44,13 +44,13 @@ export function useMaxQuality(enabled: boolean, model: HeavyModel): MaxQualityHa
   }, [enabled, model])
 
   const startBatch = useCallback(
-    (bookId: string, pages: number[], source: (page: number) => Promise<Blob>, maxFactor: HeavyFactor) => {
+    (bookId: string, pages: number[], source: (page: number) => Promise<Blob>, maxFactor: HeavyFactor, persist: boolean) => {
       if (!engine || batch.running) return
       const controller = new AbortController()
       abortRef.current = controller
       setBatch({ running: true, progress: null, error: null, finished: false })
       engine
-        .preprocess(bookId, pages, source, maxFactor, (progress) => setBatch((b) => ({ ...b, progress })), controller.signal)
+        .preprocess(bookId, pages, source, maxFactor, persist, (progress) => setBatch((b) => ({ ...b, progress })), controller.signal)
         .then(() => setBatch((b) => ({ ...b, running: false, finished: true })))
         .catch((e) =>
           setBatch((b) => ({

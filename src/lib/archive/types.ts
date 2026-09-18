@@ -3,6 +3,7 @@ import type { ArchiveEntry } from '../entries'
 export type ArchiveErrorCode =
   | 'corrupt'
   | 'encrypted'
+  | 'invalid-password'
   | 'unsupported'
   | 'empty'
   | 'solid'
@@ -10,6 +11,8 @@ export type ArchiveErrorCode =
   | 'read'
   | 'missing'
   | 'quota'
+  | 'storage'
+  | 'memory'
   | 'aborted'
   | 'duplicate'
 
@@ -49,7 +52,9 @@ export function describeError(code: ArchiveErrorCode, fileName?: string): string
     case 'corrupt':
       return `${f} è danneggiato o incompleto.`
     case 'encrypted':
-      return `${f} è protetto da password: gli archivi cifrati non sono supportati.`
+      return `${f} è protetto da password.`
+    case 'invalid-password':
+      return `La password inserita per ${f} non è corretta.`
     case 'unsupported':
       return `${f} non è un archivio CBZ (ZIP) o CBR (RAR). Formati come 7z o PDF non sono supportati.`
     case 'empty':
@@ -64,6 +69,10 @@ export function describeError(code: ArchiveErrorCode, fileName?: string): string
       return `${f} non è più presente nell’archiviazione dell’app.`
     case 'quota':
       return `Spazio insufficiente per importare ${fileName ? `“${fileName}”` : 'il file'}. Libera spazio o usa “Apri senza importare”.`
+    case 'storage':
+      return `${f} è troppo grande per il metodo di archiviazione disponibile in questo browser. Installa l’app sulla schermata Home o usa “Apri senza importare”.`
+    case 'memory':
+      return 'La pagina richiede troppa memoria insieme alle altre pagine visibili. Passa alla modalità pagina singola.'
     case 'aborted':
       return 'Operazione annullata.'
     case 'duplicate':
@@ -77,6 +86,8 @@ export interface ArchiveReader {
   /** Lists every entry of the archive (directories included). */
   entries(): Promise<ArchiveEntry[]>
   /** Extracts a single entry as a Blob. */
-  extract(name: string): Promise<Blob>
+  extract(name: string, signal?: AbortSignal): Promise<Blob>
+  /** Fully authenticates one encrypted entry without retaining its data, when supported. */
+  validatePassword?(name: string, signal?: AbortSignal): Promise<void>
   close(): Promise<void>
 }

@@ -1,6 +1,7 @@
 /// <reference lib="webworker" />
 /// <reference types="@webgpu/types" />
 import type { InferenceSession, Tensor } from 'onnxruntime-web'
+import { assertSafeEncodedImage } from '../../imageDimensions'
 import {
   cacheDirFor,
   CUNET_CACHE_DIR,
@@ -454,16 +455,28 @@ async function runNetwork(id: number, src: ImageData, gray: boolean, outFactor: 
   }
 }
 
-async function process(id: number, cacheKeyBase: string, page: number, blob: Blob, maxFactor: HeavyFactor): Promise<Blob> {
+async function process(
+  id: number,
+  cacheKeyBase: string,
+  page: number,
+  blob: Blob,
+  maxFactor: HeavyFactor,
+  persist: boolean,
+): Promise<Blob> {
   if (!ort || !session) throw Object.assign(new Error('Motore non inizializzato'), { code: 'unavailable' })
   if (cancelled.has(id)) throw Object.assign(new Error('Annullato'), { code: 'aborted' })
+  await assertSafeEncodedImage(blob)
   const bitmap = await createImageBitmap(blob)
   const W = bitmap.width
   const H = bitmap.height
   const factor = heavyFactor(W, H, maxFactor)
+  if (factor === null) {
+    bitmap.close()
+    throw Object.assign(new Error(`Pagina ${W}×${H} troppo grande per l'output GAN`), { code: 'unavailable' })
+  }
   const cacheKey = cacheDirFor(cacheKeyBase, factor)
   // Another request (reading ahead vs. batch) may have produced this page while we waited.
-  const hit = await cached(cacheKey, page)
+  const hit = persist ? await cached(cacheKey, page) : null
   if (hit) {
     bitmap.close()
     return hit
@@ -507,7 +520,7 @@ async function process(id: number, cacheKeyBase: string, page: number, blob: Blo
   outCanvas.getContext('2d')!.putImageData(img, 0, 0)
   let encoded = await outCanvas.convertToBlob({ type: 'image/webp', quality: 0.92 })
   if (encoded.type !== 'image/webp') encoded = await outCanvas.convertToBlob({ type: 'image/jpeg', quality: 0.92 })
-  await store(cacheKey, page, encoded)
+  if (persist) await store(cacheKey, page, encoded)
   return encoded
 }
 
@@ -577,7 +590,7 @@ self.onmessage = async (ev: MessageEvent<CunetRequest>) => {
         result = await serialized(() => init(msg.modelUrl, msg.ortPath, msg.preferGpu, msg.spec))
         break
       case 'process':
-        result = await serialized(() => process(msg.id, msg.cacheKeyBase, msg.page, msg.blob, msg.maxFactor))
+        result = await serialized(() => process(msg.id, msg.cacheKeyBase, msg.page, msg.blob, msg.maxFactor, msg.persist))
         break
       case 'list':
         result = await list(msg.cacheKey)

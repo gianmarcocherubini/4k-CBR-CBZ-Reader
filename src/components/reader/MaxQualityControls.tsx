@@ -7,6 +7,7 @@ interface MaxQualityControlsProps {
   ready: boolean
   batch: BatchState
   pageCount: number
+  persistentCache: boolean
   onToggle: (v: boolean) => void
   onStart: () => void
   onCancel: () => void
@@ -21,14 +22,18 @@ function formatEta(secondsPerPage: number | undefined, remaining: number): strin
 }
 
 /** Settings block for the experimental heavy tier (Real-ESRGAN anime 6B at x4) and its batch job. */
-export function MaxQualityControls({ enabled, statusLine, ready, batch, pageCount, onToggle, onStart, onCancel }: MaxQualityControlsProps) {
+export function MaxQualityControls({ enabled, statusLine, ready, batch, pageCount, persistentCache, onToggle, onStart, onCancel }: MaxQualityControlsProps) {
   const p = batch.progress
   const pct = p && p.total > 0 ? Math.round(((p.done + (p.tilesTotal ? p.tilesDone / p.tilesTotal : 0)) / p.total) * 100) : 0
   return (
     <Group title="Qualità massima (lenta)" testId="mq-section" footer={<span data-testid="mq-status">{statusLine}</span>}>
       <Row
         title="Qualità massima"
-        hint="Sperimentale. Real-ESRGAN anime 6B a ×4 sulla GPU: aspetto “stampato”, molto nitido; decine di secondi per pagina. Mentre elabora si vede la Super risoluzione standard; i risultati restano in cache per sempre."
+        hint={
+          persistentCache
+            ? 'Sperimentale. Real-ESRGAN anime 6B a ×4 sulla GPU: aspetto “stampato”, molto nitido; decine di secondi per pagina. I risultati restano in cache per sempre.'
+            : 'Real-ESRGAN anime 6B a ×4. Per questo volume protetto o di sessione il risultato resta solo in memoria e non viene salvato.'
+        }
       >
         <Switch checked={enabled} onChange={onToggle} label="Qualità massima" />
       </Row>
@@ -56,11 +61,13 @@ export function MaxQualityControls({ enabled, statusLine, ready, batch, pageCoun
           </div>
         ) : (
           <div className="row flex-col items-stretch gap-2">
-            <button type="button" className="btn-primary w-full" onClick={onStart} disabled={!ready} data-testid="mq-start">
+            <button type="button" className="btn-primary w-full" onClick={onStart} disabled={!ready || !persistentCache} data-testid="mq-start">
               Pre-elabora questo volume
             </button>
             <p className="text-footnote text-label-2">
-              {batch.finished
+              {!persistentCache
+                ? 'Per archivi protetti o aperti senza importare, le pagine decifrate non vengono salvate: Qualità massima funziona durante la lettura, ma la pre-elaborazione permanente è disabilitata.'
+                : batch.finished
                 ? `Completato: ${p?.done ?? pageCount} pagine in cache.`
                 : batch.error
                   ? `Errore: ${batch.error}`
