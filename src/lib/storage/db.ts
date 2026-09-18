@@ -1,5 +1,5 @@
 import { type DBSchema, type IDBPDatabase, openDB } from 'idb'
-import type { Book, PageSize, Progress } from '../../types'
+import type { Book, Collection, PageSize, Progress } from '../../types'
 
 interface ReaderDB extends DBSchema {
   books: {
@@ -19,20 +19,68 @@ interface ReaderDB extends DBSchema {
     key: string
     value: { bookId: string; file: Blob }
   }
+  collections: {
+    key: string
+    value: Collection
+    indexes: { byCreated: number }
+  }
 }
 
 let dbPromise: Promise<IDBPDatabase<ReaderDB>> | null = null
+export class DatabaseBlockedError extends Error {
+  constructor() {
+    super('Database bloccato da un’altra scheda')
+    this.name = 'DatabaseBlockedError'
+  }
+}
 
 export function getDB(): Promise<IDBPDatabase<ReaderDB>> {
   if (!dbPromise) {
-    dbPromise = openDB<ReaderDB>('cbz-reader', 1, {
-      upgrade(db) {
-        const books = db.createObjectStore('books', { keyPath: 'id' })
-        books.createIndex('byAdded', 'addedAt')
-        db.createObjectStore('progress', { keyPath: 'bookId' })
-        db.createObjectStore('pageSizes', { keyPath: 'bookId' })
-        db.createObjectStore('files', { keyPath: 'bookId' })
+    let timedOut = false
+    const opening = openDB<ReaderDB>('cbz-reader', 2, {
+      upgrade(db, oldVersion) {
+        if (oldVersion < 1) {
+          const books = db.createObjectStore('books', { keyPath: 'id' })
+          books.createIndex('byAdded', 'addedAt')
+          db.createObjectStore('progress', { keyPath: 'bookId' })
+          db.createObjectStore('pageSizes', { keyPath: 'bookId' })
+          db.createObjectStore('files', { keyPath: 'bookId' })
+        }
+        if (oldVersion < 2) {
+          const collections = db.createObjectStore('collections', { keyPath: 'id' })
+          collections.createIndex('byCreated', 'createdAt')
+        }
       },
+      // A tab running this version must not block a later schema upgrade.
+      blocking() {
+        const current = dbPromise
+        dbPromise = null
+        void current?.then((db) => db.close(), () => undefined)
+      },
+      terminated() {
+        dbPromise = null
+      },
+    })
+    const guarded = new Promise<IDBPDatabase<ReaderDB>>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        timedOut = true
+        reject(new DatabaseBlockedError())
+      }, 8000)
+      opening.then(
+        (db) => {
+          clearTimeout(timer)
+          if (timedOut) db.close()
+          else resolve(db)
+        },
+        (error) => {
+          clearTimeout(timer)
+          reject(error)
+        },
+      )
+    })
+    dbPromise = guarded.catch((error) => {
+      dbPromise = null
+      throw error
     })
   }
   return dbPromise
@@ -44,14 +92,22 @@ export async function listBooks(): Promise<Book[]> {
   const books = await Promise.all(
     stored.map(async (book) => {
       const legacy = book as Book & { archivePassword?: unknown }
-      if (!Object.hasOwn(legacy, 'archivePassword') && !(legacy.passwordProtected && legacy.cover)) return book
+      if (
+        !Object.hasOwn(legacy, 'archivePassword') &&
+        !(legacy.passwordProtected && legacy.cover && legacy.coverSource !== 'remote')
+      ) {
+        return book
+      }
       // One-time scrub for local/dev builds that briefly persisted ZIP passwords or decrypted
       // covers. Unknown fields survive IndexedDB unless explicitly removed.
       const cleaned = { ...legacy } as Book & { archivePassword?: unknown }
       const wasEncrypted = Object.hasOwn(cleaned, 'archivePassword')
       delete cleaned.archivePassword
       if (wasEncrypted) cleaned.passwordProtected = true
-      if (cleaned.passwordProtected) delete cleaned.cover
+      if (cleaned.passwordProtected && cleaned.coverSource !== 'remote') {
+        delete cleaned.cover
+        delete cleaned.coverSource
+      }
       await db.put('books', cleaned)
       return cleaned
     }),
@@ -65,6 +121,26 @@ export async function getBook(id: string): Promise<Book | undefined> {
 
 export async function putBook(book: Book): Promise<void> {
   await (await getDB()).put('books', book)
+}
+
+export async function listCollections(): Promise<Collection[]> {
+  return (await getDB()).getAllFromIndex('collections', 'byCreated')
+}
+
+export async function putCollection(collection: Collection): Promise<void> {
+  await (await getDB()).put('collections', collection)
+}
+
+/** Deleting a collection moves its books back to the built-in default collection. */
+export async function deleteCollection(collectionId: string): Promise<void> {
+  const db = await getDB()
+  const tx = db.transaction(['collections', 'books'], 'readwrite')
+  const books = await tx.objectStore('books').getAll()
+  await Promise.all([
+    ...books.filter((book) => book.collectionId === collectionId).map((book) => tx.objectStore('books').put({ ...book, collectionId: undefined })),
+    tx.objectStore('collections').delete(collectionId),
+    tx.done,
+  ])
 }
 
 export async function deleteBookRecord(id: string): Promise<void> {

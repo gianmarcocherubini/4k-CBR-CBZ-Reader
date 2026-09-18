@@ -77,11 +77,17 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
       if (!b) throw new ArchiveError('missing', 'Libro non trovato nella libreria.')
       if (cancelled) return
       const legacy = b as Book & { archivePassword?: unknown }
-      if (Object.hasOwn(legacy, 'archivePassword') || (legacy.passwordProtected && legacy.cover)) {
+      if (
+        Object.hasOwn(legacy, 'archivePassword') ||
+        (legacy.passwordProtected && legacy.cover && legacy.coverSource !== 'remote')
+      ) {
         const cleaned = { ...legacy } as Book & { archivePassword?: unknown }
         delete cleaned.archivePassword
         cleaned.passwordProtected = true
-        delete cleaned.cover
+        if (cleaned.coverSource !== 'remote') {
+          delete cleaned.cover
+          delete cleaned.coverSource
+        }
         b = cleaned
         if (b.storage !== 'session') await putBook(b)
         await deleteCunetCache(b.id)
@@ -112,8 +118,13 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
       }
       if (password !== undefined) {
         rememberArchivePassword(b.id, password)
-        if (!b.passwordProtected || b.cover) {
-          b = { ...b, passwordProtected: true, cover: undefined }
+        if (!b.passwordProtected || (b.cover && b.coverSource !== 'remote')) {
+          const protectedBook = { ...b, passwordProtected: true }
+          if (protectedBook.coverSource !== 'remote') {
+            delete protectedBook.cover
+            delete protectedBook.coverSource
+          }
+          b = protectedBook
           setBook(b)
           if (b.storage !== 'session') await putBook(b)
           await deleteCunetCache(b.id)

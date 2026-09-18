@@ -1,11 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ArchiveError, describeError, isArchiveError } from '../lib/archive/types'
+import { ALL_COLLECTION_ID, collectionViews, DEFAULT_COLLECTION_ID, effectiveCollectionId, mostRecentCollectionId, type CollectionView } from '../lib/collections'
 import { flags, isIOS, isStandalone } from '../lib/flags'
-import { getAllProgress, getBook, listBooks } from '../lib/storage/db'
-import { type ArchivePasswordRequest, deleteBook, importFile, openSessionBook } from '../lib/storage/importer'
+import { DatabaseBlockedError, deleteCollection, getAllProgress, getBook, listBooks, listCollections, putBook, putCollection } from '../lib/storage/db'
+import { type ArchivePasswordRequest, deleteBook, importFile, newId, openSessionBook } from '../lib/storage/importer'
 import { cleanupOrphanedBookFiles, estimateStorage, formatBytes, ORPHAN_RETRY_MS, type StorageEstimate } from '../lib/storage/opfs'
-import type { Book, Progress } from '../types'
+import type { Book, Collection, Progress } from '../types'
 import { BookCard } from './BookCard'
+import { BookEditDialog } from './BookEditDialog'
+import { CollectionDialog } from './CollectionDialog'
+import { CollectionSidebar } from './CollectionSidebar'
+import { CoverSearchDialog } from './CoverSearchDialog'
 import { Dialog, DialogAction } from './Dialog'
 import { type ImportItem, ImportOverlay } from './ImportOverlay'
 
@@ -38,6 +43,8 @@ const PlusIcon = (
 
 export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBook, onRemoveSessionBook, requestPassword }: LibraryProps) {
   const [books, setBooks] = useState<Book[] | null>(null)
+  const [collections, setCollections] = useState<Collection[]>([])
+  const [selectedCollectionId, setSelectedCollectionId] = useState(DEFAULT_COLLECTION_ID)
   const [progress, setProgress] = useState<Map<string, Progress>>(new Map())
   const [estimate, setEstimate] = useState<StorageEstimate | null>(null)
   const [importItems, setImportItems] = useState<ImportItem[] | null>(null)
@@ -45,13 +52,22 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
   const [dragOver, setDragOver] = useState(false)
   const [error, setError] = useState<{ title: string; message: string } | null>(null)
   const [toDelete, setToDelete] = useState<Book | null>(null)
+  const [editingBook, setEditingBook] = useState<Book | null>(null)
+  const [coverBook, setCoverBook] = useState<Book | null>(null)
+  const [pendingCoverBooks, setPendingCoverBooks] = useState<Book[]>([])
+  const [coverConsentPending, setCoverConsentPending] = useState(false)
+  const [creatingCollection, setCreatingCollection] = useState(false)
+  const [collectionToDelete, setCollectionToDelete] = useState<CollectionView | null>(null)
   const abortRef = useRef<AbortController | null>(null)
   const importInput = useRef<HTMLInputElement>(null)
   const sessionInput = useRef<HTMLInputElement>(null)
   const orphanCleanupDone = useRef(false)
+  const initialCollectionSelected = useRef(false)
+  const refreshGeneration = useRef(0)
 
   const refresh = useCallback(async () => {
-    const b = await listBooks()
+    const generation = ++refreshGeneration.current
+    const [b, c] = await Promise.all([listBooks(), listCollections()])
     if (!orphanCleanupDone.current) {
       orphanCleanupDone.current = true
       const protectedIds = b.filter((book) => book.passwordProtected).map((book) => book.id)
@@ -65,22 +81,49 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
       )
     }
     const [p, e] = await Promise.all([getAllProgress(), estimateStorage()])
+    if (generation !== refreshGeneration.current) return
     setBooks(b)
+    setCollections(c)
+    if (!initialCollectionSelected.current) {
+      initialCollectionSelected.current = true
+      setSelectedCollectionId(mostRecentCollectionId(c, b))
+    } else {
+      setSelectedCollectionId((selected) =>
+        selected === ALL_COLLECTION_ID || selected === DEFAULT_COLLECTION_ID || c.some((collection) => collection.id === selected)
+          ? selected
+          : DEFAULT_COLLECTION_ID,
+      )
+    }
     setProgress(p)
     setEstimate(e)
   }, [])
 
+  const reportOperationError = useCallback((reason: unknown, title = 'Operazione non riuscita') => {
+    setError({
+      title,
+      message:
+        reason instanceof DatabaseBlockedError
+          ? 'Un’altra scheda sta usando una versione precedente della libreria. Chiudila e ricarica questa pagina.'
+          : reason instanceof Error
+            ? reason.message
+            : String(reason),
+    })
+  }, [])
+
   useEffect(() => {
-    void refresh()
-  }, [refresh])
+    void refresh().catch((reason) => {
+      setBooks([])
+      reportOperationError(reason, 'Impossibile aprire la libreria')
+    })
+  }, [refresh, reportOperationError])
 
   useEffect(() => {
     const timer = setInterval(() => {
       orphanCleanupDone.current = false
-      void refresh()
+      void refresh().catch(reportOperationError)
     }, ORPHAN_RETRY_MS)
     return () => clearInterval(timer)
-  }, [refresh])
+  }, [refresh, reportOperationError])
 
   const startImport = useCallback(
     async (files: File[]) => {
@@ -96,6 +139,7 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
       }))
       setImportItems(items)
       setImporting(true)
+      const coverSuggestions: Book[] = []
       // Files are imported one at a time to bound memory and I/O.
       for (let i = 0; i < files.length; i++) {
         if (controller.signal.aborted) break
@@ -103,12 +147,15 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
         const update = (patch: Partial<ImportItem>) =>
           setImportItems((prev) => prev?.map((it, j) => (j === i ? { ...it, ...patch } : it)) ?? prev)
         try {
-          await importFile(file, {
+          const imported = await importFile(file, {
             signal: controller.signal,
             forceIdb: flags.forceIdb,
             requestPassword,
             onStatus: (s) => update({ stage: s.stage, bytes: s.bytes, total: s.total, error: s.error }),
           })
+          // An automatic online query for a protected title would disclose metadata; keep that
+          // path manual. Unprotected imports are suggested after the result overlay is closed.
+          if (!imported.passwordProtected) coverSuggestions.push(imported)
         } catch (e) {
           const err = isArchiveError(e) ? e : new ArchiveError('read', String(e))
           update({ stage: 'errore', error: { code: err.code, message: err.message } })
@@ -116,6 +163,7 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
       }
       setImporting(false)
       abortRef.current = null
+      setPendingCoverBooks(coverSuggestions)
       await refresh()
     },
     [refresh, requestPassword],
@@ -133,6 +181,20 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
       }
     },
     [onOpen, onSessionBook, requestPassword],
+  )
+
+  const openLibraryBook = useCallback(
+    async (book: Book) => {
+      try {
+        const updated = { ...book, lastReadAt: Date.now() }
+        if (book.storage === 'session') onSessionBook(updated)
+        else await putBook(updated)
+        onOpen(updated)
+      } catch (reason) {
+        reportOperationError(reason, 'Impossibile aprire il volume')
+      }
+    },
+    [onOpen, onSessionBook, reportOperationError],
   )
 
   // Test hooks (dev / ?test): drive imports without a file picker.
@@ -154,14 +216,126 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
     if (!toDelete) return
     const book = toDelete
     setToDelete(null)
-    if (book.storage === 'session') onRemoveSessionBook(book.id)
-    await deleteBook(book)
+    try {
+      if (book.storage === 'session') onRemoveSessionBook(book.id)
+      await deleteBook(book)
+      await refresh()
+    } catch (reason) {
+      reportOperationError(reason, 'Impossibile eliminare il volume')
+    }
+  }
+
+  const createCollection = async (name: string) => {
+    try {
+      const collection: Collection = { id: newId(), name, createdAt: Date.now() }
+      await putCollection(collection)
+      setCreatingCollection(false)
+      setSelectedCollectionId(collection.id)
+      await refresh()
+    } catch (reason) {
+      setCreatingCollection(false)
+      reportOperationError(reason, 'Impossibile creare la collezione')
+    }
+  }
+
+  const confirmDeleteCollection = async () => {
+    const collection = collectionToDelete
+    if (!collection || collection.builtIn) return
+    try {
+      setCollectionToDelete(null)
+      await deleteCollection(collection.id)
+      if (selectedCollectionId === collection.id) setSelectedCollectionId(DEFAULT_COLLECTION_ID)
+      await refresh()
+    } catch (reason) {
+      reportOperationError(reason, 'Impossibile eliminare la collezione')
+    }
+  }
+
+  const saveBookEdits = async (book: Book, title: string, collectionId?: string) => {
+    try {
+      const updated = { ...book, title, collectionId }
+      if (book.storage === 'session') onSessionBook(updated)
+      else await putBook(updated)
+      setEditingBook(null)
+      await refresh()
+    } catch (reason) {
+      setEditingBook(null)
+      reportOperationError(reason, 'Impossibile salvare il volume')
+    }
+  }
+
+  const searchCoverFromEditor = async (book: Book, title: string, collectionId?: string) => {
+    try {
+      const updated = { ...book, title, collectionId }
+      if (book.storage === 'session') onSessionBook(updated)
+      else await putBook(updated)
+      setEditingBook(null)
+      setCoverBook(updated)
+      await refresh()
+    } catch (reason) {
+      setEditingBook(null)
+      reportOperationError(reason, 'Impossibile salvare il volume')
+    }
+  }
+
+  const showNextCoverSuggestion = () => {
+    const [next, ...rest] = pendingCoverBooks
+    setPendingCoverBooks(rest)
+    setCoverBook(next ?? null)
+  }
+
+  const beginCoverSuggestions = () => {
+    if (pendingCoverBooks.length === 0) return
+    try {
+      if (localStorage.getItem('reader.cover-search-consent') === 'yes') {
+        showNextCoverSuggestion()
+        return
+      }
+    } catch {
+      // Consent can still be given for this batch.
+    }
+    setCoverConsentPending(true)
+  }
+
+  const acceptCoverSuggestions = () => {
+    try {
+      localStorage.setItem('reader.cover-search-consent', 'yes')
+    } catch {
+      // This session still proceeds.
+    }
+    setCoverConsentPending(false)
+    showNextCoverSuggestion()
+  }
+
+  const declineCoverSuggestions = () => {
+    setCoverConsentPending(false)
+    setPendingCoverBooks([])
+  }
+
+  const applyCover = async (cover: Blob, signal: AbortSignal) => {
+    if (!coverBook || signal.aborted) return
+    const updated = { ...coverBook, cover, coverSource: 'remote' as const }
+    if (updated.storage === 'session') onSessionBook(updated)
+    else await putBook(updated)
+    if (signal.aborted) return
+    setCoverBook(null)
     await refresh()
+    showNextCoverSuggestion()
   }
 
   const allBooks = [...sessionBooks, ...(books ?? [])]
+  const collectionList = collectionViews(collections, allBooks)
+  const knownCollectionIds = new Set(collections.map((collection) => collection.id))
+  const visibleBooks =
+    selectedCollectionId === ALL_COLLECTION_ID
+      ? allBooks
+      : allBooks.filter((book) => effectiveCollectionId(book, knownCollectionIds) === selectedCollectionId)
+  const selectedCollectionName =
+    selectedCollectionId === ALL_COLLECTION_ID
+      ? 'Tutti i libri'
+      : collectionList.find((collection) => collection.id === selectedCollectionId)?.name ?? 'Senza collezione'
   const showInstallHint = isIOS() && !isStandalone()
-  const reading = allBooks.filter((b) => (progress.get(b.id)?.page ?? 0) > 0 && (progress.get(b.id)?.page ?? 0) < b.pageCount - 1)
+  const reading = visibleBooks.filter((b) => (progress.get(b.id)?.page ?? 0) > 0 && (progress.get(b.id)?.page ?? 0) < b.pageCount - 1)
 
   return (
     <div
@@ -177,7 +351,7 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
       onDrop={onDrop}
     >
       <header className="material hairline-b sticky top-0 z-10">
-        <div className="mx-auto flex w-full max-w-6xl items-end justify-between gap-3 px-5 pt-4 pb-2 sm:px-8">
+        <div className="mx-auto flex w-full max-w-[1400px] items-end justify-between gap-3 px-5 pt-4 pb-2 sm:px-8">
           <h1 className="text-large-title">Libreria</h1>
           <div className="flex items-center gap-1 pb-1">
             <button type="button" className="btn-plain" onClick={() => sessionInput.current?.click()} data-testid="open-session">
@@ -215,7 +389,16 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
         />
       </header>
 
-      <main className="mx-auto w-full max-w-6xl flex-1 px-5 pb-10 sm:px-8">
+      <div className="mx-auto flex w-full max-w-[1400px] flex-1 flex-col md:flex-row">
+        <CollectionSidebar
+          collections={collectionList}
+          selectedId={selectedCollectionId}
+          onSelect={setSelectedCollectionId}
+          onCreate={() => setCreatingCollection(true)}
+          onDelete={setCollectionToDelete}
+          total={allBooks.length}
+        />
+      <main className="min-w-0 flex-1 px-5 pb-10 sm:px-8">
         {updateReady && (
           <div className="mt-4 flex items-center justify-between gap-3 rounded-2xl bg-tint-soft px-4 py-3" role="status" data-testid="update-banner">
             <span className="text-subhead">Nuova versione dell’app pronta.</span>
@@ -263,25 +446,34 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
               </div>
             )}
             <section className="pt-6">
-              <p className="text-footnote text-label-2">
-                {allBooks.length === 1 ? '1 libro' : `${allBooks.length} libri`}
+              <h2 className="text-title2">{selectedCollectionName}</h2>
+              <p className="mt-1 text-footnote text-label-2">
+                {visibleBooks.length === 1 ? '1 libro' : `${visibleBooks.length} libri`}
                 {reading.length > 0 ? ` · ${reading.length} in lettura` : ''}
               </p>
-              <div className="mt-4 grid grid-cols-[repeat(auto-fill,minmax(140px,1fr))] gap-x-5 gap-y-8 sm:grid-cols-[repeat(auto-fill,minmax(160px,1fr))]">
-                {allBooks.map((book) => (
-                  <BookCard
-                    key={book.id}
-                    book={book}
-                    progress={progress.get(book.id)}
-                    onOpen={() => onOpen(book)}
-                    onDelete={() => setToDelete(book)}
-                  />
-                ))}
-              </div>
+              {visibleBooks.length === 0 ? (
+                <div className="mt-6 rounded-2xl bg-grouped px-6 py-12 text-center">
+                  <p className="text-body text-label-2">Questa collezione è vuota.</p>
+                  <p className="mt-1 text-footnote text-label-3">Modifica un volume per spostarlo qui oppure importane uno nuovo.</p>
+                </div>
+              ) : (
+                <div className="mt-4 grid grid-cols-[repeat(auto-fill,minmax(140px,1fr))] gap-x-5 gap-y-8 sm:grid-cols-[repeat(auto-fill,minmax(160px,1fr))]">
+                  {visibleBooks.map((book) => (
+                    <BookCard
+                      key={book.id}
+                      book={book}
+                      progress={progress.get(book.id)}
+                      onOpen={() => void openLibraryBook(book)}
+                      onMenu={() => setEditingBook(book)}
+                    />
+                  ))}
+                </div>
+              )}
             </section>
           </>
         )}
       </main>
+      </div>
 
       <footer className="hairline-t px-5 py-4 pb-safe text-footnote text-label-2 sm:px-8">
         <div className="mx-auto flex w-full max-w-6xl flex-wrap items-center justify-between gap-2">
@@ -305,8 +497,84 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
           items={importItems}
           running={importing}
           onCancel={() => abortRef.current?.abort()}
-          onClose={() => setImportItems(null)}
+          onClose={() => {
+            setImportItems(null)
+            if (!coverBook) beginCoverSuggestions()
+          }}
         />
+      )}
+
+      {coverConsentPending && (
+        <Dialog
+          title="Cercare copertine online?"
+          onClose={declineCoverSuggestions}
+          actions={
+            <>
+              <DialogAction primary onClick={acceptCoverSuggestions} testId="accept-cover-search">
+                Cerca online
+              </DialogAction>
+              <DialogAction onClick={declineCoverSuggestions}>Non ora</DialogAction>
+            </>
+          }
+        >
+          <p>
+            Per suggerire le copertine, l’app invierà i titoli dei volumi appena importati a Open Library. I file e le
+            pagine non vengono inviati.
+          </p>
+        </Dialog>
+      )}
+
+      {creatingCollection && (
+        <CollectionDialog
+          existingNames={['Senza collezione', 'Tutti i libri', ...collections.map((collection) => collection.name)]}
+          onSave={(name) => void createCollection(name)}
+          onCancel={() => setCreatingCollection(false)}
+        />
+      )}
+
+      {editingBook && (
+        <BookEditDialog
+          book={editingBook}
+          collections={collections}
+          onSave={(title, collectionId) => void saveBookEdits(editingBook, title, collectionId)}
+          onCoverSearch={(title, collectionId) => void searchCoverFromEditor(editingBook, title, collectionId)}
+          onDelete={() => {
+            setToDelete(editingBook)
+            setEditingBook(null)
+          }}
+          onCancel={() => setEditingBook(null)}
+        />
+      )}
+
+      {coverBook && (
+        <CoverSearchDialog
+          key={coverBook.id}
+          book={coverBook}
+          onApply={applyCover}
+          onClose={() => {
+            setCoverBook(null)
+            showNextCoverSuggestion()
+          }}
+        />
+      )}
+
+      {collectionToDelete && (
+        <Dialog
+          title="Eliminare la collezione?"
+          onClose={() => setCollectionToDelete(null)}
+          actions={
+            <>
+              <DialogAction destructive onClick={() => void confirmDeleteCollection()} testId="confirm-delete-collection">
+                Elimina collezione
+              </DialogAction>
+              <DialogAction primary onClick={() => setCollectionToDelete(null)}>
+                Annulla
+              </DialogAction>
+            </>
+          }
+        >
+          <p>“{collectionToDelete.name}” verrà eliminata. I suoi volumi torneranno in “Senza collezione”.</p>
+        </Dialog>
       )}
 
       {error && (

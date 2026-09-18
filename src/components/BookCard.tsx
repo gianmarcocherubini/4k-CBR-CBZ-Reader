@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react'
+import { useEffect, useState } from 'react'
 import { formatBytes } from '../lib/storage/opfs'
 import type { Book, Progress } from '../types'
 
@@ -6,15 +6,21 @@ interface BookCardProps {
   book: Book
   progress?: Progress
   onOpen: () => void
-  onDelete: () => void
+  onMenu: () => void
 }
 
 /** A book on the shelf: cover with a soft shadow, title, and reading progress like Apple Books. */
-export function BookCard({ book, progress, onOpen, onDelete }: BookCardProps) {
-  const coverUrl = useMemo(() => (book.cover ? URL.createObjectURL(book.cover) : null), [book.cover])
-  useEffect(() => () => {
-    if (coverUrl) URL.revokeObjectURL(coverUrl)
-  }, [coverUrl])
+export function BookCard({ book, progress, onOpen, onMenu }: BookCardProps) {
+  const [coverUrl, setCoverUrl] = useState<string | null>(null)
+  useEffect(() => {
+    if (!book.cover) {
+      setCoverUrl(null)
+      return
+    }
+    const url = URL.createObjectURL(book.cover)
+    setCoverUrl(url)
+    return () => URL.revokeObjectURL(url)
+  }, [book.cover])
 
   const page = progress?.page ?? 0
   const started = progress !== undefined && page > 0
@@ -50,8 +56,8 @@ export function BookCard({ book, progress, onOpen, onDelete }: BookCardProps) {
         </button>
         <button
           type="button"
-          onClick={onDelete}
-          aria-label={`Elimina ${book.title}`}
+          onClick={onMenu}
+          aria-label={`Modifica ${book.title}`}
           className="-mr-2 shrink-0 rounded-full p-2 text-label-3 transition-colors hover:text-label-2 active:bg-fill"
         >
           <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden>

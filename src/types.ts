@@ -24,8 +24,18 @@ export interface Book {
   lastReadAt: number
   /** Thumbnail of the first page (JPEG/WebP blob), if it could be decoded. */
   cover?: Blob
+  /** Archive thumbnails are removed for protected books; user-selected remote covers are safe to keep. */
+  coverSource?: 'archive' | 'remote'
   /** The ZIP is encrypted; its password is intentionally kept in memory only. */
   passwordProtected?: boolean
+  /** Missing means the built-in default collection. */
+  collectionId?: string
+}
+
+export interface Collection {
+  id: string
+  name: string
+  createdAt: number
 }
 
 export interface Progress {

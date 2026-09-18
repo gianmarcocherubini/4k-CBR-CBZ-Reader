@@ -48,6 +48,18 @@ segmentati e interruttori iOS, elenchi raggruppati nelle impostazioni. L'aspetto
 scuro); in **Impostazioni → Aspetto** si può forzare, e lo **sfondo di lettura** dietro le pagine può essere Default
 (grigio chiaro o nero a seconda dell'aspetto), Nero o Bianco.
 
+### Libreria, collezioni e copertine
+
+- La barra laterale raccoglie le collezioni create dall'utente; i volumi non assegnati sono in **Senza collezione**.
+  Le collezioni si riordinano in base all'ultima apertura di un loro volume e, tornando dal lettore, quella appena
+  usata viene selezionata. **Tutti i libri** mostra l'intera libreria.
+- Il pulsante `…` di un volume apre **Modifica volume**: rinomina il titolo, lo sposta in una collezione, cerca una
+  nuova copertina o lo elimina. Eliminare una collezione riporta i suoi volumi in Senza collezione.
+- Dopo un import l'app propone la ricerca copertine, ma prima chiede un consenso esplicito: invia a **Open Library**
+  soltanto il titolo ripulito, mai file o pagine. Risultati e immagini hanno limiti di byte/pixel, al massimo otto
+  anteprime (due download concorrenti), timeout e annullamento; la scelta viene normalizzata in JPEG e salvata
+  localmente. Gli ZIP protetti non vengono cercati automaticamente; la ricerca manuale resta disponibile.
+
 ## Come si usa il lettore
 
 - **Tocco ai lati**: in modalità manga (destra → sinistra) il tocco a sinistra va avanti, a destra indietro. Tocco al

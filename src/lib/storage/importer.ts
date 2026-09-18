@@ -236,6 +236,7 @@ export async function importFile(file: File, opts: ImportOptions = {}): Promise<
       addedAt: Date.now(),
       lastReadAt: 0,
       cover: info.cover,
+      coverSource: info.cover ? 'archive' : undefined,
       passwordProtected: password !== undefined,
     }
     if (stored === 'idb') await putFileAndBook(book, file)
@@ -278,6 +279,7 @@ export async function openSessionBook(file: File, opts: Pick<ImportOptions, 'req
     addedAt: Date.now(),
     lastReadAt: Date.now(),
     cover: info.cover,
+    coverSource: info.cover ? 'archive' : undefined,
     passwordProtected: password !== undefined,
   }
   if (password !== undefined) rememberArchivePassword(id, password)

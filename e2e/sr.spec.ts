@@ -16,6 +16,10 @@ async function importAndOpen(page: Page, name: string, title: string) {
   const overlay = page.getByTestId('import-overlay')
   await expect(overlay.getByText('Importazione completata')).toBeVisible({ timeout: 30_000 })
   await overlay.getByTestId('import-close').click()
+  const declineOnline = page.getByRole('button', { name: 'Non ora' })
+  if (await declineOnline.isVisible()) await declineOnline.click()
+  const keep = page.getByRole('button', { name: 'Mantieni attuale' })
+  if (await keep.isVisible()) await keep.click()
   await page.getByRole('button', { name: `Apri ${title}` }).click()
   await expect(page.getByTestId('reader')).toHaveAttribute('data-status', 'ready', { timeout: 20_000 })
 }

@@ -228,6 +228,7 @@ console.log('copied RAR error fixtures')
 
 await writeZip('protected.cbz', [{ name: 'p1.png', data: drawPage(90, '1', 400, 600) }], { password: 'segreto' })
 await writeZip('protected.zip', [{ name: 'p1.png', data: drawPage(91, '1', 400, 600) }], { password: 'segreto' })
+writeFileSync(join(outDir, 'cover.png'), drawPage(92, 'C', 400, 600))
 await writeZip('no-images.cbz', [{ name: 'readme.txt', data: 'niente immagini qui' }])
 
 const corrupt = Buffer.alloc(64 * 1024)

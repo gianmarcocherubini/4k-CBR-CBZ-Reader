@@ -1,6 +1,6 @@
 import { expect, type Page, test } from '@playwright/test'
 import { execSync } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -24,6 +24,14 @@ async function importBooks(page: Page, names: string[]) {
   await expect(overlay.getByText('Importazione completata')).toBeVisible({ timeout: 30_000 })
   const statuses = await overlay.getByTestId('import-status').allTextContents()
   await overlay.getByTestId('import-close').click()
+  const declineOnline = page.getByRole('button', { name: 'Non ora' })
+  if (await declineOnline.isVisible()) await declineOnline.click()
+  for (let i = 0; i < names.length; i++) {
+    const keep = page.getByRole('button', { name: 'Mantieni attuale' })
+    if (!(await keep.isVisible())) break
+    await keep.click()
+    await page.waitForTimeout(0)
+  }
   return statuses
 }
 
@@ -71,7 +79,12 @@ test.describe('library', () => {
   })
 
   test('imports a password-protected ZIP, retries a wrong password and keeps it in memory only', async ({ page }) => {
+    const onlineTitleRequests: string[] = []
+    page.on('request', (request) => {
+      if (request.url().startsWith('https://openlibrary.org/')) onlineTitleRequests.push(request.url())
+    })
     await page.goto('/')
+    await page.evaluate(() => localStorage.setItem('reader.cover-search-consent', 'yes'))
     await page.setInputFiles('[data-testid=import-input]', fx('protected.zip'))
     const password = page.getByTestId('password-dialog')
     await expect(password).toBeVisible()
@@ -85,6 +98,7 @@ test.describe('library', () => {
     await expect(overlay.getByText('Importazione completata')).toBeVisible({ timeout: 30_000 })
     await expect(overlay.getByTestId('import-status')).toHaveText('Importato')
     await overlay.getByTestId('import-close').click()
+    expect(onlineTitleRequests).toHaveLength(0)
     const stored = await page.evaluate(
       () =>
         new Promise<{ passwordProtected: boolean; hasPassword: boolean; hasCover: boolean }>((resolve, reject) => {
@@ -123,7 +137,8 @@ test.describe('library', () => {
     await page.goto('/')
     await importBooks(page, ['short-book.cbz'])
     await expect(page.getByTestId('book-card')).toHaveCount(1)
-    await page.getByRole('button', { name: 'Elimina short-book' }).click()
+    await page.getByRole('button', { name: 'Modifica short-book' }).click()
+    await page.getByRole('button', { name: 'Elimina' }).click()
     await page.getByTestId('confirm-delete').click()
     await expect(page.getByTestId('empty-library')).toBeVisible()
     await page.reload()
@@ -179,6 +194,224 @@ test.describe('library', () => {
     await expect(other.getByTestId('empty-library')).toBeVisible()
     await expect.poll(exists).toBe(false)
     await other.close()
+  })
+
+  test('reports a blocked v1→v2 library migration instead of loading forever', async ({ page, context }) => {
+    await page.goto('/icons/icon.svg')
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve, reject) => {
+          const remove = indexedDB.deleteDatabase('cbz-reader')
+          remove.onerror = () => reject(remove.error)
+          remove.onsuccess = () => {
+            const open = indexedDB.open('cbz-reader', 1)
+            open.onerror = () => reject(open.error)
+            open.onupgradeneeded = () => {
+              const books = open.result.createObjectStore('books', { keyPath: 'id' })
+              books.createIndex('byAdded', 'addedAt')
+              open.result.createObjectStore('progress', { keyPath: 'bookId' })
+              open.result.createObjectStore('pageSizes', { keyPath: 'bookId' })
+              open.result.createObjectStore('files', { keyPath: 'bookId' })
+            }
+            open.onsuccess = () => {
+              ;(window as unknown as { __oldReaderDb: IDBDatabase }).__oldReaderDb = open.result
+              resolve()
+            }
+          }
+        }),
+    )
+    const other = await context.newPage()
+    await other.goto('/')
+    await expect(other.getByTestId('error-message')).toContainText('altra scheda', { timeout: 12_000 })
+    await page.evaluate(() => (window as unknown as { __oldReaderDb: IDBDatabase }).__oldReaderDb.close())
+    await other.reload()
+    await expect(other.getByTestId('empty-library')).toBeVisible()
+    await other.close()
+  })
+
+  test('creates activity-sorted collections, moves and renames books, and deletes a collection', async ({ page }) => {
+    await page.goto('/')
+    await importBooks(page, ['manga-vol-01.cbz', 'short-book.cbz'])
+
+    const createCollection = async (name: string) => {
+      await page.getByTestId('new-collection').click()
+      await page.getByLabel('Nome collezione').fill(name)
+      await page.getByRole('button', { name: 'Crea' }).click()
+      await expect(page.getByRole('heading', { name })).toBeVisible()
+    }
+    await createCollection('One Piece')
+    await createCollection('Berserk')
+
+    await page.getByTestId('collection-default').click()
+    await page.getByRole('button', { name: 'Modifica manga-vol-01' }).click()
+    await page.getByTestId('book-title-input').fill('One Piece Vol. 46')
+    await page.getByTestId('book-collection-select').selectOption({ label: 'One Piece' })
+    await page.getByRole('button', { name: 'Salva' }).click()
+    await expect(page.getByRole('button', { name: 'Apri manga-vol-01' })).toHaveCount(0)
+
+    await page.getByRole('button', { name: 'Modifica short-book' }).click()
+    await page.getByTestId('book-title-input').fill('Berserk Deluxe 1')
+    await page.getByTestId('book-collection-select').selectOption({ label: 'Berserk' })
+    await page.getByRole('button', { name: 'Salva' }).click()
+
+    const onePiece = page.locator('aside').getByRole('button', { name: /One Piece/ }).first()
+    const berserk = page.locator('aside').getByRole('button', { name: /Berserk/ }).first()
+    await onePiece.click()
+    await expect(page.getByRole('button', { name: 'Apri One Piece Vol. 46' })).toBeVisible()
+    await page.getByRole('button', { name: 'Apri One Piece Vol. 46' }).click()
+    await expect(page.getByTestId('reader')).toHaveAttribute('data-status', 'ready')
+    await page.getByTestId('back').click()
+
+    // Returning from the most recently read book selects and sorts its collection first.
+    await expect(page.getByRole('heading', { name: 'One Piece' })).toBeVisible()
+    const oneBox = (await onePiece.boundingBox())!
+    const berserkBox = (await berserk.boundingBox())!
+    expect(oneBox.y).toBeLessThan(berserkBox.y)
+    await page.reload()
+    await expect(page.getByRole('heading', { name: 'One Piece' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Apri One Piece Vol. 46' })).toBeVisible()
+
+    await berserk.click()
+    await berserk.hover()
+    await page.getByRole('button', { name: 'Elimina collezione Berserk' }).click()
+    await page.getByTestId('confirm-delete-collection').click()
+    await expect(page.getByRole('heading', { name: 'Senza collezione' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Apri Berserk Deluxe 1' })).toBeVisible()
+  })
+
+  test('suggests online covers after import and stores the selected image locally', async ({ page }) => {
+    const coverPng = readFileSync(fx('cover.png'))
+    await page.route('https://openlibrary.org/search.json**', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        headers: { 'access-control-allow-origin': '*' },
+        body: JSON.stringify({ docs: [{ key: '/works/OL1W', title: 'Short Book', author_name: ['Test Author'], cover_i: 123 }] }),
+      }),
+    )
+    await page.route(/https:\/\/covers\.openlibrary\.org\/b\/id\/123-[ML]\.jpg/, (route) =>
+      route.fulfill({ status: 200, contentType: 'image/png', headers: { 'access-control-allow-origin': '*' }, body: coverPng }),
+    )
+    await page.goto('/')
+    await page.setInputFiles('[data-testid=import-input]', fx('short-book.cbz'))
+    const overlay = page.getByTestId('import-overlay')
+    await expect(overlay.getByText('Importazione completata')).toBeVisible({ timeout: 30_000 })
+    const originalSize = await page.evaluate(
+      () =>
+        new Promise<number>((resolve, reject) => {
+          const open = indexedDB.open('cbz-reader')
+          open.onerror = () => reject(open.error)
+          open.onsuccess = () => {
+            const get = open.result.transaction('books').objectStore('books').getAll()
+            get.onerror = () => reject(get.error)
+            get.onsuccess = () => resolve((get.result[0].cover as Blob).size)
+          }
+        }),
+    )
+    await overlay.getByTestId('import-close').click()
+    await expect(page.getByText(/invierà i titoli.*Open Library/)).toBeVisible()
+    await page.getByTestId('accept-cover-search').click()
+    const coverDialog = page.getByTestId('cover-search-dialog')
+    await expect(coverDialog).toBeVisible()
+    await expect(coverDialog.getByText('Short Book')).toBeVisible()
+    await coverDialog.getByTestId('cover-candidate').click()
+    await expect(coverDialog).toHaveCount(0)
+    const selectedSize = await page.evaluate(
+      () =>
+        new Promise<number>((resolve, reject) => {
+          const open = indexedDB.open('cbz-reader')
+          open.onerror = () => reject(open.error)
+          open.onsuccess = () => {
+            const get = open.result.transaction('books').objectStore('books').getAll()
+            get.onerror = () => reject(get.error)
+            get.onsuccess = () => resolve((get.result[0].cover as Blob).size)
+          }
+        }),
+    )
+    expect(selectedSize).not.toBe(originalSize)
+    await expect(page.locator('[data-testid=book-card] img')).toBeVisible()
+  })
+
+  test('canceling a cover during download cannot overwrite the current cover', async ({ page }) => {
+    const coverPng = readFileSync(fx('cover.png'))
+    await page.route('https://openlibrary.org/search.json**', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        headers: { 'access-control-allow-origin': '*' },
+        body: JSON.stringify({ docs: [{ key: '/works/OL2W', title: 'Short Book', cover_i: 456 }] }),
+      }),
+    )
+    await page.route(/https:\/\/covers\.openlibrary\.org\/b\/id\/456-[ML]\.jpg/, async (route) => {
+      if (route.request().url().endsWith('-L.jpg')) await new Promise((resolve) => setTimeout(resolve, 500))
+      await route.fulfill({ status: 200, contentType: 'image/png', headers: { 'access-control-allow-origin': '*' }, body: coverPng }).catch(() => undefined)
+    })
+    const coverSize = () =>
+      page.evaluate(
+        () =>
+          new Promise<number>((resolve, reject) => {
+            const open = indexedDB.open('cbz-reader')
+            open.onerror = () => reject(open.error)
+            open.onsuccess = () => {
+              const get = open.result.transaction('books').objectStore('books').getAll()
+              get.onerror = () => reject(get.error)
+              get.onsuccess = () => resolve((get.result[0].cover as Blob).size)
+            }
+          }),
+      )
+    await page.goto('/')
+    await page.setInputFiles('[data-testid=import-input]', fx('short-book.cbz'))
+    const overlay = page.getByTestId('import-overlay')
+    await expect(overlay.getByText('Importazione completata')).toBeVisible()
+    const before = await coverSize()
+    await overlay.getByTestId('import-close').click()
+    await page.getByTestId('accept-cover-search').click()
+    const dialog = page.getByTestId('cover-search-dialog')
+    await expect(dialog.getByTestId('cover-candidate')).toBeVisible()
+    await dialog.getByTestId('cover-candidate').click()
+    await dialog.getByRole('button', { name: 'Mantieni attuale' }).click()
+    await expect(dialog).toHaveCount(0)
+    await page.waitForTimeout(700)
+    expect(await coverSize()).toBe(before)
+  })
+
+  test('a manually selected remote cover survives for a password-protected book', async ({ page }) => {
+    const coverPng = readFileSync(fx('cover.png'))
+    await page.route('https://openlibrary.org/search.json**', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        headers: { 'access-control-allow-origin': '*' },
+        body: JSON.stringify({ docs: [{ key: '/works/OL3W', title: 'Protected Book', cover_i: 789 }] }),
+      }),
+    )
+    await page.route(/https:\/\/covers\.openlibrary\.org\/b\/id\/789-[ML]\.jpg/, (route) =>
+      route.fulfill({ status: 200, contentType: 'image/png', headers: { 'access-control-allow-origin': '*' }, body: coverPng }),
+    )
+    await page.goto('/')
+    await page.setInputFiles('[data-testid=import-input]', fx('protected.zip'))
+    await page.getByLabel('Password dell’archivio').fill('segreto')
+    await page.getByRole('button', { name: 'Sblocca' }).click()
+    const overlay = page.getByTestId('import-overlay')
+    await expect(overlay.getByText('Importazione completata')).toBeVisible()
+    await overlay.getByTestId('import-close').click()
+    await expect(page.locator('[data-testid=book-card] img')).toHaveCount(0)
+
+    await page.getByRole('button', { name: 'Modifica protected' }).click()
+    await page.getByRole('button', { name: 'Cerca copertina online' }).click()
+    const dialog = page.getByTestId('cover-search-dialog')
+    await expect(dialog.getByTestId('cover-candidate')).toBeVisible()
+    await dialog.getByTestId('cover-candidate').click()
+    await expect(dialog).toHaveCount(0)
+    await page.reload()
+    await expect(page.locator('[data-testid=book-card] img')).toBeVisible()
+
+    await page.getByRole('button', { name: 'Apri protected' }).click()
+    await page.getByLabel('Password dell’archivio').fill('segreto')
+    await page.getByRole('button', { name: 'Sblocca' }).click()
+    await expect(page.getByTestId('reader')).toHaveAttribute('data-status', 'ready')
+    await page.getByTestId('back').click()
+    await expect(page.locator('[data-testid=book-card] img')).toBeVisible()
   })
 
   test('"Apri senza importare" reads the file directly and leaves the library untouched', async ({ page }) => {
