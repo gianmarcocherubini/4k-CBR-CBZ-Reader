@@ -2,6 +2,26 @@ import type { Book, Collection } from '../types'
 
 export const DEFAULT_COLLECTION_ID = 'default'
 export const ALL_COLLECTION_ID = 'all'
+const GLYPH_IDS = new Set(['book-open', 'folder', 'star', 'flame', 'crown', 'compass', 'skull', 'swords', 'sparkles', 'palette', 'moon', 'bolt'])
+const LEGACY_ICONS: Record<string, string> = {
+  '📖': 'book-open',
+  '📚': 'book-open',
+  '🏴‍☠️': 'skull',
+  '👒': 'compass',
+  '⚔️': 'swords',
+  '🔥': 'flame',
+  '🐉': 'sparkles',
+  '⭐': 'star',
+  '🌙': 'moon',
+  '💥': 'bolt',
+  '🧭': 'compass',
+  '🎨': 'palette',
+}
+
+export function normalizeCollectionGlyph(icon?: string): string | undefined {
+  if (!icon) return undefined
+  return GLYPH_IDS.has(icon) ? icon : LEGACY_ICONS[icon]
+}
 
 export interface CollectionView {
   id: string
@@ -9,7 +29,7 @@ export interface CollectionView {
   count: number
   lastActivity: number
   builtIn: boolean
-  icon: string
+  icon?: string
   iconImage?: Blob
 }
 
@@ -21,14 +41,14 @@ export function effectiveCollectionId(book: Book, knownIds: ReadonlySet<string>)
 export function collectionViews(collections: readonly Collection[], books: readonly Book[]): CollectionView[] {
   const known = new Set(collections.map((collection) => collection.id))
   const views: CollectionView[] = [
-    { id: DEFAULT_COLLECTION_ID, name: 'Senza collezione', count: 0, lastActivity: 0, builtIn: true, icon: '📚' },
+    { id: DEFAULT_COLLECTION_ID, name: 'Senza collezione', count: 0, lastActivity: 0, builtIn: true },
     ...collections.map((collection) => ({
       id: collection.id,
       name: collection.name,
       count: 0,
       lastActivity: collection.createdAt,
       builtIn: false,
-      icon: collection.icon ?? '📖',
+      icon: normalizeCollectionGlyph(collection.icon),
       iconImage: collection.iconImage,
     })),
   ]

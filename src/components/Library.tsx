@@ -59,6 +59,7 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
   const [coverConsentPending, setCoverConsentPending] = useState(false)
   const [creatingCollection, setCreatingCollection] = useState(false)
   const [editingCollection, setEditingCollection] = useState<Collection | null>(null)
+  const [collectionMenu, setCollectionMenu] = useState<CollectionView | null>(null)
   const [collectionToDelete, setCollectionToDelete] = useState<CollectionView | null>(null)
   const abortRef = useRef<AbortController | null>(null)
   const importInput = useRef<HTMLInputElement>(null)
@@ -227,7 +228,7 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
     }
   }
 
-  const createCollection = async (name: string, icon: string, iconImage?: Blob) => {
+  const createCollection = async (name: string, icon?: string, iconImage?: Blob) => {
     try {
       const collection: Collection = { id: newId(), name, createdAt: Date.now(), icon, iconImage }
       await putCollection(collection)
@@ -240,7 +241,7 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
     }
   }
 
-  const updateCollection = async (collection: Collection, name: string, icon: string, iconImage?: Blob) => {
+  const updateCollection = async (collection: Collection, name: string, icon?: string, iconImage?: Blob) => {
     try {
       await putCollection({ ...collection, name, icon, iconImage })
       setEditingCollection(null)
@@ -408,8 +409,7 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
           selectedId={selectedCollectionId}
           onSelect={setSelectedCollectionId}
           onCreate={() => setCreatingCollection(true)}
-          onEdit={(view) => setEditingCollection(collections.find((collection) => collection.id === view.id) ?? null)}
-          onDelete={setCollectionToDelete}
+          onMenu={setCollectionMenu}
           total={allBooks.length}
         />
       <main className="min-w-0 flex-1 px-5 pb-10 sm:px-8">
@@ -583,6 +583,38 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
             showNextCoverSuggestion()
           }}
         />
+      )}
+
+      {collectionMenu && (
+        <Dialog
+          title={collectionMenu.name}
+          onClose={() => setCollectionMenu(null)}
+          actions={
+            <>
+              <DialogAction
+                primary
+                onClick={() => {
+                  setEditingCollection(collections.find((collection) => collection.id === collectionMenu.id) ?? null)
+                  setCollectionMenu(null)
+                }}
+              >
+                Modifica collezione
+              </DialogAction>
+              <DialogAction
+                destructive
+                onClick={() => {
+                  setCollectionToDelete(collectionMenu)
+                  setCollectionMenu(null)
+                }}
+              >
+                Elimina collezione
+              </DialogAction>
+              <DialogAction onClick={() => setCollectionMenu(null)}>Annulla</DialogAction>
+            </>
+          }
+        >
+          <p>Scegli come gestire questa collezione.</p>
+        </Dialog>
       )}
 
       {collectionToDelete && (

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Book, Collection } from '../types'
-import { collectionViews, DEFAULT_COLLECTION_ID, mostRecentCollectionId } from './collections'
+import { collectionViews, DEFAULT_COLLECTION_ID, mostRecentCollectionId, normalizeCollectionGlyph } from './collections'
 
 const book = (id: string, collectionId: string | undefined, lastReadAt: number): Book => ({
   id,
@@ -38,5 +38,12 @@ describe('collections', () => {
   it('selects the collection of the most recently opened book', () => {
     expect(mostRecentCollectionId(collections, [book('op', 'one-piece', 100), book('b', 'berserk', 200)])).toBe('berserk')
     expect(mostRecentCollectionId(collections, [book('new', undefined, 0)])).toBe(DEFAULT_COLLECTION_ID)
+  })
+
+  it('maps the old emoji choices to the modern monochrome set and keeps no-icon empty', () => {
+    expect(normalizeCollectionGlyph('🏴‍☠️')).toBe('skull')
+    expect(normalizeCollectionGlyph('📖')).toBe('book-open')
+    expect(normalizeCollectionGlyph(undefined)).toBeUndefined()
+    expect(normalizeCollectionGlyph('unknown')).toBeUndefined()
   })
 })

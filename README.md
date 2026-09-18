@@ -53,9 +53,10 @@ scuro); in **Impostazioni → Aspetto** si può forzare, e lo **sfondo di lettur
 - La barra laterale raccoglie le collezioni create dall'utente; i volumi non assegnati sono in **Senza collezione**.
   Le collezioni si riordinano in base all'ultima apertura di un loro volume e, tornando dal lettore, quella appena
   usata viene selezionata. **Tutti i libri** mostra l'intera libreria.
-- Ogni collezione può avere un'emoji o un'immagine locale. **Cerca su SoftIcons** apre la ricerca con il nome della
-  collezione (SoftIcons non offre API/CORS): si scarica un PNG rispettando la licenza indicata e lo si carica nel
-  dialogo; viene validato, ridotto a 128×128 e salvato solo nel database locale.
+- Ogni collezione può non avere icona, usare una delle icone SVG monocromatiche integrate o un'immagine locale.
+  La ricerca **Iconify** è incorporata nel dialogo (set moderni Lucide, Tabler, Phosphor e Material): non si lascia
+  l'app; l'SVG scelto viene validato e copiato nel database locale. Un PNG/JPEG personale viene limitato a 2 MB /
+  4 MP, ridotto a 128×128 e salvato localmente. “Tutti i libri” usa un'icona libreria dedicata.
 - Il pulsante `…` di un volume apre **Modifica volume**: rinomina il titolo, lo sposta in una collezione, cerca una
   nuova copertina o lo elimina. Eliminare una collezione riporta i suoi volumi in Senza collezione.
 - Dopo un import l'app propone la ricerca copertine, ma prima chiede un consenso esplicito: invia a **Open Library**

@@ -1,5 +1,6 @@
 import { type DBSchema, type IDBPDatabase, openDB } from 'idb'
 import type { Book, Collection, PageSize, Progress } from '../../types'
+import { normalizeCollectionGlyph } from '../collections'
 
 interface ReaderDB extends DBSchema {
   books: {
@@ -124,7 +125,17 @@ export async function putBook(book: Book): Promise<void> {
 }
 
 export async function listCollections(): Promise<Collection[]> {
-  return (await getDB()).getAllFromIndex('collections', 'byCreated')
+  const db = await getDB()
+  const collections = await db.getAllFromIndex('collections', 'byCreated')
+  return Promise.all(
+    collections.map(async (collection) => {
+      const icon = normalizeCollectionGlyph(collection.icon)
+      if (icon === collection.icon) return collection
+      const migrated = { ...collection, icon }
+      await db.put('collections', migrated)
+      return migrated
+    }),
+  )
 }
 
 export async function putCollection(collection: Collection): Promise<void> {

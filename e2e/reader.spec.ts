@@ -230,23 +230,43 @@ test.describe('library', () => {
   })
 
   test('creates activity-sorted collections, moves and renames books, and deletes a collection', async ({ page }) => {
+    const iconSvg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="#f28c1e" d="M4 4h16v16H4z"/></svg>'
+    await page.route('https://api.iconify.design/search**', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        headers: { 'access-control-allow-origin': '*' },
+        body: JSON.stringify({
+          icons: ['lucide:skull'],
+          collections: { lucide: { license: { title: 'ISC' } } },
+        }),
+      }),
+    )
+    await page.route('https://api.iconify.design/lucide/skull.svg**', (route) =>
+      route.fulfill({ status: 200, contentType: 'image/svg+xml', headers: { 'access-control-allow-origin': '*' }, body: iconSvg }),
+    )
     await page.goto('/')
     await importBooks(page, ['manga-vol-01.cbz', 'short-book.cbz'])
 
-    const createCollection = async (name: string, icon?: string) => {
+    const createCollection = async (name: string) => {
       await page.getByTestId('new-collection').click()
       await page.getByLabel('Nome collezione').fill(name)
-      if (icon) await page.getByRole('button', { name: `Icona ${icon}` }).click()
       await page.getByRole('button', { name: 'Crea' }).click()
       await expect(page.getByRole('heading', { name })).toBeVisible()
     }
-    await createCollection('One Piece', '🏴‍☠️')
+    await createCollection('One Piece')
     await createCollection('Berserk')
 
-    await page.getByRole('button', { name: 'Modifica collezione One Piece' }).click()
+    const onePieceNav = page.locator('aside').getByRole('button', { name: /One Piece/ }).first()
+    await expect(onePieceNav.locator('img, svg')).toHaveCount(0)
+    await expect(page.getByTestId('collection-all').locator('svg')).toBeVisible()
+    await page.getByRole('button', { name: 'Azioni collezione One Piece' }).click()
+    await page.getByRole('button', { name: 'Modifica collezione' }).click()
     const collectionDialog = page.getByRole('dialog', { name: 'Modifica collezione' })
-    await expect(collectionDialog.getByRole('link', { name: /SoftIcons/ })).toHaveAttribute('href', /search=One%20Piece/)
-    await collectionDialog.getByTestId('collection-icon-input').setInputFiles(fx('cover.png'))
+    await expect(collectionDialog.getByRole('button', { name: 'Nessuna icona' })).toHaveAttribute('aria-pressed', 'true')
+    await collectionDialog.getByLabel('Cerca icone online').fill('pirate')
+    await collectionDialog.getByRole('button', { name: 'Cerca' }).click()
+    await collectionDialog.getByRole('button', { name: 'Scegli icona skull' }).click()
     await expect(collectionDialog.locator('img')).toBeVisible()
     await collectionDialog.getByRole('button', { name: 'Salva' }).click()
     await expect(page.locator('aside').getByRole('button', { name: /One Piece/ }).first().locator('img')).toBeVisible()
@@ -281,11 +301,39 @@ test.describe('library', () => {
     await expect(page.getByRole('button', { name: 'Apri One Piece Vol. 46' })).toBeVisible()
 
     await berserk.click()
-    await berserk.hover()
-    await page.getByRole('button', { name: 'Elimina collezione Berserk' }).click()
+    await page.getByRole('button', { name: 'Azioni collezione Berserk' }).click()
+    await page.getByRole('button', { name: 'Elimina collezione' }).click()
     await page.getByTestId('confirm-delete-collection').click()
     await expect(page.getByRole('heading', { name: 'Senza collezione' })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Apri Berserk Deluxe 1' })).toBeVisible()
+  })
+
+  test('rejects active SVG content returned by online icon search', async ({ page }) => {
+    await page.route('https://api.iconify.design/search**', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        headers: { 'access-control-allow-origin': '*' },
+        body: JSON.stringify({ icons: ['lucide:bad-icon'], collections: {} }),
+      }),
+    )
+    await page.route('https://api.iconify.design/lucide/bad-icon.svg**', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'image/svg+xml',
+        headers: { 'access-control-allow-origin': '*' },
+        body: '<svg xmlns="http://www.w3.org/2000/svg" xmlns:s="urn:bad"><s:script>alert(1)</s:script><path d="M0 0h1v1z"/></svg>',
+      }),
+    )
+    await page.goto('/')
+    await page.getByTestId('new-collection').click()
+    const dialog = page.getByRole('dialog', { name: 'Nuova collezione' })
+    await dialog.getByLabel('Nome collezione').fill('Unsafe')
+    await dialog.getByLabel('Cerca icone online').fill('bad')
+    await dialog.getByRole('button', { name: 'Cerca' }).click()
+    await dialog.getByRole('button', { name: 'Scegli icona bad icon' }).click()
+    await expect(dialog.getByText(/elementi non ammessi/)).toBeVisible()
+    await expect(dialog.getByRole('button', { name: 'Nessuna icona' })).toHaveAttribute('aria-pressed', 'true')
   })
 
   test('suggests online covers after import and stores the selected image locally', async ({ page }) => {
