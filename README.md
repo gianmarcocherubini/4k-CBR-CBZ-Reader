@@ -59,11 +59,13 @@ scuro); in **Impostazioni → Aspetto** si può forzare, e lo **sfondo di lettur
   4 MP, ridotto a 128×128 e salvato localmente. “Tutti i libri” usa un'icona libreria dedicata.
 - Il pulsante `…` di un volume apre **Modifica volume**: rinomina il titolo, lo sposta in una collezione, cerca una
   nuova copertina o lo elimina. Eliminare una collezione riporta i suoi volumi in Senza collezione.
-- Dopo un import l'app propone la ricerca copertine, ma prima chiede un consenso esplicito: invia a **Open Library**
-  soltanto il titolo ripulito e, se non risponde o non trova risultati, usa **AniList** per proporre almeno la
-  copertina ufficiale della serie manga. Mai file o pagine. Risultati e immagini hanno limiti di byte/pixel, al massimo otto anteprime
-  (due download concorrenti), timeout e annullamento; la scelta viene normalizzata in JPEG e salvata localmente. Gli
-  ZIP protetti non vengono cercati automaticamente; la ricerca manuale resta disponibile.
+- Dopo un import l'app propone la ricerca copertine, ma prima chiede un consenso esplicito: interroga insieme **Open
+  Library** (edizioni/volumi) e **AniList** (copertina della serie manga), inviando soltanto il titolo ripulito, mai
+  file o pagine. I redirect delle immagini Open Library non sono compatibili CORS, quindi vengono scaricati tramite
+  `images.weserv.nl`; le immagini AniList arrivano direttamente dalla CDN CORS. Risultati e immagini hanno limiti di
+  byte/pixel, al massimo otto anteprime (due download concorrenti), timeout e annullamento; la scelta viene
+  normalizzata in JPEG e salvata localmente. Gli ZIP protetti non vengono cercati automaticamente; la ricerca manuale
+  resta disponibile.
 
 ## Come si usa il lettore
 

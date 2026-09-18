@@ -34,7 +34,7 @@ declare global {
 }
 
 const ACCEPT = isIOS() ? undefined : '.cbz,.cbr,.zip,.rar,application/zip,application/vnd.rar,application/x-rar-compressed'
-const COVER_CONSENT_KEY = 'reader.cover-search-consent-v3'
+const COVER_CONSENT_KEY = 'reader.cover-search-consent-v4'
 
 const PlusIcon = (
   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden>
@@ -532,8 +532,9 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
           }
         >
           <p>
-            Per suggerire le copertine, l’app invierà i titoli dei volumi appena importati a Open Library e, se il
-            servizio non risponde o non trova risultati, ad AniList. I file e le pagine non vengono inviati.
+            Per suggerire più alternative, l’app invierà i titoli dei volumi appena importati a Open Library e
+            AniList. Le immagini di Open Library vengono scaricate tramite il proxy CORS images.weserv.nl. I file e
+            le pagine non vengono inviati.
           </p>
         </Dialog>
       )}

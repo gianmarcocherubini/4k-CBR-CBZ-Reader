@@ -121,7 +121,7 @@ export function CoverSearchDialog({ book, onApply, onClose }: CoverSearchDialogP
           <div className="flex items-center justify-between gap-3">
             <div>
               <h2 id="cover-search-title" className="text-headline">Scegli una copertina</h2>
-              <p className="mt-0.5 text-footnote text-label-2">Open Library · fallback AniList</p>
+              <p className="mt-0.5 text-footnote text-label-2">Open Library + AniList</p>
             </div>
             <button type="button" className="btn-plain -mr-2" onClick={close}>Mantieni attuale</button>
           </div>

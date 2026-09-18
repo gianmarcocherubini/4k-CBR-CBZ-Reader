@@ -81,10 +81,10 @@ test.describe('library', () => {
   test('imports a password-protected ZIP, retries a wrong password and keeps it in memory only', async ({ page }) => {
     const onlineTitleRequests: string[] = []
     page.on('request', (request) => {
-      if (request.url().startsWith('https://openlibrary.org/')) onlineTitleRequests.push(request.url())
+      if (request.url().startsWith('https://openlibrary.org/') || request.url().startsWith('https://graphql.anilist.co/')) onlineTitleRequests.push(request.url())
     })
     await page.goto('/')
-    await page.evaluate(() => localStorage.setItem('reader.cover-search-consent-v3', 'yes'))
+    await page.evaluate(() => localStorage.setItem('reader.cover-search-consent-v4', 'yes'))
     await page.setInputFiles('[data-testid=import-input]', fx('protected.zip'))
     const password = page.getByTestId('password-dialog')
     await expect(password).toBeVisible()
@@ -346,7 +346,10 @@ test.describe('library', () => {
         body: JSON.stringify({ docs: [{ key: '/works/OL1W', title: 'Short Book', author_name: ['Test Author'], cover_i: 123 }] }),
       }),
     )
-    await page.route(/https:\/\/covers\.openlibrary\.org\/b\/id\/123-[ML]\.jpg/, (route) =>
+    await page.route('https://graphql.anilist.co/**', (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: '{"data":{"Page":{"media":[]}}}' }),
+    )
+    await page.route('https://images.weserv.nl/**', (route) =>
       route.fulfill({ status: 200, contentType: 'image/png', headers: { 'access-control-allow-origin': '*' }, body: coverPng }),
     )
     await page.goto('/')
@@ -443,8 +446,11 @@ test.describe('library', () => {
         body: JSON.stringify({ docs: [{ key: '/works/OL2W', title: 'Short Book', cover_i: 456 }] }),
       }),
     )
-    await page.route(/https:\/\/covers\.openlibrary\.org\/b\/id\/456-[ML]\.jpg/, async (route) => {
-      if (route.request().url().endsWith('-L.jpg')) await new Promise((resolve) => setTimeout(resolve, 500))
+    await page.route('https://graphql.anilist.co/**', (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: '{"data":{"Page":{"media":[]}}}' }),
+    )
+    await page.route('https://images.weserv.nl/**', async (route) => {
+      if (new URL(route.request().url()).searchParams.get('w') === '960') await new Promise((resolve) => setTimeout(resolve, 500))
       await route.fulfill({ status: 200, contentType: 'image/png', headers: { 'access-control-allow-origin': '*' }, body: coverPng }).catch(() => undefined)
     })
     const coverSize = () =>
@@ -486,7 +492,10 @@ test.describe('library', () => {
         body: JSON.stringify({ docs: [{ key: '/works/OL3W', title: 'Protected Book', cover_i: 789 }] }),
       }),
     )
-    await page.route(/https:\/\/covers\.openlibrary\.org\/b\/id\/789-[ML]\.jpg/, (route) =>
+    await page.route('https://graphql.anilist.co/**', (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: '{"data":{"Page":{"media":[]}}}' }),
+    )
+    await page.route('https://images.weserv.nl/**', (route) =>
       route.fulfill({ status: 200, contentType: 'image/png', headers: { 'access-control-allow-origin': '*' }, body: coverPng }),
     )
     await page.goto('/')

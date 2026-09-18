@@ -84,6 +84,18 @@ function relevantTitle(query: string, title: string): boolean {
   return textWords.filter((word) => actual.has(word)).length >= Math.max(1, Math.ceil(textWords.length * 0.7)) && numbers.every((number) => actual.has(number))
 }
 
+function proxiedOpenLibraryCover(coverId: number, size: 'M' | 'L', width: number): string {
+  const source = new URL(`https://covers.openlibrary.org/b/id/${coverId}-${size}.jpg`)
+  source.searchParams.set('default', 'false')
+  const proxy = new URL('https://images.weserv.nl/')
+  // Full HTTPS URL is intentional; stripping the scheme makes weserv use HTTP upstream.
+  proxy.searchParams.set('url', source.href)
+  proxy.searchParams.set('w', String(width))
+  proxy.searchParams.set('fit', 'contain')
+  proxy.searchParams.set('output', 'jpg')
+  return proxy.href
+}
+
 async function searchOpenLibrary(cleaned: string, signal?: AbortSignal): Promise<CoverCandidate[]> {
   const url = new URL('https://openlibrary.org/search.json')
   // The general query understands volume numbers ("One Piece Volume 46"); `title=` often returns
@@ -122,11 +134,11 @@ async function searchOpenLibrary(cleaned: string, signal?: AbortSignal): Promise
       title: title.trim(),
       author: authors.length ? authors.join(', ') : undefined,
       year,
-      imageUrl: `https://covers.openlibrary.org/b/id/${coverId}-L.jpg`,
-      previewUrl: `https://covers.openlibrary.org/b/id/${coverId}-M.jpg`,
+      imageUrl: proxiedOpenLibraryCover(coverId as number, 'L', 960),
+      previewUrl: proxiedOpenLibraryCover(coverId as number, 'M', 320),
       source: 'Open Library',
     })
-    if (results.length === 8) break
+    if (results.length === 5) break
   }
   return results
 }
@@ -208,24 +220,29 @@ async function searchAniList(cleaned: string, signal?: AbortSignal): Promise<Cov
 export async function searchCovers(query: string, signal?: AbortSignal): Promise<CoverCandidate[]> {
   const cleaned = coverQueryFromTitle(query)
   if (!cleaned) return []
-  let openLibraryError: unknown
-  try {
-    const openLibrary = await searchOpenLibrary(cleaned, signal)
-    if (openLibrary.length > 0) return openLibrary
-  } catch (error) {
-    openLibraryError = error
+  const [openLibrary, aniList] = await Promise.allSettled([searchOpenLibrary(cleaned, signal), searchAniList(cleaned, signal)])
+  if (signal?.aborted) throw new DOMException('Annullato', 'AbortError')
+  if (openLibrary.status === 'rejected' && aniList.status === 'rejected') {
+    throw new Error(`${String((openLibrary.reason as Error)?.message ?? openLibrary.reason)}; ${String((aniList.reason as Error)?.message ?? aniList.reason)}`)
   }
-  try {
-    return await searchAniList(cleaned, signal)
-  } catch (aniListError) {
-    if (openLibraryError instanceof Error) throw new Error(`${openLibraryError.message}; ${(aniListError as Error).message}`)
-    throw aniListError
-  }
+  const combined = [
+    ...(openLibrary.status === 'fulfilled' ? openLibrary.value.slice(0, 5) : []),
+    ...(aniList.status === 'fulfilled' ? aniList.value.slice(0, 3) : []),
+  ]
+  const seen = new Set<string>()
+  return combined.filter((candidate) => {
+    const key = `${candidate.source}:${candidate.id}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
 }
 
 async function downloadAndNormalise(url: string, maxBytes: number, maxPixels: number, width: number, signal?: AbortSignal): Promise<Blob> {
-  const response = await fetch(url, { signal, mode: 'cors', referrerPolicy: 'no-referrer' })
+  const response = await fetch(url, { signal, mode: 'cors', credentials: 'omit', referrerPolicy: 'no-referrer' })
   if (!response.ok) throw new Error(`Copertina: HTTP ${response.status}`)
+  const final = new URL(response.url)
+  if (!['https://images.weserv.nl', 'https://s4.anilist.co'].includes(final.origin)) throw new Error('Copertina da origine non autorizzata')
   const bytes = await readBounded(response, maxBytes, signal)
   const type = response.headers.get('content-type')?.split(';')[0] ?? ''
   if (type && !type.startsWith('image/')) throw new Error('Risposta non valida')

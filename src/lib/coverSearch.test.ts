@@ -23,17 +23,11 @@ describe('coverQueryFromTitle', () => {
         ),
       ),
     )
-    await expect(searchCovers('book')).resolves.toEqual([
-      {
-        id: '/works/ok',
-        title: 'Valid Book',
-        author: 'Author',
-        year: 2020,
-        imageUrl: 'https://covers.openlibrary.org/b/id/123-L.jpg',
-        previewUrl: 'https://covers.openlibrary.org/b/id/123-M.jpg',
-        source: 'Open Library',
-      },
-    ])
+    const results = await searchCovers('book')
+    expect(results).toHaveLength(1)
+    expect(results[0]).toMatchObject({ id: '/works/ok', title: 'Valid Book', author: 'Author', year: 2020, source: 'Open Library' })
+    expect(results[0]!.imageUrl).toMatch(/^https:\/\/images\.weserv\.nl\//)
+    expect(new URL(results[0]!.imageUrl).searchParams.get('url')).toBe('https://covers.openlibrary.org/b/id/123-L.jpg?default=false')
   })
 
   it('rejects an oversized JSON response before parsing it', async () => {
@@ -41,7 +35,7 @@ describe('coverQueryFromTitle', () => {
     await expect(searchCovers('book')).rejects.toThrow(/troppo grande/)
   })
 
-  it('falls back to AniList when Open Library has no volume', async () => {
+  it('includes AniList when Open Library has no volume', async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ docs: [] }), { status: 200 }))
