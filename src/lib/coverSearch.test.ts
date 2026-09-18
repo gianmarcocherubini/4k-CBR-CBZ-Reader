@@ -31,6 +31,7 @@ describe('coverQueryFromTitle', () => {
         year: 2020,
         imageUrl: 'https://covers.openlibrary.org/b/id/123-L.jpg',
         previewUrl: 'https://covers.openlibrary.org/b/id/123-M.jpg',
+        source: 'Open Library',
       },
     ])
   })
@@ -38,5 +39,44 @@ describe('coverQueryFromTitle', () => {
   it('rejects an oversized JSON response before parsing it', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(new Uint8Array(1024 * 1024 + 1), { status: 200 })))
     await expect(searchCovers('book')).rejects.toThrow(/troppo grande/)
+  })
+
+  it('falls back to AniList when Open Library has no volume', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ docs: [] }), { status: 200 }))
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            data: {
+              Page: {
+                media: [
+                  {
+                    id: 30013,
+                    title: { english: 'Missing Series', romaji: 'Missing Series' },
+                    coverImage: {
+                      extraLarge: 'https://s4.anilist.co/file/anilistcdn/media/manga/cover/large/test.jpg',
+                      large: 'https://s4.anilist.co/file/anilistcdn/media/manga/cover/medium/test.jpg',
+                    },
+                    startDate: { year: 2024 },
+                  },
+                ],
+              },
+            },
+          }),
+          { status: 200 },
+        ),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+    const results = await searchCovers('Missing Series Volume 46')
+    expect(results).toHaveLength(1)
+    expect(results[0]).toMatchObject({
+      id: 'anilist:30013',
+      title: 'Missing Series · serie (ricerca Vol. 46)',
+      source: 'AniList',
+      year: 2024,
+    })
+    expect(results[0]!.imageUrl).toContain('s4.anilist.co/file/anilistcdn/media/manga/cover/')
+    expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 })

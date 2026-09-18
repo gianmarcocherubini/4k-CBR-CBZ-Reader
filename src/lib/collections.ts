@@ -9,6 +9,8 @@ export interface CollectionView {
   count: number
   lastActivity: number
   builtIn: boolean
+  icon: string
+  iconImage?: Blob
 }
 
 export function effectiveCollectionId(book: Book, knownIds: ReadonlySet<string>): string {
@@ -19,13 +21,15 @@ export function effectiveCollectionId(book: Book, knownIds: ReadonlySet<string>)
 export function collectionViews(collections: readonly Collection[], books: readonly Book[]): CollectionView[] {
   const known = new Set(collections.map((collection) => collection.id))
   const views: CollectionView[] = [
-    { id: DEFAULT_COLLECTION_ID, name: 'Senza collezione', count: 0, lastActivity: 0, builtIn: true },
+    { id: DEFAULT_COLLECTION_ID, name: 'Senza collezione', count: 0, lastActivity: 0, builtIn: true, icon: '📚' },
     ...collections.map((collection) => ({
       id: collection.id,
       name: collection.name,
       count: 0,
       lastActivity: collection.createdAt,
       builtIn: false,
+      icon: collection.icon ?? '📖',
+      iconImage: collection.iconImage,
     })),
   ]
   const byId = new Map(views.map((view) => [view.id, view]))

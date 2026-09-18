@@ -121,7 +121,7 @@ export function CoverSearchDialog({ book, onApply, onClose }: CoverSearchDialogP
           <div className="flex items-center justify-between gap-3">
             <div>
               <h2 id="cover-search-title" className="text-headline">Scegli una copertina</h2>
-              <p className="mt-0.5 text-footnote text-label-2">Risultati online da Open Library</p>
+              <p className="mt-0.5 text-footnote text-label-2">Open Library · fallback AniList</p>
             </div>
             <button type="button" className="btn-plain -mr-2" onClick={close}>Mantieni attuale</button>
           </div>
@@ -149,7 +149,9 @@ export function CoverSearchDialog({ book, onApply, onClose }: CoverSearchDialogP
                     {applying === candidate.id && <div className="absolute inset-0 flex items-center justify-center bg-black/30"><div className="spinner" /></div>}
                   </div>
                   <p className="mt-2 line-clamp-2 text-caption font-semibold text-label">{candidate.title}</p>
-                  <p className="truncate text-[11px] text-label-2">{candidate.author ?? candidate.year ?? ''}</p>
+                  <p className="truncate text-[11px] text-label-2">
+                    {candidate.source} · {candidate.author ?? candidate.year ?? ''}
+                  </p>
                 </button>
               ))}
             </div>

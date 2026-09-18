@@ -84,7 +84,7 @@ test.describe('library', () => {
       if (request.url().startsWith('https://openlibrary.org/')) onlineTitleRequests.push(request.url())
     })
     await page.goto('/')
-    await page.evaluate(() => localStorage.setItem('reader.cover-search-consent', 'yes'))
+    await page.evaluate(() => localStorage.setItem('reader.cover-search-consent-v3', 'yes'))
     await page.setInputFiles('[data-testid=import-input]', fx('protected.zip'))
     const password = page.getByTestId('password-dialog')
     await expect(password).toBeVisible()
@@ -233,14 +233,23 @@ test.describe('library', () => {
     await page.goto('/')
     await importBooks(page, ['manga-vol-01.cbz', 'short-book.cbz'])
 
-    const createCollection = async (name: string) => {
+    const createCollection = async (name: string, icon?: string) => {
       await page.getByTestId('new-collection').click()
       await page.getByLabel('Nome collezione').fill(name)
+      if (icon) await page.getByRole('button', { name: `Icona ${icon}` }).click()
       await page.getByRole('button', { name: 'Crea' }).click()
       await expect(page.getByRole('heading', { name })).toBeVisible()
     }
-    await createCollection('One Piece')
+    await createCollection('One Piece', '🏴‍☠️')
     await createCollection('Berserk')
+
+    await page.getByRole('button', { name: 'Modifica collezione One Piece' }).click()
+    const collectionDialog = page.getByRole('dialog', { name: 'Modifica collezione' })
+    await expect(collectionDialog.getByRole('link', { name: /SoftIcons/ })).toHaveAttribute('href', /search=One%20Piece/)
+    await collectionDialog.getByTestId('collection-icon-input').setInputFiles(fx('cover.png'))
+    await expect(collectionDialog.locator('img')).toBeVisible()
+    await collectionDialog.getByRole('button', { name: 'Salva' }).click()
+    await expect(page.locator('aside').getByRole('button', { name: /One Piece/ }).first().locator('img')).toBeVisible()
 
     await page.getByTestId('collection-default').click()
     await page.getByRole('button', { name: 'Modifica manga-vol-01' }).click()
@@ -330,6 +339,50 @@ test.describe('library', () => {
     )
     expect(selectedSize).not.toBe(originalSize)
     await expect(page.locator('[data-testid=book-card] img')).toBeVisible()
+  })
+
+  test('falls back to AniList when Open Library has no volume', async ({ page }) => {
+    const coverPng = readFileSync(fx('cover.png'))
+    await page.route('https://openlibrary.org/search.json**', (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: '{"docs":[]}' }),
+    )
+    await page.route('https://graphql.anilist.co/**', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        headers: { 'access-control-allow-origin': '*' },
+        body: JSON.stringify({
+          data: {
+            Page: {
+              media: [
+                {
+                  id: 30013,
+                  title: { english: 'AniList-only Series' },
+                  coverImage: {
+                    extraLarge: 'https://s4.anilist.co/file/anilistcdn/media/manga/cover/large/test.jpg',
+                    large: 'https://s4.anilist.co/file/anilistcdn/media/manga/cover/medium/test.jpg',
+                  },
+                },
+              ],
+            },
+          },
+        }),
+      }),
+    )
+    await page.route('https://s4.anilist.co/file/anilistcdn/media/manga/cover/**', (route) =>
+      route.fulfill({ status: 200, contentType: 'image/png', headers: { 'access-control-allow-origin': '*' }, body: coverPng }),
+    )
+    await page.goto('/')
+    await page.setInputFiles('[data-testid=import-input]', fx('short-book.cbz'))
+    const overlay = page.getByTestId('import-overlay')
+    await expect(overlay.getByText('Importazione completata')).toBeVisible()
+    await overlay.getByTestId('import-close').click()
+    await page.getByTestId('accept-cover-search').click()
+    const dialog = page.getByTestId('cover-search-dialog')
+    await expect(dialog.getByText(/AniList-only Series/)).toBeVisible()
+    await expect(dialog.getByText(/AniList/).last()).toBeVisible()
+    await dialog.getByTestId('cover-candidate').click()
+    await expect(dialog).toHaveCount(0)
   })
 
   test('canceling a cover during download cannot overwrite the current cover', async ({ page }) => {

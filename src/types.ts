@@ -36,6 +36,10 @@ export interface Collection {
   id: string
   name: string
   createdAt: number
+  /** Built-in emoji fallback. */
+  icon?: string
+  /** Optional user-selected PNG stored locally. */
+  iconImage?: Blob
 }
 
 export interface Progress {

@@ -34,6 +34,7 @@ declare global {
 }
 
 const ACCEPT = isIOS() ? undefined : '.cbz,.cbr,.zip,.rar,application/zip,application/vnd.rar,application/x-rar-compressed'
+const COVER_CONSENT_KEY = 'reader.cover-search-consent-v3'
 
 const PlusIcon = (
   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden>
@@ -57,6 +58,7 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
   const [pendingCoverBooks, setPendingCoverBooks] = useState<Book[]>([])
   const [coverConsentPending, setCoverConsentPending] = useState(false)
   const [creatingCollection, setCreatingCollection] = useState(false)
+  const [editingCollection, setEditingCollection] = useState<Collection | null>(null)
   const [collectionToDelete, setCollectionToDelete] = useState<CollectionView | null>(null)
   const abortRef = useRef<AbortController | null>(null)
   const importInput = useRef<HTMLInputElement>(null)
@@ -225,9 +227,9 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
     }
   }
 
-  const createCollection = async (name: string) => {
+  const createCollection = async (name: string, icon: string, iconImage?: Blob) => {
     try {
-      const collection: Collection = { id: newId(), name, createdAt: Date.now() }
+      const collection: Collection = { id: newId(), name, createdAt: Date.now(), icon, iconImage }
       await putCollection(collection)
       setCreatingCollection(false)
       setSelectedCollectionId(collection.id)
@@ -235,6 +237,17 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
     } catch (reason) {
       setCreatingCollection(false)
       reportOperationError(reason, 'Impossibile creare la collezione')
+    }
+  }
+
+  const updateCollection = async (collection: Collection, name: string, icon: string, iconImage?: Blob) => {
+    try {
+      await putCollection({ ...collection, name, icon, iconImage })
+      setEditingCollection(null)
+      await refresh()
+    } catch (reason) {
+      setEditingCollection(null)
+      reportOperationError(reason, 'Impossibile salvare la collezione')
     }
   }
 
@@ -287,7 +300,7 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
   const beginCoverSuggestions = () => {
     if (pendingCoverBooks.length === 0) return
     try {
-      if (localStorage.getItem('reader.cover-search-consent') === 'yes') {
+      if (localStorage.getItem(COVER_CONSENT_KEY) === 'yes') {
         showNextCoverSuggestion()
         return
       }
@@ -299,7 +312,7 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
 
   const acceptCoverSuggestions = () => {
     try {
-      localStorage.setItem('reader.cover-search-consent', 'yes')
+      localStorage.setItem(COVER_CONSENT_KEY, 'yes')
     } catch {
       // This session still proceeds.
     }
@@ -395,6 +408,7 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
           selectedId={selectedCollectionId}
           onSelect={setSelectedCollectionId}
           onCreate={() => setCreatingCollection(true)}
+          onEdit={(view) => setEditingCollection(collections.find((collection) => collection.id === view.id) ?? null)}
           onDelete={setCollectionToDelete}
           total={allBooks.length}
         />
@@ -518,8 +532,8 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
           }
         >
           <p>
-            Per suggerire le copertine, l’app invierà i titoli dei volumi appena importati a Open Library. I file e le
-            pagine non vengono inviati.
+            Per suggerire le copertine, l’app invierà i titoli dei volumi appena importati a Open Library e, se il
+            servizio non risponde o non trova risultati, ad AniList. I file e le pagine non vengono inviati.
           </p>
         </Dialog>
       )}
@@ -527,8 +541,21 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
       {creatingCollection && (
         <CollectionDialog
           existingNames={['Senza collezione', 'Tutti i libri', ...collections.map((collection) => collection.name)]}
-          onSave={(name) => void createCollection(name)}
+          onSave={createCollection}
           onCancel={() => setCreatingCollection(false)}
+        />
+      )}
+
+      {editingCollection && (
+        <CollectionDialog
+          collection={editingCollection}
+          existingNames={[
+            'Senza collezione',
+            'Tutti i libri',
+            ...collections.filter((collection) => collection.id !== editingCollection.id).map((collection) => collection.name),
+          ]}
+          onSave={(name, icon, iconImage) => updateCollection(editingCollection, name, icon, iconImage)}
+          onCancel={() => setEditingCollection(null)}
         />
       )}
 
