@@ -684,7 +684,7 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose 
         const i = mq.engine?.info
         if (!i) return 'Pronta.'
         return i.ep === 'webgpu'
-          ? `${modelName} ×4 · WebGPU: le pagine seguenti vengono elaborate in background mentre leggi.`
+          ? `${modelName} ×4 · WebGPU ${i.precision.toUpperCase()}${i.graphCapture ? ' · graph capture' : ''}: le pagine seguenti vengono elaborate in background mentre leggi.`
           : `${modelName} ×4 · CPU (WebAssembly, ${i.threads} thread${i.crossOriginIsolated ? '' : ', isolamento cross-origin assente'}): troppo lenta durante la lettura, usa “Pre-elabora questo volume”.`
       }
     }

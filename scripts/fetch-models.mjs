@@ -1,5 +1,6 @@
 // Fetches the assets of the "Qualità massima" tier, which are too large to commit:
-//   public/models/realesrgan_x4plus_anime_6b.onnx   (17 MB) Real-ESRGAN anime 6B, see below
+//   public/models/realesrgan_x4plus_anime_6b.onnx        (17 MB) FP32 quality-safe fallback
+//   public/models/realesrgan_x4plus_anime_6b.fp16.onnx   (9 MB) mixed precision, FP32 input/output
 //   public/ort/ort-wasm-simd-threaded*.{mjs,wasm}   onnxruntime-web binaries (served same-origin, cached by the SW)
 // Usage: node scripts/fetch-models.mjs   (npm run setup). Idempotent; a failure leaves the app working without the tier.
 import { copyFileSync, existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs'
@@ -16,16 +17,18 @@ mkdirSync(ortDir, { recursive: true })
 // published as a release asset of this repository (see the models-v1 release notes).
 const GAN_URL = 'https://github.com/gianmarcocherubini/4k-CBR-CBZ-Reader/releases/download/models-v1/realesrgan_x4plus_anime_6b.onnx'
 const GAN_MODEL = join(modelsDir, 'realesrgan_x4plus_anime_6b.onnx')
+const GAN_FP16_URL = 'https://github.com/gianmarcocherubini/4k-CBR-CBZ-Reader/releases/download/models-v1/realesrgan_x4plus_anime_6b.fp16.onnx'
+const GAN_FP16_MODEL = join(modelsDir, 'realesrgan_x4plus_anime_6b.fp16.onnx')
 
-async function fetchGan() {
-  if (existsSync(GAN_MODEL) && statSync(GAN_MODEL).size > 10_000_000) {
-    console.log('GAN model already present:', GAN_MODEL)
+async function fetchAsset(url, file, minimumBytes) {
+  if (existsSync(file) && statSync(file).size > minimumBytes) {
+    console.log('model already present:', file)
     return
   }
-  const res = await fetch(GAN_URL, { redirect: 'follow' })
-  if (!res.ok) throw new Error(`GET ${GAN_URL}: ${res.status}`)
-  writeFileSync(GAN_MODEL, Buffer.from(await res.arrayBuffer()))
-  console.log(`GAN model written: ${GAN_MODEL} (${statSync(GAN_MODEL).size} bytes)`)
+  const res = await fetch(url, { redirect: 'follow' })
+  if (!res.ok) throw new Error(`GET ${url}: ${res.status}`)
+  writeFileSync(file, Buffer.from(await res.arrayBuffer()))
+  console.log(`model written: ${file} (${statSync(file).size} bytes)`)
 }
 
 function copyOrt() {
@@ -48,7 +51,8 @@ function copyOrt() {
 
 try {
   copyOrt()
-  await fetchGan()
+  await fetchAsset(GAN_URL, GAN_MODEL, 10_000_000)
+  await fetchAsset(GAN_FP16_URL, GAN_FP16_MODEL, 5_000_000)
 } catch (e) {
   console.error('setup incomplete:', e instanceof Error ? e.message : e)
   console.error('The app builds and runs without the "Qualità massima" tier; re-run `npm run setup` later.')

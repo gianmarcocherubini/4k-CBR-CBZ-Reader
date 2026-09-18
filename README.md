@@ -14,7 +14,7 @@ doppia pagina intelligente e super risoluzione AI sulla GPU.
 
 ```bash
 npm install
-npm run setup        # scarica i modelli (waifu2x 5 MB, Real-ESRGAN 18 MB) e copia onnxruntime in public/ (una sola volta)
+npm run setup        # scarica Real-ESRGAN (FP16 9 MB + fallback FP32 17 MB) e onnxruntime in public/ (una sola volta)
 npm run dev          # http://127.0.0.1:4877
 ```
 
@@ -93,7 +93,7 @@ grigio.
   100 ms per pagina (UL solo se la GPU lo consente; con 2–4 GB di RAM si ferma a M/VL). Si può forzare M, VL o UL.
 - **Fattore**: `Auto` usa **×4** (due passaggi, il secondo al livello M) quando il risultato sta nel limite di 16 MP
   dei canvas di Safari e nel bilancio di memoria (pagine fino a ~1 MP, cioè i tipici 800×1200), altrimenti ×2; si
-  può fissare ×2 o ×4. Vale anche per Qualità massima e modello GAN. La cache dei risultati è limitata in byte
+  può fissare ×2 o ×4. La cache dei risultati è limitata in byte
   (96–512 MB a seconda della RAM del dispositivo).
 - **Linee nitide**: passaggio *Restore_CNN_Soft* di Anime4K prima dell'ingrandimento, tratti e testi più marcati
   (raddoppia il costo). **Pulizia scansione**: bianco della carta e neri più netti, leggera riduzione del rumore JPEG.
@@ -111,13 +111,18 @@ nitido; **decine di secondi per pagina** anche su GPU, minuti sulla CPU. È **al
 standard: quando è attivo, Anime4K non gira e la pagina resta com'è finché il risultato del modello non è pronto (un
 solo cambio, niente lampeggio). I risultati sono salvati per sempre nell'archiviazione dell'app
 (`sr-cache/<volume>.esrgan6b.x4/<pagina>.webp`); eliminando il volume si cancellano. Attivandola vengono scaricati una
-volta sola il motore (14–27 MB) e il modello (18 MB), poi restano in cache. Il risultato è un fattore fisso della
+volta sola il motore (14–27 MB) e i modelli (FP16 9 MB + fallback FP32 17 MB), poi restano in cache. Il risultato è un fattore fisso della
 pagina (×4; ×2 solo se il ×4 supererebbe i 16 MP), poi adattato allo schermo.
 
 - Con WebGPU le pagine seguenti vengono pre-elaborate in background mentre leggi, **dando sempre la precedenza alla
   pagina visibile** (coda a priorità): il tempo di calcolo, che è tanto, non viene sprecato su una pagina successiva
   mentre quella davanti aspetta. Con la sola CPU (WebAssembly, fino a 4 thread) si usa **Pre-elabora questo volume**,
   che elabora tutto il volume con barra di avanzamento, tempo stimato e Annulla (lo schermo resta acceso).
+- Su GPU con `shader-f16` usa il grafo mixed-precision (input/output FP32, pesi e convoluzioni FP16), buffer GPU
+  riutilizzati e graph capture ONNX Runtime. I tile vengono assemblati sulla GPU e letti una volta sola a pagina:
+  benchmark 800×1200 locale, **49,5 → 13,5 s** (3,7×). Rispetto al percorso FP32: PSNR 48,2 dB, SSIM 0,99991,
+  differenza massima 11/255 e bordi +0,94%; visivamente indistinguibile. Se FP16, graph capture o buffer esterni non
+  sono supportati, il fallback è automatico: prima WebGPU FP32, poi CPU FP32.
 
 Il modello non è nel repository: `npm run setup` lo scarica dalla
 [release `models-v1`](https://github.com/gianmarcocherubini/4k-CBR-CBZ-Reader/releases/tag/models-v1) di questo

@@ -248,14 +248,21 @@ test('Qualità massima: Real-ESRGAN x4 batch job, results win over Anime4K and s
   await page.mouse.move(590, 410)
   await page.getByTestId('settings').click()
   await expect(page.getByTestId('mq-status')).toContainText('Disattivata')
-  // The standard tier stays on: it shows the page while the heavy model works.
+  // The preference stays checked, but its engine and controls are disabled while the heavy tier
+  // is active: only one enhanced/plain swap can happen.
   await expect(page.getByRole('switch', { name: 'Super risoluzione' })).toHaveAttribute('aria-checked', 'true')
   await page.getByRole('switch', { name: 'Qualità massima' }).click()
+  await expect(page.getByTestId('sr-section').locator('..')).toHaveAttribute('aria-disabled', 'true')
   const status = page.getByTestId('mq-status')
   await expect(status).not.toContainText('Caricamento', { timeout: 180_000 })
   const text = (await status.textContent()) ?? ''
   test.skip(text.includes('non disponibile su questo server'), 'GAN model not fetched (npm run setup)')
   expect(text).toMatch(/Real-ESRGAN anime 6B \(GAN\) ×4 · (WebGPU|CPU)/)
+  const hasShaderF16 = await page.evaluate(async () => {
+    const gpu = (navigator as Navigator & { gpu?: GPU }).gpu
+    return !!gpu && (await gpu.requestAdapter({ powerPreference: 'high-performance' }))?.features.has('shader-f16') === true
+  })
+  if (text.includes('WebGPU') && hasShaderF16) expect(text).toContain('WebGPU FP16 · graph capture')
   console.log('GAN:', text)
 
   await page.getByTestId('mq-start').click()

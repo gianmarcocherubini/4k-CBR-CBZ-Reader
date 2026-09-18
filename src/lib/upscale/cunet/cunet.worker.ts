@@ -13,6 +13,7 @@ import {
   MODEL_SPECS,
   type ModelSpec,
 } from './protocol'
+import { GpuTileRunner } from './gpuTileRunner'
 
 /**
  * Heavy models (waifu2x CUNet art/scale2x, Real-ESRGAN anime 6B; nunif/official ONNX) through
@@ -39,6 +40,11 @@ function applySpec(s: ModelSpec): void {
 
 let ort: Ort | null = null
 let session: InferenceSession | null = null
+let gpuRunner: GpuTileRunner | null = null
+let activeGpuDevice: GPUDevice | null = null
+let activeModelUrl = ''
+let fp32ModelUrl = ''
+let activePrecision: 'fp16' | 'fp32' = 'fp32'
 let ep: CunetEp = 'wasm'
 let threads = 1
 let cancelled = new Set<number>()
@@ -52,30 +58,63 @@ function serialized<T>(fn: () => Promise<T>): Promise<T> {
 
 const post = (msg: CunetResponse) => self.postMessage(msg)
 
-async function softwareGpu(): Promise<boolean> {
+interface GpuProbe {
+  adapter: GPUAdapter | null
+  shaderF16: boolean
+}
+
+async function probeGpu(): Promise<GpuProbe> {
   const gpu = (navigator as Navigator & { gpu?: GPU }).gpu
-  if (!gpu) return true
+  if (!gpu) return { adapter: null, shaderF16: false }
   try {
-    const adapter = await gpu.requestAdapter()
-    if (!adapter) return true
+    const adapter = await gpu.requestAdapter({ powerPreference: 'high-performance' })
+    if (!adapter) return { adapter: null, shaderF16: false }
     const a = adapter as GPUAdapter & { info?: GPUAdapterInfo; isFallbackAdapter?: boolean }
     const desc = `${a.info?.vendor ?? ''} ${a.info?.architecture ?? ''} ${a.info?.description ?? ''}`
-    return a.isFallbackAdapter === true || a.info?.isFallbackAdapter === true || /swiftshader|llvmpipe|software|lavapipe/i.test(desc)
+    if (a.isFallbackAdapter === true || a.info?.isFallbackAdapter === true || /swiftshader|llvmpipe|software|lavapipe/i.test(desc)) {
+      return { adapter: null, shaderF16: false }
+    }
+    return { adapter, shaderF16: adapter.features.has('shader-f16') }
   } catch {
-    return true
+    return { adapter: null, shaderF16: false }
   }
 }
 
+const currentInfo = (): CunetInitResult => ({
+  ep,
+  threads,
+  crossOriginIsolated: self.crossOriginIsolated === true,
+  precision: activePrecision,
+  graphCapture: gpuRunner !== null,
+})
+
 async function init(modelUrl: string, ortPath: string, preferGpu: boolean, modelSpec: ModelSpec): Promise<CunetInitResult> {
   applySpec(modelSpec)
+  gpuRunner?.dispose()
+  gpuRunner = null
+  if (session) await session.release()
   session = null
+  activeGpuDevice?.destroy()
+  activeGpuDevice = null
+  activeModelUrl = modelUrl
+  fp32ModelUrl = modelUrl
+  activePrecision = 'fp32'
   const head = await fetch(modelUrl, { method: 'HEAD' })
   if (!head.ok) {
     const err = new Error(`Modello non trovato (${head.status})`) as Error & { code: string }
     err.code = 'model-missing'
     throw err
   }
-  const useGpu = preferGpu && !(await softwareGpu())
+  const gpu = preferGpu ? await probeGpu() : { adapter: null, shaderF16: false }
+  if (gpu.adapter) {
+    try {
+      const requiredFeatures: GPUFeatureName[] = gpu.shaderF16 ? ['shader-f16'] : []
+      activeGpuDevice = await gpu.adapter.requestDevice({ requiredFeatures })
+    } catch {
+      activeGpuDevice = null
+    }
+  }
+  const useGpu = activeGpuDevice !== null
   ep = useGpu ? 'webgpu' : 'wasm'
   // The runtime lives in public/ort (npm run setup) and is imported by URL: bundling
   // onnxruntime-web would make Vite emit duplicate copies of its wasm binaries.
@@ -92,16 +131,129 @@ async function init(modelUrl: string, ortPath: string, preferGpu: boolean, model
   ort.env.wasm.wasmPaths = ortPath
   ort.env.wasm.numThreads = threads
   ort.env.wasm.proxy = false
-  const options: InferenceSession.SessionOptions = { graphOptimizationLevel: 'all', executionProviders: [ep === 'webgpu' ? { name: 'webgpu' } : 'wasm'] }
+  if (useGpu) ort.env.webgpu.powerPreference = 'high-performance'
+  let selectedModelUrl = modelUrl
+  if (activeGpuDevice?.features.has('shader-f16') && modelSpec.fp16File) {
+    const fp16Url = new URL(modelSpec.fp16File, new URL('.', modelUrl)).href
+    try {
+      const fp16Head = await fetch(fp16Url, { method: 'HEAD' })
+      if (fp16Head.ok) {
+        selectedModelUrl = fp16Url
+        activePrecision = 'fp16'
+      }
+    } catch {
+      // FP32 is always the quality-safe fallback.
+    }
+  }
+  activeModelUrl = selectedModelUrl
+  const options: InferenceSession.SessionOptions = {
+    graphOptimizationLevel: 'all',
+    // Passing the device on the EP is the supported ORT 1.30 binding; env.webgpu.adapter alone
+    // can let ORT select a different adapter than the one whose FP16 support we probed.
+    executionProviders: [ep === 'webgpu' ? { name: 'webgpu', device: activeGpuDevice! } : 'wasm'],
+  }
   try {
-    session = await ort.InferenceSession.create(modelUrl, options)
+    if (ep === 'webgpu' && modelSpec.id === 'esrgan6b') {
+      const outEdge = modelSpec.scale * modelSpec.tile - modelSpec.shrink
+      // All tiles have the same shape. External GPU tensors plus fixed free dimensions let ORT
+      // capture and replay the graph instead of rebuilding 320-node command streams 40–70 times.
+      session = await ort.InferenceSession.create(selectedModelUrl, {
+        ...options,
+        enableGraphCapture: true,
+        preferredOutputLocation: 'gpu-buffer',
+        freeDimensionOverrides: {
+          n: 1,
+          h: modelSpec.tile,
+          w: modelSpec.tile,
+          h4: outEdge,
+          w4: outEdge,
+        },
+      })
+      gpuRunner = await GpuTileRunner.create(ort, session, activeGpuDevice!, modelSpec)
+    } else {
+      session = await ort.InferenceSession.create(selectedModelUrl, options)
+    }
   } catch (e) {
     if (ep !== 'webgpu') throw e
-    // WebGPU EP failed (e.g. missing features): fall back to the CPU EP of the same bundle.
-    ep = 'wasm'
-    session = await ort.InferenceSession.create(modelUrl, { ...options, executionProviders: ['wasm'] })
+    console.warn('GAN GPU graph-capture init non disponibile; fallback WebGPU compatibile.', e)
+    // Graph capture / external GPU buffers are optional. Keep WebGPU with the proven CPU-I/O
+    // pipeline first; only fall back to WASM when the WebGPU session itself cannot be created.
+    gpuRunner?.dispose()
+    gpuRunner = null
+    if (session) await session.release().catch(() => undefined)
+    session = null
+    try {
+      session = await ort.InferenceSession.create(selectedModelUrl, options)
+    } catch (selectedError) {
+      // A device can advertise shader-f16 while one model operator still rejects FP16. Retry the
+      // same WebGPU adapter with the canonical FP32 model before considering the CPU.
+      if (selectedModelUrl !== modelUrl) {
+        try {
+          activePrecision = 'fp32'
+          activeModelUrl = modelUrl
+          session = await ort.InferenceSession.create(modelUrl, options)
+        } catch {
+          ep = 'wasm'
+          activeGpuDevice?.destroy()
+          activeGpuDevice = null
+          session = await ort.InferenceSession.create(modelUrl, { ...options, executionProviders: ['wasm'] })
+        }
+      } else {
+        console.warn('Sessione WebGPU non disponibile; fallback CPU.', selectedError)
+        ep = 'wasm'
+        activeGpuDevice?.destroy()
+        activeGpuDevice = null
+        activePrecision = 'fp32'
+        activeModelUrl = modelUrl
+        session = await ort.InferenceSession.create(modelUrl, { ...options, executionProviders: ['wasm'] })
+      }
+    }
   }
-  return { ep, threads, crossOriginIsolated: isolated }
+  return { ...currentInfo(), crossOriginIsolated: isolated }
+}
+
+/** A first-run graph-capture failure must never make the model unavailable. */
+async function disableGpuFastPath(): Promise<void> {
+  if (!gpuRunner || !ort) return
+  gpuRunner.dispose()
+  gpuRunner = null
+  const released = session
+  session = null
+  if (released) await released.release().catch(() => undefined)
+  const webGpuOptions: InferenceSession.SessionOptions = {
+    graphOptimizationLevel: 'all',
+    executionProviders: [{ name: 'webgpu', device: activeGpuDevice! }],
+  }
+  try {
+    session = await ort.InferenceSession.create(activeModelUrl, webGpuOptions)
+  } catch (selectedError) {
+    if (activeModelUrl !== fp32ModelUrl) {
+      try {
+        activeModelUrl = fp32ModelUrl
+        activePrecision = 'fp32'
+        session = await ort.InferenceSession.create(fp32ModelUrl, webGpuOptions)
+      } catch {
+        ep = 'wasm'
+        activeGpuDevice?.destroy()
+        activeGpuDevice = null
+        session = await ort.InferenceSession.create(fp32ModelUrl, {
+          graphOptimizationLevel: 'all',
+          executionProviders: ['wasm'],
+        })
+      }
+    } else {
+      console.warn('Fallback WebGPU compatibile non disponibile; uso la CPU.', selectedError)
+      ep = 'wasm'
+      activeGpuDevice?.destroy()
+      activeGpuDevice = null
+      activePrecision = 'fp32'
+      session = await ort.InferenceSession.create(fp32ModelUrl, {
+        graphOptimizationLevel: 'all',
+        executionProviders: ['wasm'],
+      })
+    }
+  }
+  post({ type: 'mode', info: currentInfo() })
 }
 
 function replicatePad(src: ImageData, padL: number, padT: number, outW: number, outH: number): Uint8ClampedArray {
@@ -154,7 +306,7 @@ const tilesFor = (W: number, H: number) => Math.ceil(W / STEP) * Math.ceil(H / S
  * One pass of the network over `src`, producing `outFactor` × src (outFactor ≤ the model scale;
  * a x4 model asked for x2 gets a 2x2 box filter). `onTile` is called after every tile.
  */
-async function runNetwork(id: number, src: ImageData, gray: boolean, outFactor: HeavyFactor, onTile: () => void): Promise<ImageData> {
+async function runNetworkCpu(id: number, src: ImageData, gray: boolean, outFactor: HeavyFactor, onTile: () => void): Promise<ImageData> {
   if (!ort || !session) throw Object.assign(new Error('Motore non inizializzato'), { code: 'unavailable' })
   const { width: W, height: H } = src
   const blocksW = Math.ceil(W / STEP)
@@ -198,11 +350,16 @@ async function runNetwork(id: number, src: ImageData, gray: boolean, outFactor: 
         }
       }
       let tile: Float32Array | null = null
+      let resultTensor: Tensor | null = null
       if (!single) {
-        const feeds = { [session.inputNames[0]!]: new ort.Tensor('float32', input, [1, 3, TILE, TILE]) }
-        const result = await session.run(feeds)
-        const y = result[session.outputNames[0]!] as Tensor
-        tile = y.data as Float32Array
+        const inputTensor = new ort.Tensor('float32', input, [1, 3, TILE, TILE])
+        try {
+          const result = await session.run({ [session.inputNames[0]!]: inputTensor })
+          resultTensor = result[session.outputNames[0]!] as Tensor
+          tile = (resultTensor.location === 'cpu' ? resultTensor.data : await resultTensor.getData(true)) as Float32Array
+        } finally {
+          inputTensor.dispose()
+        }
       }
       // Place the output tile (clipped to the page).
       const ox0 = bj * outTile
@@ -255,10 +412,46 @@ async function runNetwork(id: number, src: ImageData, gray: boolean, outFactor: 
           out[d + 3] = 255
         }
       }
+      resultTensor?.dispose()
       onTile()
     }
   }
   return new ImageData(out, outW, outH)
+}
+
+async function runNetwork(id: number, src: ImageData, gray: boolean, outFactor: HeavyFactor, onTile: () => void): Promise<ImageData> {
+  const runner = gpuRunner
+  if (!runner) return runNetworkCpu(id, src, gray, outFactor, onTile)
+  const { width: W, height: H } = src
+  const blocksW = Math.ceil(W / STEP)
+  const blocksH = Math.ceil(H / STEP)
+  const padW = blocksW * STEP + 2 * CROP_IN
+  const padH = blocksH * STEP + 2 * CROP_IN
+  const padded = replicatePad(src, CROP_IN, CROP_IN, padW, padH)
+  let completed = 0
+  try {
+    const result = await runner.run(
+      padded,
+      padW,
+      W,
+      H,
+      blocksW,
+      blocksH,
+      CROP_IN,
+      STEP,
+      gray,
+      outFactor,
+      () => cancelled.has(id),
+      () => completed++,
+    )
+    for (let i = 0; i < completed; i++) onTile()
+    return result
+  } catch (e) {
+    if ((e as { code?: string })?.code === 'aborted') throw e
+    console.warn('Percorso GAN GPU-resident non disponibile; uso il fallback compatibile.', e)
+    await disableGpuFastPath()
+    return runNetworkCpu(id, src, gray, outFactor, onTile)
+  }
 }
 
 async function process(id: number, cacheKeyBase: string, page: number, blob: Blob, maxFactor: HeavyFactor): Promise<Blob> {
@@ -295,12 +488,18 @@ async function process(id: number, cacheKeyBase: string, page: number, blob: Blo
     }
   }
   let tilesDone = 0
+  let lastProgressAt = 0
   post({ type: 'progress', id, tilesDone, tilesTotal })
   let img = src
   for (const s of stages) {
     img = await runNetwork(id, img, gray, s, () => {
       tilesDone++
-      post({ type: 'progress', id, tilesDone, tilesTotal })
+      const now = performance.now()
+      // A React render and a cross-worker message per tile do not improve the progress bar.
+      if (tilesDone === tilesTotal || now - lastProgressAt >= 100) {
+        lastProgressAt = now
+        post({ type: 'progress', id, tilesDone, tilesTotal })
+      }
     })
   }
 

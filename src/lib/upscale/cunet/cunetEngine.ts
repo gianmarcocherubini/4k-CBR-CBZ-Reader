@@ -21,6 +21,8 @@ export interface CunetInfo {
   ep: CunetEp
   threads: number
   crossOriginIsolated: boolean
+  precision: 'fp16' | 'fp32'
+  graphCapture: boolean
 }
 
 export interface BatchProgress {
@@ -82,6 +84,11 @@ export class CunetEngine {
     const worker = new Worker(new URL('./cunet.worker.ts', import.meta.url), { type: 'module' })
     worker.onmessage = (ev: MessageEvent<CunetResponse>) => {
       const msg = ev.data
+      if (msg.type === 'mode') {
+        this.info = msg.info
+        this.onChange?.()
+        return
+      }
       const p = this.pending.get(msg.id)
       if (!p) return
       if (msg.type === 'progress') {

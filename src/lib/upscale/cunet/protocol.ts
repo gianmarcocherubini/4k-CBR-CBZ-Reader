@@ -8,6 +8,8 @@ export interface ModelSpec {
   id: HeavyModel
   /** File under public/models. */
   file: string
+  /** Optional mixed-precision variant: FP16 internals with FP32 input/output. */
+  fp16File?: string
   /** Network scale factor (output = scale × input). */
   scale: 2 | 4
   /** Input tile edge, px. */
@@ -22,7 +24,15 @@ export const MODEL_SPECS: Record<HeavyModel, ModelSpec> = {
   // nunif waifu2x CUNet art/scale2x: 256 → 440 (2×256 − 72); the model crops its own 18 px context.
   cunet: { id: 'cunet', file: 'waifu2x_cunet_art_scale2x.onnx', scale: 2, tile: 256, cropIn: 18, shrink: 72 },
   // Real-ESRGAN x4plus anime 6B (RRDB, 6 blocks): 192 → 768, padded convolutions; 16 px of context dropped.
-  esrgan6b: { id: 'esrgan6b', file: 'realesrgan_x4plus_anime_6b.onnx', scale: 4, tile: 192, cropIn: 16, shrink: 0 },
+  esrgan6b: {
+    id: 'esrgan6b',
+    file: 'realesrgan_x4plus_anime_6b.onnx',
+    fp16File: 'realesrgan_x4plus_anime_6b.fp16.onnx',
+    scale: 4,
+    tile: 192,
+    cropIn: 16,
+    shrink: 0,
+  },
 }
 
 /** Safari caps canvas/bitmap area around 16.7 MP: results must be encodable and decodable there. */
@@ -47,12 +57,15 @@ export interface CunetInitResult {
   ep: CunetEp
   threads: number
   crossOriginIsolated: boolean
+  precision: 'fp16' | 'fp32'
+  graphCapture: boolean
 }
 
 export type CunetResponse =
   | { type: 'result'; id: number; ok: true; result: unknown }
   | { type: 'result'; id: number; ok: false; error: { code: 'model-missing' | 'unavailable' | 'aborted' | 'failed'; message: string } }
   | { type: 'progress'; id: number; tilesDone: number; tilesTotal: number }
+  | { type: 'mode'; info: CunetInitResult }
 
 /** Sanitised, collision-resistant OPFS directory name for a book id (and model, except the original CUNet). */
 export function cacheKeyFor(bookId: string, model: HeavyModel = 'cunet'): string {
