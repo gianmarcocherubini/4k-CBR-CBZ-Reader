@@ -12,7 +12,7 @@ import type {
   StageBackground,
   Theme,
 } from '../../types'
-import { fullscreenSupported } from '../../lib/fullscreen'
+import { fullscreenSupported, isStandalone } from '../../lib/fullscreen'
 
 interface SettingsPanelProps {
   settings: ReaderSettings
@@ -154,15 +154,17 @@ export function SettingsPanel({
             <Row
               title="Schermo intero durante la lettura"
               hint={
-                fullscreenSupported()
-                  ? 'Nasconde la barra di stato dell’iPad (ora, Wi-Fi, batteria) e l’indicatore Home mentre leggi.'
-                  : 'Non disponibile in questo browser.'
+                isStandalone()
+                  ? 'Nell’app installata iOS non consente di nascondere la barra di stato, ma l’app usa comunque tutta l’altezza dello schermo. In Safari va davvero a schermo intero.'
+                  : fullscreenSupported()
+                    ? 'A schermo intero nasconde la barra di stato (ora, Wi-Fi, batteria) e l’indicatore Home mentre leggi.'
+                    : 'Non disponibile in questo browser.'
               }
             >
               <Switch checked={settings.fullscreenReading} onChange={(v) => onChange({ fullscreenReading: v })} label="Schermo intero durante la lettura" />
             </Row>
-            <Row title="Indicatore SR" hint="Piccolo segnale in alto a destra quando la super risoluzione o il modello pesante sono applicati alla pagina.">
-              <Switch checked={settings.srIndicator} onChange={(v) => onChange({ srIndicator: v })} label="Indicatore SR" />
+            <Row title="Indicatore HD" hint="Piccola icona “HD” in alto a destra: accesa quando la super risoluzione o Qualità massima sono applicate alla pagina, barrata quando non lo sono.">
+              <Switch checked={settings.srIndicator} onChange={(v) => onChange({ srIndicator: v })} label="Indicatore HD" />
             </Row>
           </Group>
 
@@ -280,7 +282,16 @@ export function SettingsPanel({
             </div>
           </Group>
 
-          <Group title="Super risoluzione" footer={extra} testId="sr-section">
+          <div className={settings.maxQuality ? 'pointer-events-none opacity-45' : ''} aria-disabled={settings.maxQuality || undefined}>
+          <Group
+            title="Super risoluzione"
+            footer={
+              settings.maxQuality
+                ? 'Sostituita da «Qualità massima»: l’immagine è prodotta dal modello pesante, quindi fattore, livello e linee nitide qui non hanno effetto.'
+                : extra
+            }
+            testId="sr-section"
+          >
             <Row title="Super risoluzione" hint="Anime4K sulla GPU: la pagina viene ingrandita ×2 o ×4 rispetto all’originale e poi adattata allo schermo. Linee e lettering più nitidi a ogni zoom.">
               <Switch checked={settings.superResolution} onChange={(v) => onChange({ superResolution: v })} label="Super risoluzione" />
             </Row>
@@ -321,6 +332,7 @@ export function SettingsPanel({
               <Switch checked={settings.srClean} onChange={(v) => onChange({ srClean: v })} label="Pulizia scansione" />
             </Row>
           </Group>
+          </div>
 
           {maxQuality}
         </div>

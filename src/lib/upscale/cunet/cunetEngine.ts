@@ -63,10 +63,11 @@ export class CunetEngine {
   private initPromise: Promise<void> | null = null
   private readonly bitmaps = new Map<string, ImageBitmap>()
   private bitmapBytes = 0
-  /** Half the budget of the Anime4K cache: both tiers may be alive at once. */
-  private readonly budget = cacheBudgetBytes() / 2
+  /** The heavy tier is exclusive with Anime4K (that engine is disposed while this one runs), so it
+   *  may use the whole budget: enough for the visible spread plus read-ahead without LRU thrash. */
+  private readonly budget = cacheBudgetBytes()
   private readonly inflight = new Map<string, Promise<ImageBitmap>>()
-  private queue: Array<{ key: string; run: () => Promise<void> }> = []
+  private queue: Array<{ key: string; priority: number; run: () => Promise<void> }> = []
   private running = false
   private disposed = false
   /** Per-page wall time EMA (seconds), used for the batch estimate. */
@@ -224,16 +225,27 @@ export class CunetEngine {
     return [...pages].sort((a, b) => a - b)
   }
 
-  /** Processes one page (queued, one at a time) at up to `maxFactor` and caches it. */
-  enhance(bookId: string, page: number, source: () => Promise<Blob>, maxFactor: HeavyFactor, onProgress?: (d: number, t: number) => void): Promise<ImageBitmap> {
+  /**
+   * Processes one page (queued, one at a time) at up to `maxFactor` and caches it. `priority` is
+   * the reading distance (0 = the visible page): the queue always runs the lowest number next, so
+   * the page in front of the reader is never made to wait behind a stale read-ahead job.
+   */
+  enhance(bookId: string, page: number, source: () => Promise<Blob>, maxFactor: HeavyFactor, priority = 0, onProgress?: (d: number, t: number) => void): Promise<ImageBitmap> {
     const k = this.key(bookId, page)
     const hit = this.peek(bookId, page)
     if (hit) return Promise.resolve(hit)
     const pending = this.inflight.get(k)
-    if (pending) return pending
+    if (pending) {
+      // Re-prioritise an already-queued page (e.g. the reader just turned onto a read-ahead page).
+      const q = this.queue.find((t) => t.key === k)
+      if (q) q.priority = Math.min(q.priority, priority)
+      this.queue.sort((a, b) => a.priority - b.priority)
+      return pending
+    }
     const promise = new Promise<ImageBitmap>((resolve, reject) => {
       this.queue.push({
         key: k,
+        priority,
         run: async () => {
           try {
             await this.init()
@@ -257,6 +269,7 @@ export class CunetEngine {
           }
         },
       })
+      this.queue.sort((a, b) => a.priority - b.priority)
       void this.pump()
     }).finally(() => this.inflight.delete(k))
     this.inflight.set(k, promise)
@@ -268,6 +281,8 @@ export class CunetEngine {
     this.running = true
     try {
       while (this.queue.length > 0 && !this.disposed) {
+        // Re-read the head each turn: priorities may have changed while the previous page ran.
+        this.queue.sort((a, b) => a.priority - b.priority)
         const task = this.queue.shift()!
         await task.run()
       }

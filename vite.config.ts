@@ -35,7 +35,10 @@ export default defineConfig({
         dir: 'ltr',
         start_url: './',
         scope: './',
-        display: 'standalone',
+        // Fullscreen where the platform honours it (Android/desktop); iOS treats it as standalone
+        // and relies on apple-mobile-web-app-status-bar-style=black-translucent for the full height.
+        display: 'fullscreen',
+        display_override: ['fullscreen', 'standalone'],
         orientation: 'any',
         background_color: '#ffffff',
         theme_color: '#f2f2f7',

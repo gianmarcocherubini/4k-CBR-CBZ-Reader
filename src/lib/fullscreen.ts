@@ -12,6 +12,15 @@ type FsElement = HTMLElement & {
   webkitRequestFullscreen?: (options?: FullscreenOptions) => Promise<void> | void
 }
 
+/** Installed to the home screen (iOS) or launched as a PWA window: the Fullscreen API is unavailable. */
+export function isStandalone(): boolean {
+  return (
+    window.matchMedia?.('(display-mode: standalone)').matches === true ||
+    window.matchMedia?.('(display-mode: fullscreen)').matches === true ||
+    (navigator as Navigator & { standalone?: boolean }).standalone === true
+  )
+}
+
 export function fullscreenSupported(): boolean {
   const d = document as FsDocument
   return Boolean(d.fullscreenEnabled || d.webkitFullscreenEnabled)

@@ -38,7 +38,7 @@ test('Anime4K super resolution: enhanced canvas, badge, level probe, faithful ou
   await page.mouse.move(590, 410) // keep the toolbars visible
 
   if (!hasWebGPU) {
-    await expect(badge(page)).toHaveText('SR n/d')
+    await expect(badge(page)).toHaveAttribute('data-sr-state', 'na')
     await page.getByTestId('settings').click()
     await expect(page.getByTestId('sr-status')).toContainText('Non disponibile')
     await expect(page.locator('[data-testid=page][data-page="1"] img')).toBeVisible()
@@ -60,25 +60,14 @@ test('Anime4K super resolution: enhanced canvas, badge, level probe, faithful ou
     .poll(
       async () => {
         const l = await page.locator('[data-testid=page][data-page="1"]').getAttribute('data-sr')
-        const b = await badge(page).textContent()
-        return l && ['M', 'VL', 'UL'].includes(l) && b === `SR ×4 ${l}` ? l : null
+        const st = await badge(page).getAttribute('data-sr-state')
+        const b = await badge(page).getAttribute('aria-label')
+        return l && ['M', 'VL', 'UL'].includes(l) && st === 'applied' && b?.includes(`×4 ${l}`) ? l : null
       },
       { timeout: 90_000 },
     )
     .not.toBeNull()
   const level = await page.locator('[data-testid=page][data-page="1"]').getAttribute('data-sr')
-
-  // "Confronta" (hold): the plain page is shown while pressed, the enhanced one comes back on release.
-  const compare = page.getByTestId('compare')
-  await expect(compare).toBeVisible()
-  const cb = (await compare.boundingBox())!
-  await page.mouse.move(cb.x + cb.width / 2, cb.y + cb.height / 2)
-  await page.mouse.down()
-  await expect(page.locator('[data-testid=page][data-page="1"] img')).toBeVisible()
-  await expect(compare).toHaveText('Originale')
-  await page.mouse.up()
-  await expect(enhanced).toBeVisible()
-  await expect(compare).toHaveText('Confronta')
 
   await page.mouse.move(700, 450) // toolbars auto-hide after 2.5 s; a mouse move reveals them
   await page.getByTestId('settings').click()
@@ -140,18 +129,19 @@ test('Anime4K super resolution: enhanced canvas, badge, level probe, faithful ou
   await expect(page.locator('[data-testid=page][data-page="2"] canvas[data-testid=enhanced]')).toBeVisible({ timeout: 45_000 })
   await expect(page.locator('[data-testid=page][data-page="3"] canvas[data-testid=enhanced]')).toBeVisible({ timeout: 45_000 })
 
-  // Tiny corner indicator: shown once the toolbars hide, green when the enhancement is applied.
+  // Corner HD indicator: shown once the toolbars hide, "applied" (filled) when SR is on the page.
   const mini = page.getByTestId('sr-mini')
   await page.mouse.move(600, 430) // off the toolbars (hovering them keeps them visible)
   await expect(page.getByTestId('toolbar-top')).toHaveClass(/opacity-0/, { timeout: 6_000 })
   await expect(mini).toBeVisible()
-  await expect(mini).toHaveAttribute('data-state', 'applied', { timeout: 45_000 })
-  await expect(mini).toHaveText(/×4 M/)
+  await expect(mini).toHaveAttribute('data-sr-state', 'applied', { timeout: 45_000 })
+  await expect(mini).toHaveText('HD')
+  await expect(mini).toHaveAttribute('aria-label', /×4 M/)
   // Hidden while the toolbars (with the full badge) are visible, and when switched off.
   await page.mouse.move(640, 450)
   await expect(mini).toHaveCount(0)
   await page.getByTestId('settings').click()
-  await page.getByRole('switch', { name: 'Indicatore SR' }).click()
+  await page.getByRole('switch', { name: 'Indicatore HD' }).click()
   await page.getByRole('button', { name: 'Chiudi impostazioni' }).click()
   await page.mouse.move(600, 430)
   await expect(page.getByTestId('toolbar-top')).toHaveClass(/opacity-0/, { timeout: 6_000 })
@@ -168,13 +158,13 @@ test('SR first, fit after: a page already at screen size is enhanced x2, and zoo
   await expect(enhanced).toBeVisible({ timeout: 60_000 })
   await expect(enhanced).toHaveAttribute('data-sr-width', String(autoWidth(1000, 1500)))
   await page.mouse.move(590, 410)
-  await expect(badge(page)).toHaveText(/^SR ×2 (M|VL|UL)$/, { timeout: 60_000 })
+  await expect(badge(page)).toHaveAttribute('aria-label', /SR ×2 (M|VL|UL)$/, { timeout: 60_000 })
   const before = await enhanced.evaluate((c: HTMLCanvasElement) => c.width)
   // Zooming in does not recompute anything: same result, refitted at the larger displayed size.
   await page.mouse.dblclick(590, 410)
   await expect.poll(() => enhanced.evaluate((c: HTMLCanvasElement) => c.width), { timeout: 5_000 }).toBeGreaterThan(before)
   await expect(enhanced).toHaveAttribute('data-sr-width', String(autoWidth(1000, 1500)))
-  await expect(badge(page)).toHaveText(/^SR ×2 (M|VL|UL)$/)
+  await expect(badge(page)).toHaveAttribute('aria-label', /SR ×2 (M|VL|UL)$/)
 })
 
 test('WebGL2 fallback runs the same shaders and matches the WebGPU output', async ({ page }) => {
@@ -278,7 +268,8 @@ test('Qualità massima: Real-ESRGAN x4 batch job, results win over Anime4K and s
   // Native x4 output (300 px pages -> 1200), fitted to the box.
   await expect(p1.locator('canvas[data-testid=enhanced]')).toHaveAttribute('data-sr-width', '1200')
   await page.mouse.move(600, 420)
-  await expect(badge(page)).toHaveText('SR ×4 GAN')
+  await expect(badge(page)).toHaveAttribute('data-sr-state', 'applied')
+  await expect(badge(page)).toHaveAttribute('aria-label', /SR ×4 GAN$/)
 
   // Sanity: not blank, not garbage (has both dark and light pixels).
   const stats = await page.evaluate(() => {
@@ -348,18 +339,18 @@ test('factor x4 / x2 / auto, "Linee nitide", "Pulizia scansione"', async ({ page
   await page.getByTestId('settings').click()
   await page.getByTestId('scale-x4').click()
   await expect(enhanced).toHaveAttribute('data-sr-width', '3200', { timeout: 90_000 })
-  await expect(badge(page)).toHaveText(/^SR ×4 (M|VL|UL)$/)
+  await expect(badge(page)).toHaveAttribute('aria-label', /SR ×4 (M|VL|UL)$/)
   await expect(page.getByTestId('sr-status')).toContainText('×4 → 3200×4800 px')
   // x2 fixed: exactly twice the source.
   await page.getByTestId('scale-x2').click()
   await expect(enhanced).toHaveAttribute('data-sr-width', '1600', { timeout: 60_000 })
-  await expect(badge(page)).toHaveText(/^SR ×2 (M|VL|UL)$/)
+  await expect(badge(page)).toHaveAttribute('aria-label', /SR ×2 (M|VL|UL)$/)
   await page.getByTestId('scale-auto').click()
   await expect(enhanced).toHaveAttribute('data-sr-width', '3200', { timeout: 60_000 })
 
   // Restore pass ("Linee nitide"): re-enhanced, badge marks it with "+", output still faithful.
   await page.getByRole('switch', { name: 'Linee nitide' }).click()
-  await expect(badge(page)).toHaveText(/^SR ×4 (M|VL|UL)\+$/, { timeout: 90_000 })
+  await expect(badge(page)).toHaveAttribute('aria-label', /SR ×4 (M|VL|UL)\+$/, { timeout: 90_000 })
   await expect(enhanced).toBeVisible()
   // Scan clean-up: paper goes to pure white on the (already white) page background.
   await page.getByRole('switch', { name: 'Pulizia scansione' }).click()
@@ -385,7 +376,7 @@ test('factor x4 / x2 / auto, "Linee nitide", "Pulizia scansione"', async ({ page
     .toBeGreaterThanOrEqual(250)
   await page.getByRole('switch', { name: 'Linee nitide' }).click()
   await page.getByRole('switch', { name: 'Pulizia scansione' }).click()
-  await expect(badge(page)).toHaveText(/^SR ×4 (M|VL|UL)$/, { timeout: 90_000 })
+  await expect(badge(page)).toHaveAttribute('aria-label', /SR ×4 (M|VL|UL)$/, { timeout: 90_000 })
 })
 
 test('?sr=off disables super resolution entirely', async ({ page }) => {

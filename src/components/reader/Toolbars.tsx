@@ -1,4 +1,5 @@
 import type { Direction } from '../../types'
+import { HdBadge, type HdState } from './HdBadge'
 
 interface ToolbarsProps {
   visible: boolean
@@ -9,19 +10,15 @@ interface ToolbarsProps {
   spreadCount: number
   direction: Direction
   double: boolean
-  coverOffset: boolean
   /** The current spread contains a user-inserted blank page. */
   blankHere: boolean
+  /** Accessible description of the enhancement state (e.g. "SR ×4 GAN"); the badge shows an HD glyph. */
   badge?: string
-  /** An enhanced page is on screen: the "Originale" hold-to-compare button makes sense. */
-  compareAvailable: boolean
-  comparing: boolean
-  onCompare: (active: boolean) => void
+  badgeState: HdState | null
   onBack: () => void
   onSettings: () => void
   onSeek: (spreadIndex: number) => void
   onToggleDouble: () => void
-  onToggleOffset: () => void
   onToggleBlank: () => void
   onHoverChange: (hovering: boolean) => void
 }
@@ -50,17 +47,13 @@ export function Toolbars({
   spreadCount,
   direction,
   double,
-  coverOffset,
   blankHere,
   badge,
-  compareAvailable,
-  comparing,
-  onCompare,
+  badgeState,
   onBack,
   onSettings,
   onSeek,
   onToggleDouble,
-  onToggleOffset,
   onToggleBlank,
   onHoverChange,
 }: ToolbarsProps) {
@@ -82,11 +75,7 @@ export function Toolbars({
           </div>
           <div className="min-w-0 max-w-[60vw] truncate text-center text-headline">{title}</div>
           <div className="flex items-center justify-end gap-1">
-            {badge && (
-              <span className="rounded-full bg-fill px-2 py-0.5 text-caption font-semibold tracking-wide text-label-2 tabular-nums" data-testid="sr-badge">
-                {badge}
-              </span>
-            )}
+            {badgeState && badge && <HdBadge state={badgeState} label={badge} testId="sr-badge" />}
             <button type="button" className="btn-icon" onClick={onSettings} aria-label="Impostazioni" data-testid="settings">
               {Icon.settings}
             </button>
@@ -128,11 +117,6 @@ export function Toolbars({
             Doppia pagina
           </button>
           {double && (
-            <button type="button" className="btn-pill" onClick={onToggleOffset} aria-pressed={coverOffset} data-testid="toggle-offset">
-              Sfasa coppie
-            </button>
-          )}
-          {double && (
             <button
               type="button"
               className="btn-pill"
@@ -142,26 +126,6 @@ export function Toolbars({
               data-testid="toggle-blank"
             >
               {blankHere ? 'Togli pagina bianca' : 'Pagina bianca qui'}
-            </button>
-          )}
-          {compareAvailable && (
-            <button
-              type="button"
-              className="btn-pill select-none"
-              style={{ WebkitTouchCallout: 'none' }}
-              aria-pressed={comparing}
-              title="Tieni premuto per vedere la pagina originale, senza super risoluzione (tasto O)"
-              onPointerDown={(e) => {
-                e.preventDefault()
-                onCompare(true)
-              }}
-              onPointerUp={() => onCompare(false)}
-              onPointerCancel={() => onCompare(false)}
-              onPointerLeave={() => onCompare(false)}
-              onContextMenu={(e) => e.preventDefault()}
-              data-testid="compare"
-            >
-              {comparing ? 'Originale' : 'Confronta'}
             </button>
           )}
         </div>

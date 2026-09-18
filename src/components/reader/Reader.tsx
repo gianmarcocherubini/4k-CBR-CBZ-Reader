@@ -6,11 +6,13 @@ import { PageCache } from '../../lib/reader/pageCache'
 import { blankBefore, firstPage, isBlank, layoutSpreads, realPages, spreadIndexOf, spreadLabel } from '../../lib/spread'
 import { getBook, getPageSizes, getProgress, putBook, putPageSizes, putProgress } from '../../lib/storage/db'
 import { resolveBookBlob } from '../../lib/storage/importer'
+import { cacheBudgetBytes } from '../../lib/upscale/backend'
 import type { HeavyFactor } from '../../lib/upscale/cunet/protocol'
 import { SrAborted, type SrOptions, type SrPlan, type SrResult } from '../../lib/upscale/srEngine'
 import { type Book, GUTTER_FRACTION, type PageSize, type ReaderSettings } from '../../types'
 import { MaxQualityControls } from './MaxQualityControls'
 import { enterFullscreen, isFullscreen } from '../../lib/fullscreen'
+import { HdBadge } from './HdBadge'
 import { SettingsPanel } from './SettingsPanel'
 import { type PageState, type SpreadGhost, SpreadView, STAGE_BG } from './SpreadView'
 import { Toolbars } from './Toolbars'
@@ -468,38 +470,48 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose 
       setCunetResults((m) => (m.size ? new Map() : m))
       return
     }
-    const wanted: number[] = [...spreadPages]
-    for (let k = 1; k <= PRELOAD_AHEAD; k++) for (const p of realPages(spreads[spreadIndex + k] ?? [])) wanted.push(p)
-    engine.prune(book.id, wanted)
+    // The visible spread is priority 0; read-ahead pages get their reading distance. The engine's
+    // queue always runs the lowest priority next, so the expensive GAN time is spent on the page in
+    // front of the reader first and never wasted on a read-ahead page while the current one waits.
+    const wanted: Array<{ index: number; priority: number }> = spreadPages.map((index) => ({ index, priority: 0 }))
+    for (let k = 1; k <= PRELOAD_AHEAD; k++) {
+      for (const p of realPages(spreads[spreadIndex + k] ?? [])) if (!wanted.some((w) => w.index === p)) wanted.push({ index: p, priority: k })
+    }
+    engine.prune(
+      book.id,
+      wanted.map((w) => w.index),
+    )
     let cancelled = false
     const bookId = book.id
     const batchRunning = mq.batch.running
-    for (const index of wanted) {
+    const apply = (index: number, bitmap: ImageBitmap) =>
+      setCunetResults((m) => (m.get(index)?.bitmap === bitmap ? m : new Map(m).set(index, heavyResult(index, bitmap))))
+    for (const { index, priority } of wanted) {
       const hit = engine.peek(bookId, index)
       if (hit) {
-        setCunetResults((m) => (m.get(index)?.bitmap === hit ? m : new Map(m).set(index, heavyResult(index, hit))))
+        apply(index, hit)
         continue
       }
-      void engine.lookup(bookId, index).then((bitmap) => {
-        if (cancelled) return
-        if (bitmap) {
-          setCunetResults((m) => new Map(m).set(index, heavyResult(index, bitmap)))
-        } else if (engine.prefetchAllowed && !batchRunning) {
-          // WebGPU: process the pages ahead while reading (the batch job covers them otherwise).
-          engine
-            .enhance(bookId, index, () => pageBlob(index), heavyMaxFactor)
-            .then((b) => {
-              if (!cancelled) setCunetResults((m) => new Map(m).set(index, heavyResult(index, b)))
-            })
-            .catch(() => undefined)
-        }
-      })
+      if (engine.prefetchAllowed && !batchRunning) {
+        // WebGPU: enqueued in reading order, so the current page is processed before the next ones.
+        engine
+          .enhance(bookId, index, () => pageBlob(index), heavyMaxFactor, priority)
+          .then((b) => {
+            if (!cancelled) apply(index, b)
+          })
+          .catch(() => undefined)
+      } else {
+        // CPU (too slow to process on demand) or batch running: only show what is already cached.
+        void engine.lookup(bookId, index).then((bitmap) => {
+          if (!cancelled && bitmap) apply(index, bitmap)
+        })
+      }
     }
     setCunetResults((m) => {
       let changed = false
       const next = new Map<number, SrResult>()
       for (const [k, v] of m) {
-        if (wanted.includes(k)) next.set(k, v)
+        if (wanted.some((w) => w.index === k)) next.set(k, v)
         else changed = true
       }
       return changed ? next : m
@@ -515,7 +527,9 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose 
     () => ({ level: settings.srLevel, scale: settings.srScale, restore: settings.srRestore, clean: settings.srClean }),
     [settings.srLevel, settings.srScale, settings.srRestore, settings.srClean],
   )
-  const sr = useSuperResolution(status === 'ready' && settings.superResolution, srOptions)
+  // Exclusive with the heavy tier: when "Qualità massima" is on it is the only enhancement, so the
+  // page shows plain until the GAN result is ready (one swap, no flicker) — Anime4K does not run.
+  const sr = useSuperResolution(status === 'ready' && settings.superResolution && !settings.maxQuality, srOptions)
   const [enhanced, setEnhanced] = useState<Map<number, SrResult>>(() => new Map())
   const [srPending, setSrPending] = useState<Set<number>>(() => new Set())
   const [srNative, setSrNative] = useState<Set<number>>(() => new Set())
@@ -541,14 +555,24 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose 
     const wanted: number[] = []
     const plans = new Map<number, SrPlan>()
     const native = new Set<number>()
+    // Cap the kept results to the memory budget, visible spread first. At x4 a page is ~60 MB, so a
+    // couple of read-ahead spreads would overflow the cache and make the LRU thrash — evicting and
+    // recomputing pages, which shows up as pages flickering on/off. Read-ahead pages that do not fit
+    // are simply enhanced later, when the reader turns onto them.
+    const budget = cacheBudgetBytes()
+    let bytes = 0
     for (const [index, t] of targets) {
       if (cunetResults.has(index)) continue // the heavy-tier result wins
       const decision = engine.plan(t.size)
-      if (typeof decision === 'string') native.add(index)
-      else {
-        wanted.push(index)
-        plans.set(index, decision)
+      if (typeof decision === 'string') {
+        native.add(index)
+        continue
       }
+      const cost = decision.target.w * decision.target.h * 4
+      if (t.priority > 0 && bytes + cost > budget) continue
+      bytes += cost
+      wanted.push(index)
+      plans.set(index, decision)
     }
     engine.setWanted(wanted)
     setSrNative(native)
@@ -607,22 +631,6 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose 
   }, [enhanced, cunetResults])
   const heavyEnabled = settings.maxQuality
   const showEnhanced = (settings.superResolution && !!sr.engine) || (heavyEnabled && cunetResults.size > 0)
-  /** "Originale" held down: the plain page is shown instead of the enhanced one, to compare. */
-  const [compare, setCompare] = useState(false)
-  useEffect(() => {
-    const down = (e: KeyboardEvent) => {
-      if (e.key === 'o' && !e.repeat && !settingsOpen) setCompare(true)
-    }
-    const up = (e: KeyboardEvent) => {
-      if (e.key === 'o') setCompare(false)
-    }
-    window.addEventListener('keydown', down)
-    window.addEventListener('keyup', up)
-    return () => {
-      window.removeEventListener('keydown', down)
-      window.removeEventListener('keyup', up)
-    }
-  }, [settingsOpen])
 
   // Snapshot of what is on screen, taken after every render: the source of the transition ghost.
   useEffect(() => {
@@ -720,13 +728,14 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose 
   }
 
   const label = spread.length ? spreadLabel(spread) : '–'
-  /** Tiny corner indicator: green when the enhancement is applied to every page on screen. */
-  const mini = (() => {
-    if (!settings.srIndicator || !srBadge) return null
-    if (srBadge.startsWith('SR ×')) return { state: 'applied' as const, text: srBadge.slice(3) }
-    if (srBadge === 'SR…') return { state: 'pending' as const, text: '…' }
-    return null
-  })()
+  /** HD indicator: filled "HD" when the enhancement is on the page, dimmed while it works, struck when n/d. */
+  const hdState: 'applied' | 'pending' | 'na' | null = !srBadge
+    ? null
+    : srBadge.startsWith('SR ×')
+      ? 'applied'
+      : srBadge === 'SR n/d'
+        ? 'na'
+        : 'pending'
 
   return (
     <div
@@ -741,7 +750,7 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose 
         layout={layout}
         view={view}
         pages={pageStates}
-        enhanced={showEnhanced && !compare ? displayed : undefined}
+        enhanced={showEnhanced ? displayed : undefined}
         gutterColor={settings.gutterColor}
         background={settings.stageBackground}
         spreadKey={spreadKey}
@@ -749,16 +758,9 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose 
         ghost={ghost}
         onRetry={retryPage}
       />
-      {mini && !barsVisible && (
-        <div
-          className="material pointer-events-none absolute right-2 z-10 flex items-center gap-1 rounded-full px-1.5 py-[2px] text-[10px] leading-none font-semibold text-label-2 tabular-nums"
-          style={{ top: 'calc(env(safe-area-inset-top, 0px) + 6px)' }}
-          data-testid="sr-mini"
-          data-state={mini.state}
-          aria-hidden
-        >
-          <span className={`inline-block h-1.5 w-1.5 rounded-full ${mini.state === 'applied' ? 'bg-green' : 'bg-label-3'}`} />
-          {mini.text}
+      {settings.srIndicator && hdState && !barsVisible && (
+        <div className="pointer-events-none absolute right-2 z-10" style={{ top: 'calc(env(safe-area-inset-top, 0px) + 6px)' }}>
+          <HdBadge state={hdState} label={srBadge!} testId="sr-mini" floating />
         </div>
       )}
       {status === 'loading' && (
@@ -775,17 +777,13 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose 
         spreadCount={spreads.length}
         direction={settings.direction}
         double={double}
-        coverOffset={coverOffset}
         blankHere={spreadHasBlank}
         badge={srBadge}
-        compareAvailable={showEnhanced && spreadPages.some((i) => displayed.has(i))}
-        comparing={compare}
-        onCompare={setCompare}
+        badgeState={hdState}
         onBack={onClose}
         onSettings={() => setSettingsOpen((o) => !o)}
         onSeek={goToSpread}
         onToggleDouble={() => updateSettings({ pageMode: double ? 'single' : 'double' })}
-        onToggleOffset={() => setCoverOffset((v) => !v)}
         onToggleBlank={toggleBlankHere}
         onHoverChange={setHoveringBars}
       />

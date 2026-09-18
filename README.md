@@ -52,8 +52,8 @@ scuro); in **Impostazioni → Aspetto** si può forzare, e lo **sfondo di lettur
 - **Tocco ai lati**: in modalità manga (destra → sinistra) il tocco a sinistra va avanti, a destra indietro. Tocco al
   centro: mostra/nasconde le barre. Funzionano anche scorrimento orizzontale, frecce, spazio, PagSu/PagGiù, Home/Fine.
 - **Doppia pagina intelligente**: le pagine verticali vengono accoppiate, le tavole doppie (orizzontali) restano da sole
-  e la coppia riparte dopo. **Sfasa coppie** decide se la copertina sta da sola (1 | 2-3 | 4-5…) o si accoppia
-  (1-2 | 3-4…); l'impostazione è per volume. Con **Automatica** la doppia pagina si attiva con lo schermo in
+  e la coppia riparte dopo. **Sfasa coppie** (in Impostazioni) decide se la copertina sta da sola (1 | 2-3 | 4-5…) o si
+  accoppia (1-2 | 3-4…); l'impostazione è per volume. Con **Automatica** la doppia pagina si attiva con lo schermo in
   orizzontale.
 - **Pagina bianca qui**: se in un punto le coppie non combaciano (una pagina pubblicitaria in mezzo, per esempio),
   inserisce una pagina bianca prima di quella corrente e le coppie seguenti si spostano di una. Si ricorda per volume.
@@ -65,12 +65,13 @@ scuro); in **Impostazioni → Aspetto** si può forzare, e lo **sfondo di lettur
 - **Segnalibro**, dimensioni delle pagine e pagine bianche vengono salvati per ogni volume: si riprende dove si era
   rimasti e la suddivisione in coppie è stabile tra una sessione e l'altra.
 - **Transizione** tra le pagine: scorrimento (default), dissolvenza o nessuna (cambio istantaneo).
-- **Schermo intero durante la lettura** (attivo di default): aprendo un volume l'app chiede lo schermo intero, quindi
-  la barra di stato dell'iPad (ora, Wi-Fi, batteria) e l'indicatore Home scompaiono; si torna alla vista normale
-  chiudendo il volume. Dove il browser non lo consente l'impostazione lo segnala.
-- **Indicatore SR**: un piccolo segnale in alto a destra (nascosto quando le barre sono visibili, disattivabile) che
-  diventa verde con il fattore e il livello quando la super risoluzione o il modello pesante sono effettivamente
-  applicati a tutte le pagine sullo schermo; con i puntini indica che l'elaborazione è in corso.
+- **Schermo intero durante la lettura** (attivo di default): in Safari l'app va davvero a schermo intero e la barra di
+  stato dell'iPad (ora, Wi-Fi, batteria) e l'indicatore Home scompaiono. Nell'app **installata sulla Home** iOS non
+  permette di nascondere la barra di stato, ma l'app usa comunque tutta l'altezza dello schermo (guadagna lo spazio che
+  la barra riservava); l'impostazione lo segnala.
+- **Indicatore HD**: una piccola icona “HD” in alto a destra (nascosta quando le barre sono visibili, disattivabile):
+  accesa (arancione) quando la super risoluzione o Qualità massima sono applicate a tutte le pagine sullo schermo,
+  attenuata mentre elaborano, barrata (“non HD”) quando non sono disponibili. Il testo completo è nell'etichetta.
 - Lo schermo resta acceso durante la lettura (Wake Lock).
 
 ## Super risoluzione
@@ -82,8 +83,11 @@ memoria, **a un fattore fisso rispetto all'originale (×2 o ×4)**, indipendente
 **adattato al riquadro** con un ricampionamento Lanczos di alta qualità (mai la sfocatura bilineare del browser). È
 il modello "prima la super risoluzione, poi l'adattamento": un solo risultato per pagina serve ogni zoom,
 orientamento e impaginazione (lo zoom non ricalcola nulla), e ridurre un ×4 ai pixel dello schermo è ciò che rende
-le linee pulite. Funziona con la doppia pagina; le pagine seguenti vengono elaborate in anticipo. Il pulsante
-**Confronta** nella barra in basso (o il tasto `O`) mostra l'originale finché resta premuto.
+le linee pulite. Funziona con la doppia pagina; le pagine seguenti vengono elaborate in anticipo, ma solo finché
+stanno nel budget di memoria della cache (a ×4 una pagina pesa ~60 MB): così la cache non va in thrashing e le pagine
+non “lampeggiano”. Quando **Qualità massima** è attiva, la Super risoluzione standard è disattivata (i due sistemi
+sono alternativi): i relativi controlli — fattore, livello, linee nitide — non hanno effetto e vengono mostrati in
+grigio.
 
 - **Livello**: `Auto` parte da VL, misura il tempo della prima pagina e sceglie il livello più forte che sta sotto
   100 ms per pagina (UL solo se la GPU lo consente; con 2–4 GB di RAM si ferma a M/VL). Si può forzare M, VL o UL.
@@ -96,23 +100,24 @@ le linee pulite. Funziona con la doppia pagina; le pagine seguenti vengono elabo
 - **Backend automatico**: WebGPU (iPadOS 26+); su iPadOS 17/18 gli stessi shader ufficiali girano su **WebGL2**
   (risultato verificato equivalente: 54,6 dB tra i due backend); senza GPU utilizzabile, ridimensionamento del browser.
   Le impostazioni dicono sempre backend, livello, fattore, dimensione di uscita e tempo stimato.
-- **Indicatore** nella barra in alto: `SR ×2 VL` / `SR ×4 UL` (fattore e livello in uso, `+` con Linee nitide),
-  `SR ×4 GAN` (Qualità massima), `SR…` (in elaborazione), `SR n/d` (nessuna GPU utilizzabile o pagina troppo grande).
+- **Indicatore HD** (barra in alto e angolo): l'etichetta riporta `SR ×2 VL` / `SR ×4 UL` (fattore e livello in uso,
+  `+` con Linee nitide), `SR ×4 GAN` (Qualità massima), `SR…` (in elaborazione), `SR n/d` (nessuna GPU utilizzabile o
+  pagina troppo grande).
 
 ### "Qualità massima (lenta)" (sperimentale, spenta di default)
 
-**Real-ESRGAN anime 6B a ×4** tramite onnxruntime-web: aspetto "stampato", molto nitido; **decine di secondi per
-pagina** anche su GPU, minuti sulla CPU. I risultati sono salvati per sempre nell'archiviazione dell'app
-(`sr-cache/<volume>.esrgan6b.x4/<pagina>.webp`) e hanno la precedenza su Anime4K, che nel frattempo mostra la pagina:
-i due livelli convivono. Eliminando il volume si cancellano. Attivandola vengono scaricati una volta sola il motore
-(14–27 MB) e il modello (18 MB), poi restano in cache. Anche qui il risultato è un fattore fisso della pagina (×4;
-×2 solo se il ×4 supererebbe i 16 MP), poi adattato allo schermo.
+Unico interruttore del tier pesante: **Real-ESRGAN anime 6B a ×4** tramite onnxruntime-web, aspetto "stampato", molto
+nitido; **decine di secondi per pagina** anche su GPU, minuti sulla CPU. È **alternativo** alla Super risoluzione
+standard: quando è attivo, Anime4K non gira e la pagina resta com'è finché il risultato del modello non è pronto (un
+solo cambio, niente lampeggio). I risultati sono salvati per sempre nell'archiviazione dell'app
+(`sr-cache/<volume>.esrgan6b.x4/<pagina>.webp`); eliminando il volume si cancellano. Attivandola vengono scaricati una
+volta sola il motore (14–27 MB) e il modello (18 MB), poi restano in cache. Il risultato è un fattore fisso della
+pagina (×4; ×2 solo se il ×4 supererebbe i 16 MP), poi adattato allo schermo.
 
-- Con WebGPU le pagine seguenti vengono pre-elaborate in background mentre leggi; con la sola CPU (WebAssembly,
-  fino a 4 thread) si usa **Pre-elabora questo volume**, che elabora tutto il volume con barra di avanzamento, tempo
-  stimato e Annulla (lo schermo resta acceso). Conviene comunque la pre-elaborazione.
-- Il modello tende a cancellare i retini finissimi e a "ridisegnare" il lettering minuscolo delle scansioni a bassa
-  risoluzione: **Confronta** mostra l'originale per giudicare.
+- Con WebGPU le pagine seguenti vengono pre-elaborate in background mentre leggi, **dando sempre la precedenza alla
+  pagina visibile** (coda a priorità): il tempo di calcolo, che è tanto, non viene sprecato su una pagina successiva
+  mentre quella davanti aspetta. Con la sola CPU (WebAssembly, fino a 4 thread) si usa **Pre-elabora questo volume**,
+  che elabora tutto il volume con barra di avanzamento, tempo stimato e Annulla (lo schermo resta acceso).
 
 Il modello non è nel repository: `npm run setup` lo scarica dalla
 [release `models-v1`](https://github.com/gianmarcocherubini/4k-CBR-CBZ-Reader/releases/tag/models-v1) di questo

@@ -142,6 +142,24 @@ body {
   padding-right: env(safe-area-inset-right, 0px);
 }
 
+/*
+ * Installed PWA: with apple-mobile-web-app-status-bar-style=black-translucent the content uses the
+ * full screen height (the reader gains the ~50 px the status bar used to reserve). iOS then draws
+ * the clock/battery in white over the very top; a faint scrim in that strip keeps them legible on
+ * light pages. iOS cannot hide the status bar in an installed app — only Safari's Fullscreen can.
+ */
+@media (display-mode: standalone), (display-mode: fullscreen) {
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0 0 auto 0;
+    height: env(safe-area-inset-top, 0px);
+    background: linear-gradient(to bottom, rgb(0 0 0 / 0.28), transparent);
+    pointer-events: none;
+    z-index: 60;
+  }
+}
+
 /* ---- typography (iOS text styles) ------------------------------------------------------- */
 .text-large-title {
   font-size: 34px;
@@ -530,6 +548,25 @@ input[type='range'].slider::-moz-range-thumb {
 @media (prefers-reduced-motion: reduce) {
   .spread-anim {
     animation-duration: 1ms;
+  }
+}
+
+/* HD indicator: gentle pulse while the enhancement is being computed. */
+@keyframes hd-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+.hd-pulse {
+  animation: hd-pulse 1.2s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .hd-pulse {
+    animation: none;
   }
 }
 

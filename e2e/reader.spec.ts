@@ -170,11 +170,16 @@ test.describe('reader', () => {
     await page.keyboard.press('ArrowRight')
     await expect(lbl).toHaveText('1')
 
-    // Offset toggle: cover paired with page 2, and back.
+    // Offset (from Settings → "Sfasa coppie"): cover paired with page 2, and back.
     await page.mouse.move(CENTER.x, CENTER.y) // reveal toolbars
-    await page.getByTestId('toggle-offset').click()
+    await page.getByTestId('settings').click()
+    await page.getByRole('switch', { name: 'Sfasa coppie' }).click()
+    await page.getByRole('button', { name: 'Chiudi impostazioni' }).click()
     await expect(lbl).toHaveText('1-2')
-    await page.getByTestId('toggle-offset').click()
+    await page.mouse.move(CENTER.x, CENTER.y)
+    await page.getByTestId('settings').click()
+    await page.getByRole('switch', { name: 'Sfasa coppie' }).click()
+    await page.getByRole('button', { name: 'Chiudi impostazioni' }).click()
     await expect(lbl).toHaveText('1')
 
     // Single page mode.
