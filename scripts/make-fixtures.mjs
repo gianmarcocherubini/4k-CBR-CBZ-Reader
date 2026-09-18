@@ -202,6 +202,9 @@ await writeZip('short-book.cbz', shortBook)
 const tiny = []
 for (let i = 0; i < 2; i++) tiny.push({ name: `t${i + 1}.png`, data: drawPage(i + 70, String(i + 1), 300, 450) })
 await writeZip('tiny-book.cbz', tiny)
+const tinyQueue = []
+for (let i = 0; i < 6; i++) tinyQueue.push({ name: `q${i + 1}.png`, data: drawPage(i + 80, String(i + 1), 300, 450) })
+await writeZip('tiny-queue.cbz', tinyQueue)
 
 // ZIP64 archive with a handful of pages (forces the 64-bit records).
 const z64 = []

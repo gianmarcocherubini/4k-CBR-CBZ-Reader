@@ -69,7 +69,7 @@ scuro); in **Impostazioni → Aspetto** si può forzare, e lo **sfondo di lettur
 - **Schermo intero durante la lettura** (attivo di default): in Safari l'app va davvero a schermo intero e la barra di
   stato dell'iPad (ora, Wi-Fi, batteria) e l'indicatore Home scompaiono. Nell'app **installata sulla Home** iOS non
   permette di nascondere la barra di stato, ma l'app usa comunque tutta l'altezza dello schermo (guadagna lo spazio che
-  la barra riservava); l'impostazione lo segnala.
+  la barra riservava), inclusa la fascia dell'indicatore Home in orizzontale; l'impostazione lo segnala.
 - **Indicatore HD**: una piccola icona “HD” in alto a destra (nascosta quando le barre sono visibili, disattivabile):
   accesa (arancione) quando la super risoluzione o Qualità massima sono applicate a tutte le pagine sullo schermo,
   attenuata mentre elaborano, barrata (“non HD”) quando non sono disponibili. Il testo completo è nell'etichetta.
@@ -119,6 +119,10 @@ pagina (×4; ×2 solo se il ×4 supererebbe i 16 MP), poi adattato allo schermo.
   pagina visibile** (coda a priorità): il tempo di calcolo, che è tanto, non viene sprecato su una pagina successiva
   mentre quella davanti aspetta. Con la sola CPU (WebAssembly, fino a 4 thread) si usa **Pre-elabora questo volume**,
   che elabora tutto il volume con barra di avanzamento, tempo stimato e Annulla (lo schermo resta acceso).
+- In doppia pagina i due file restano separati nella cache (fonderli raddoppierebbe l'area e supererebbe spesso il
+  limite di 16 MP), ma lo **spread è atomico**: entrambe le pagine visibili vengono elaborate prima del preload e
+  passano a HD insieme. Una pagina bianca non richiede elaborazione. I lavori tolti dalla coda vengono realmente
+  annullati/reinseriti e i bitmap dello spread visibile non possono essere sfrattati dalla cache.
 - Su GPU con `shader-f16` usa il grafo mixed-precision (input/output FP32, pesi e convoluzioni FP16), buffer GPU
   riutilizzati e graph capture ONNX Runtime. I tile vengono assemblati sulla GPU e letti una volta sola a pagina:
   benchmark 800×1200 locale, **49,5 → 13,5 s** (3,7×). Rispetto al percorso FP32: PSNR 48,2 dB, SSIM 0,99991,

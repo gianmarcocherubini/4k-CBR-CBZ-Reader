@@ -282,7 +282,7 @@ export function SettingsPanel({
             </div>
           </Group>
 
-          <div className={settings.maxQuality ? 'pointer-events-none opacity-45' : ''} aria-disabled={settings.maxQuality || undefined}>
+          <div className={settings.maxQuality ? 'sr-settings-disabled pointer-events-none' : ''} aria-disabled={settings.maxQuality || undefined}>
           <Group
             title="Super risoluzione"
             footer={

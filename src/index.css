@@ -114,6 +114,11 @@ html,
 body,
 #root {
   height: 100%;
+  width: 100%;
+}
+
+html {
+  min-height: -webkit-fill-available;
 }
 
 body {
@@ -128,6 +133,26 @@ body {
   -webkit-tap-highlight-color: transparent;
   -webkit-touch-callout: none;
   -webkit-text-size-adjust: 100%;
+}
+
+/* The reader must cover the visual viewport, including the landscape home-indicator strip. */
+.reader-shell {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  height: 100dvh;
+  min-height: -webkit-fill-available;
+}
+
+/*
+ * Disable only the contents of the Anime4K group. Applying opacity to its wrapper made the
+ * `group-card` itself translucent, so the comic showed through the settings sheet.
+ */
+.sr-settings-disabled .group-header,
+.sr-settings-disabled .group-footer,
+.sr-settings-disabled .row {
+  opacity: 0.45;
 }
 
 /* Safe areas for the home-screen app (notch / home indicator). */

@@ -14,7 +14,7 @@ import {
 } from '../../lib/storage/importer'
 import { cacheBudgetBytes } from '../../lib/upscale/backend'
 import { deleteCunetCache } from '../../lib/upscale/cunet/cunetEngine'
-import type { HeavyFactor } from '../../lib/upscale/cunet/protocol'
+import { type HeavyFactor, heavyFactor } from '../../lib/upscale/cunet/protocol'
 import { SrAborted, type SrOptions, type SrPlan, type SrResult } from '../../lib/upscale/srEngine'
 import { type Book, GUTTER_FRACTION, type PageSize, type ReaderSettings } from '../../types'
 import { MaxQualityControls } from './MaxQualityControls'
@@ -494,7 +494,6 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
   useWakeLock(status === 'ready')
 
   // ---- "Qualità massima" (Real-ESRGAN anime 6B at x4; cached results take precedence) ---------
-  // Coexists with the standard tier: Anime4K shows the page at once, the GAN result replaces it.
   const mq = useMaxQuality(status === 'ready' && settings.maxQuality, 'esrgan6b')
   const heavyLabel = 'GAN'
   /** The GAN's native factor; the worker drops to x2 only when x4 would exceed the canvas cap. */
@@ -529,10 +528,25 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
     // The visible spread is priority 0; read-ahead pages get their reading distance. The engine's
     // queue always runs the lowest priority next, so the expensive GAN time is spent on the page in
     // front of the reader first and never wasted on a read-ahead page while the current one waits.
-    const wanted: Array<{ index: number; priority: number }> = spreadPages.map((index) => ({ index, priority: 0 }))
-    for (let k = 1; k <= PRELOAD_AHEAD; k++) {
-      for (const p of realPages(spreads[spreadIndex + k] ?? [])) if (!wanted.some((w) => w.index === p)) wanted.push({ index: p, priority: k })
+    const outputBytes = (index: number) => {
+      const size = sizes[index]
+      if (!size) return 64 * 1024 * 1024 // conservative x4 page until dimensions are known
+      const factor = heavyFactor(size.w, size.h, heavyMaxFactor)
+      return factor ? size.w * size.h * factor * factor * 4 : 0
     }
+    const wanted: Array<{ index: number; priority: number }> = spreadPages.map((index) => ({ index, priority: 0 }))
+    let plannedBytes = spreadPages.reduce((sum, index) => sum + outputBytes(index), 0)
+    const preloadBudget = cacheBudgetBytes()
+    for (let k = 1; k <= PRELOAD_AHEAD; k++) {
+      for (const p of realPages(spreads[spreadIndex + k] ?? [])) {
+        if (wanted.some((w) => w.index === p)) continue
+        const bytes = outputBytes(p)
+        if (bytes === 0 || plannedBytes + bytes > preloadBudget) continue
+        wanted.push({ index: p, priority: k })
+        plannedBytes += bytes
+      }
+    }
+    engine.protect(book.id, spreadPages)
     engine.prune(
       book.id,
       wanted.map((w) => w.index),
@@ -545,7 +559,7 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
     for (const { index, priority } of wanted) {
       const hit = engine.peek(bookId, index)
       if (hit) {
-        apply(index, hit)
+        if (priority === 0) apply(index, hit)
         continue
       }
       if (engine.prefetchAllowed && !batchRunning) {
@@ -553,13 +567,13 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
         engine
           .enhance(bookId, index, () => pageBlob(index), heavyMaxFactor, priority, persistHeavy)
           .then((b) => {
-            if (!cancelled) apply(index, b)
+            if (!cancelled && priority === 0) apply(index, b)
           })
           .catch(() => undefined)
       } else {
         // CPU (too slow to process on demand) or batch running: only show what is already cached.
         void engine.lookup(bookId, index, persistHeavy).then((bitmap) => {
-          if (!cancelled && bitmap) apply(index, bitmap)
+          if (!cancelled && priority === 0 && bitmap) apply(index, bitmap)
         })
       }
     }
@@ -567,7 +581,7 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
       let changed = false
       const next = new Map<number, SrResult>()
       for (const [k, v] of m) {
-        if (wanted.some((w) => w.index === k)) next.set(k, v)
+        if (spreadPages.includes(k)) next.set(k, v)
         else changed = true
       }
       return changed ? next : m
@@ -576,7 +590,7 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
       cancelled = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mq.engine, mq.tick, mq.batch.running, status, book, spreadKey, spreads, spreadIndex, pageBlob])
+  }, [mq.engine, mq.status, mq.batch.running, status, book, spreadKey, spreads, spreadIndex, sizes, pageBlob])
 
   // ---- super resolution (Anime4K) ------------------------------------------------------------
   const srOptions = useMemo<SrOptions>(
@@ -678,13 +692,20 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sr.engine, sr.tick, status, spreadKey, spreadPages, sizes, spreads, spreadIndex, srOptions, cunetResults])
 
+  /** In a double spread, reveal the GAN atomically only after both real pages are ready. */
+  const visibleHeavyComplete =
+    !settings.maxQuality ||
+    spreadPages.every((index) => cunetResults.has(index) && pageStates.get(index)?.status === 'ready')
+
   /** What the view shows: GAN results first, then Anime4K. */
   const displayed = useMemo(() => {
     if (cunetResults.size === 0) return enhanced
     const merged = new Map(enhanced)
-    for (const [k, v] of cunetResults) merged.set(k, v)
+    for (const [k, v] of cunetResults) {
+      if (!settings.maxQuality || !spreadPages.includes(k) || visibleHeavyComplete) merged.set(k, v)
+    }
     return merged
-  }, [enhanced, cunetResults])
+  }, [enhanced, cunetResults, settings.maxQuality, spreadPages, visibleHeavyComplete])
   const heavyEnabled = settings.maxQuality
   const showEnhanced = (settings.superResolution && !!sr.engine) || (heavyEnabled && cunetResults.size > 0)
 
@@ -795,7 +816,7 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
 
   return (
     <div
-      className="relative h-full overflow-hidden bg-stage"
+      className="reader-shell overflow-hidden bg-stage"
       style={{ background: STAGE_BG[settings.stageBackground] }}
       data-testid="reader"
       data-status={status}

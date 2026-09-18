@@ -486,6 +486,13 @@ test.describe('reader', () => {
     await importBooks(page, ['short-book.cbz'])
     await openBook(page, 'short-book')
     await expect.poll(() => page.evaluate(() => document.fullscreenElement !== null)).toBe(true)
+    const bounds = await page.getByTestId('reader').evaluate((element) => {
+      const box = element.getBoundingClientRect()
+      return { top: box.top, bottom: box.bottom, height: box.height, viewport: window.visualViewport?.height ?? window.innerHeight }
+    })
+    expect(bounds.top).toBeCloseTo(0, 0)
+    expect(bounds.bottom).toBeCloseTo(bounds.viewport, 0)
+    expect(bounds.height).toBeCloseTo(bounds.viewport, 0)
     await page.getByTestId('back').click()
     await expect(page.getByTestId('book-card')).toHaveCount(1)
     await expect.poll(() => page.evaluate(() => document.fullscreenElement !== null)).toBe(false)

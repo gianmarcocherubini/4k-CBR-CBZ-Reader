@@ -42,6 +42,13 @@ interface Pending {
   onProgress?: (done: number, total: number) => void
 }
 
+interface HeavyTask {
+  key: string
+  priority: number
+  run: () => Promise<void>
+  cancel: () => void
+}
+
 export class CunetAborted extends Error {
   constructor() {
     super('aborted')
@@ -70,7 +77,12 @@ export class CunetEngine {
    *  may use the whole budget: enough for the visible spread plus read-ahead without LRU thrash. */
   private readonly budget = cacheBudgetBytes()
   private readonly inflight = new Map<string, Promise<ImageBitmap>>()
-  private queue: Array<{ key: string; priority: number; run: () => Promise<void> }> = []
+  private readonly cacheLookups = new Map<string, Promise<ImageBitmap | null>>()
+  private queue: HeavyTask[] = []
+  private activeTask: HeavyTask | null = null
+  private protectedKeys = new Set<string>()
+  private wantedKeys: Set<string> | null = null
+  private readonly pendingCloses = new Map<ImageBitmap, ReturnType<typeof setTimeout>>()
   private running = false
   private disposed = false
   /** Per-page wall time EMA (seconds), used for the batch estimate. */
@@ -173,30 +185,65 @@ export class CunetEngine {
     return hit
   }
 
-  private remember(k: string, bitmap: ImageBitmap): void {
+  private closeAfterPaint(bitmap: ImageBitmap): void {
+    if (this.pendingCloses.has(bitmap)) return
+    const timer = setTimeout(() => {
+      this.pendingCloses.delete(bitmap)
+      bitmap.close()
+    }, 500)
+    this.pendingCloses.set(bitmap, timer)
+  }
+
+  private remember(k: string, bitmap: ImageBitmap): boolean {
+    if (this.disposed) {
+      bitmap.close()
+      return false
+    }
     const old = this.bitmaps.get(k)
+    if (old === bitmap) {
+      this.bitmaps.delete(k)
+      this.bitmaps.set(k, bitmap)
+      return true
+    }
     if (old && old !== bitmap) {
       this.bitmapBytes -= old.width * old.height * 4
-      old.close()
+      this.closeAfterPaint(old)
     }
     this.bitmaps.set(k, bitmap)
     this.bitmapBytes += bitmap.width * bitmap.height * 4
+    this.evictBitmaps()
+    return this.bitmaps.get(k) === bitmap
+  }
+
+  /** The visible spread must never be closed while React is painting it. */
+  protect(bookId: string, pages: Iterable<number>): void {
+    this.protectedKeys = new Set([...pages].map((page) => this.key(bookId, page)))
+    this.evictBitmaps()
+  }
+
+  private evictBitmaps(): void {
     for (const [key, b] of this.bitmaps) {
-      if (this.bitmapBytes <= this.budget || this.bitmaps.size <= 2) break
+      if (this.bitmapBytes <= this.budget) break
+      if (this.protectedKeys.has(key)) continue
       this.bitmaps.delete(key)
       this.bitmapBytes -= b.width * b.height * 4
-      b.close()
+      this.closeAfterPaint(b)
     }
   }
 
   /** Cached result from OPFS, decoded; null when the page was never processed. */
   lookup(bookId: string, page: number, persist = true): Promise<ImageBitmap | null> {
+    const k = this.key(bookId, page)
     const hit = this.peek(bookId, page)
     if (hit) return Promise.resolve(hit)
     if (!persist) return Promise.resolve(null)
-    const pending = this.inflight.get(this.key(bookId, page))
+    const pending = this.inflight.get(k)
     if (pending) return pending.then((b) => b, () => null)
-    return this.readCache(bookId, page)
+    const lookup = this.cacheLookups.get(k)
+    if (lookup) return lookup
+    const created = this.readCache(bookId, page).finally(() => this.cacheLookups.delete(k))
+    this.cacheLookups.set(k, created)
+    return created
   }
 
   /** Pure OPFS read (no queue interaction), so it is safe to call from inside a queued task. x4 first. */
@@ -216,8 +263,8 @@ export class CunetEngine {
         const typed = file.type ? file : new Blob([file], { type: isWebp ? 'image/webp' : 'image/jpeg' })
         await assertSafeEncodedImage(typed)
         const bitmap = await createImageBitmap(typed)
-        this.remember(this.key(bookId, page), bitmap)
-        return bitmap
+        if (this.remember(this.key(bookId, page), bitmap)) return bitmap
+        return null
       } catch {
         // not cached at this factor
       }
@@ -249,9 +296,18 @@ export class CunetEngine {
     persist = true,
     onProgress?: (d: number, t: number) => void,
   ): Promise<ImageBitmap> {
+    if (this.disposed) return Promise.reject(new CunetAborted())
     const k = this.key(bookId, page)
+    if (this.wantedKeys && !this.wantedKeys.has(k)) return Promise.reject(new CunetAborted())
     const hit = this.peek(bookId, page)
     if (hit) return Promise.resolve(hit)
+    const lookup = this.cacheLookups.get(k)
+    if (lookup) {
+      return lookup.then((cached) => {
+        if (this.wantedKeys && !this.wantedKeys.has(k)) throw new CunetAborted()
+        return cached ?? this.enhance(bookId, page, source, maxFactor, priority, persist, onProgress)
+      })
+    }
     const pending = this.inflight.get(k)
     if (pending) {
       // Re-prioritise an already-queued page (e.g. the reader just turned onto a read-ahead page).
@@ -260,36 +316,66 @@ export class CunetEngine {
       this.queue.sort((a, b) => a.priority - b.priority)
       return pending
     }
+    let task!: HeavyTask
     const promise = new Promise<ImageBitmap>((resolve, reject) => {
-      this.queue.push({
+      let cancelled = false
+      let workerRequestId: number | null = null
+      const cancel = () => {
+        if (cancelled) return
+        cancelled = true
+        if (workerRequestId !== null) this.worker?.postMessage({ type: 'cancel', id: workerRequestId } satisfies CunetRequest)
+        reject(new CunetAborted())
+      }
+      task = {
         key: k,
         priority,
+        cancel,
         run: async () => {
+          if (cancelled) return
           try {
             await this.init()
+            if (cancelled) return
             const cached = persist ? await this.readCache(bookId, page) : null
+            if (cancelled) return
             if (cached) {
               resolve(cached)
               return
             }
             const blob = await source()
+            if (cancelled) return
             const t0 = performance.now()
-            const { promise: p } = this.call<Blob>(
+            const called = this.call<Blob>(
               { type: 'process', cacheKeyBase: cacheKeyFor(bookId, this.model), page, blob, maxFactor, persist },
               onProgress,
             )
-            const encoded = await p
+            workerRequestId = called.id
+            if (cancelled) {
+              this.worker?.postMessage({ type: 'cancel', id: called.id } satisfies CunetRequest)
+              return
+            }
+            const encoded = await called.promise
+            workerRequestId = null
+            if (cancelled) return
             const secs = (performance.now() - t0) / 1000
             this.secondsPerPage = this.secondsPerPage === undefined ? secs : this.secondsPerPage * 0.6 + secs * 0.4
             const bitmap = await createImageBitmap(encoded)
-            this.remember(k, bitmap)
+            if (cancelled) {
+              bitmap.close()
+              return
+            }
+            if (!this.remember(k, bitmap)) {
+              reject(new CunetAborted())
+              return
+            }
             resolve(bitmap)
             this.onChange?.()
           } catch (e) {
-            reject((e as { code?: string })?.code === 'aborted' ? new CunetAborted() : e)
+            workerRequestId = null
+            if (!cancelled) reject((e as { code?: string })?.code === 'aborted' ? new CunetAborted() : e)
           }
         },
-      })
+      }
+      this.queue.push(task)
       this.queue.sort((a, b) => a.priority - b.priority)
       void this.pump()
     }).finally(() => this.inflight.delete(k))
@@ -305,7 +391,12 @@ export class CunetEngine {
         // Re-read the head each turn: priorities may have changed while the previous page ran.
         this.queue.sort((a, b) => a.priority - b.priority)
         const task = this.queue.shift()!
-        await task.run()
+        this.activeTask = task
+        try {
+          await task.run()
+        } finally {
+          if (this.activeTask === task) this.activeTask = null
+        }
       }
     } finally {
       this.running = false
@@ -315,7 +406,14 @@ export class CunetEngine {
   /** Drops queued (not started) work for pages other than `keep`. */
   prune(bookId: string, keep: Iterable<number>): void {
     const keepKeys = new Set([...keep].map((p) => this.key(bookId, p)))
-    this.queue = this.queue.filter((t) => keepKeys.has(t.key))
+    this.wantedKeys = keepKeys
+    const kept: HeavyTask[] = []
+    for (const task of this.queue) {
+      if (keepKeys.has(task.key)) kept.push(task)
+      else task.cancel()
+    }
+    this.queue = kept
+    if (this.activeTask && !keepKeys.has(this.activeTask.key)) this.activeTask.cancel()
   }
 
   /**
@@ -364,13 +462,25 @@ export class CunetEngine {
 
   dispose(): void {
     this.disposed = true
+    for (const task of this.queue) task.cancel()
     this.queue = []
+    this.activeTask?.cancel()
+    this.activeTask = null
+    this.protectedKeys.clear()
+    this.wantedKeys = null
     for (const b of this.bitmaps.values()) b.close()
     this.bitmaps.clear()
+    for (const [bitmap, timer] of this.pendingCloses) {
+      clearTimeout(timer)
+      bitmap.close()
+    }
+    this.pendingCloses.clear()
     this.bitmapBytes = 0
     this.worker?.terminate()
     this.worker = null
+    for (const pending of this.pending.values()) pending.reject(new CunetAborted())
     this.pending.clear()
+    this.cacheLookups.clear()
   }
 }
 

@@ -307,6 +307,54 @@ test('Qualità massima: Real-ESRGAN x4 batch job, results win over Anime4K and s
   await expect(page.locator('[data-testid=page][data-page="2"]')).toHaveAttribute('data-sr', 'GAN', { timeout: 15_000 })
 })
 
+test('GAN requeues pruned pages and reveals a double spread atomically', async ({ page }) => {
+  test.setTimeout(5 * 60_000)
+  await page.goto('/')
+  await importAndOpen(page, 'tiny-queue.cbz', 'tiny-queue')
+  await page.mouse.move(590, 410)
+  await page.getByTestId('settings').click()
+  await page.getByRole('switch', { name: 'Qualità massima' }).click()
+  const status = page.getByTestId('mq-status')
+  await expect(status).not.toContainText('Caricamento', { timeout: 180_000 })
+  const statusText = (await status.textContent()) ?? ''
+  test.skip(!statusText.includes('WebGPU'), 'on-demand queue needs WebGPU')
+
+  // Disabling Anime4K dims controls, not their card/background (the comic must not show through).
+  const srWrapper = page.getByTestId('sr-section').locator('..')
+  await expect(srWrapper).toHaveCSS('opacity', '1')
+  const cardAlpha = await page
+    .getByTestId('sr-section')
+    .locator('.group-card')
+    .evaluate((element) => getComputedStyle(element).backgroundColor)
+  expect(cardAlpha).not.toMatch(/rgba\([^)]*,\s*0(?:\.0+)?\)$/)
+  await page.getByRole('button', { name: 'Chiudi impostazioni' }).click()
+
+  // Drop queued read-ahead jobs, then immediately turn onto pages 2-3. Before the fix those
+  // dropped Promises stayed in `inflight` forever and these pages could never be requeued.
+  await page.keyboard.press('End')
+  await page.keyboard.press('Home')
+  await page.keyboard.press('ArrowLeft')
+  await expect(page.getByTestId('page-label')).toHaveText('2-3')
+  await page.evaluate(() => {
+    const state = (window as unknown as { __partialGan?: boolean; __ganObserver?: MutationObserver })
+    state.__partialGan = false
+    state.__ganObserver = new MutationObserver(() => {
+      const pages = [...document.querySelectorAll('[data-testid="page"]')]
+      const enhanced = pages.filter((element) => element.getAttribute('data-sr') === 'GAN').length
+      if (pages.length === 2 && enhanced === 1) state.__partialGan = true
+    })
+    state.__ganObserver.observe(document.body, { subtree: true, attributes: true, childList: true })
+  })
+  const p2 = page.locator('[data-testid=page][data-page="2"]')
+  const p3 = page.locator('[data-testid=page][data-page="3"]')
+  await expect(p2).toHaveAttribute('data-sr', 'GAN', { timeout: 120_000 })
+  await expect(p3).toHaveAttribute('data-sr', 'GAN', { timeout: 120_000 })
+  await expect(p2.locator('canvas[data-testid=enhanced]')).toBeVisible()
+  await expect(p3.locator('canvas[data-testid=enhanced]')).toBeVisible()
+  expect(await page.evaluate(() => (window as unknown as { __partialGan?: boolean }).__partialGan)).toBe(false)
+  await page.evaluate(() => (window as unknown as { __ganObserver?: MutationObserver }).__ganObserver?.disconnect())
+})
+
 test('Qualità massima on the CPU (WebAssembly threads): batch job only', async ({ page }) => {
   test.setTimeout(20 * 60_000)
   await page.goto('/?cunet=wasm')
