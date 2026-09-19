@@ -1,8 +1,18 @@
 /// <reference types="@webgpu/types" />
 import type { PageSize } from '../../../types'
 import { MAX_OUTPUT_PIXELS, type UpscaleResult } from '../backend'
+import { canvasMatrix, type Dihedral, type EnsembleSize, ensembleTransforms, transformedSize } from './transforms'
 import { CONTEXT, f16ArrayToF32, type SrvggWeights } from './weights'
-import { BODY_BLOCK_H, BODY_BLOCK_W, convBodyWgsl, convFirstWgsl, type KernelOptions, shuffleWgsl } from './wgsl'
+import {
+  BODY_BLOCK_H,
+  BODY_BLOCK_W,
+  convBodyWgsl,
+  convFirstWgsl,
+  finalizeWgsl,
+  type KernelOptions,
+  SHUFFLE_PARAMS_BYTES,
+  shuffleWgsl,
+} from './wgsl'
 
 export type EsrganFactor = 2 | 4
 
@@ -52,7 +62,7 @@ export function planBands(size: PageSize, bytesPerPixel: number, maxActBytes = M
   return { bw, coreRows, bands: Math.ceil(size.h / coreRows) }
 }
 
-/** Source pixels the network actually processes for a page (context included): the cost unit. */
+/** Source pixels the network processes for one pass over a page (context included): the cost unit. */
 export function workPixels(size: PageSize, bytesPerPixel: number): number {
   const plan = planBands(size, bytesPerPixel)
   if (!plan) return size.w * size.h
@@ -65,8 +75,10 @@ export function workPixels(size: PageSize, bytesPerPixel: number): number {
 }
 
 interface LayerGpu {
-  bindGroup: GPUBindGroup
   pipeline: GPUComputePipeline
+  /** Bind group reading the normal band texture, and the one reading the transposed texture (layer 0 only differs). */
+  bindGroup: GPUBindGroup
+  bindGroupT: GPUBindGroup
 }
 
 interface BandBuffers {
@@ -74,8 +86,11 @@ interface BandBuffers {
   paddedRows: number
   a: GPUBuffer
   b: GPUBuffer
+  /** Band input as drawn (bw × paddedRows) and transposed (paddedRows × bw), for the swapped passes. */
   input: GPUTexture
+  inputT: GPUTexture
   inputView: GPUTextureView
+  inputViewT: GPUTextureView
   layers: LayerGpu[]
   /** Activation buffer written by conv_last (read by the shuffle kernel). */
   lastAct: GPUBuffer
@@ -106,13 +121,18 @@ export function padPage(source: ImageBitmap): OffscreenCanvas {
 
 export interface RunOptions {
   signal?: AbortSignal
+  /** Progress in (band, pass) steps. */
   onProgress?: (done: number, total: number) => void
+  /** Geometric self-ensemble: passes over transformed copies of each band, averaged (default 1). */
+  ensemble?: EnsembleSize
 }
 
 /**
  * Real-ESRGAN "anime video v3" (SRVGGNetCompact: 3→64, 16 × (64→64 + PReLU), 64→48, pixel shuffle
  * x4) on WebGPU compute shaders. The page is processed in horizontal bands so the two activation
- * buffers stay small; results are stitched on the GPU and read back once.
+ * buffers stay small; results are stitched on the GPU and read back once. With an ensemble, every
+ * band is run once per symmetry of the rectangle (flips, transpositions) and the outputs are
+ * averaged on the GPU before being written to the page.
  */
 export class EsrganUpscaler {
   readonly device: GPUDevice
@@ -120,11 +140,20 @@ export class EsrganUpscaler {
   readonly bytesPerPixel: number
   private readonly options: KernelOptions
   private readonly weights: SrvggWeights
-  private readonly pipelines: { first: GPUComputePipeline; body: GPUComputePipeline; last: GPUComputePipeline; shuffle: GPUComputePipeline }
+  private readonly pipelines: {
+    first: GPUComputePipeline
+    body: GPUComputePipeline
+    last: GPUComputePipeline
+    shuffle: GPUComputePipeline
+    shuffleAccumulate: GPUComputePipeline
+    finalize: GPUComputePipeline
+  }
   private readonly layerBuffers: Array<{ weight: GPUBuffer; bias: GPUBuffer; prelu: GPUBuffer | null }>
   private readonly bandParams: GPUBuffer
   private readonly shuffleParams: GPUBuffer
   private buffers: BandBuffers | null = null
+  private acc: { bytes: number; buffer: GPUBuffer } | null = null
+  private scratch: { w: number; h: number; canvas: OffscreenCanvas }[] = []
   private lost = false
   onLost: (() => void) | null = null
   /** Activation-buffer cap used to cut bands (tests lower it to exercise multi-band seams on tiny images). */
@@ -149,7 +178,11 @@ export class EsrganUpscaler {
       prelu: layer.prelu ? this.upload(layer.prelu, `esrgan-${layer.name}-p`) : null,
     }))
     this.bandParams = device.createBuffer({ label: 'esrgan-band', size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST })
-    this.shuffleParams = device.createBuffer({ label: 'esrgan-shuffle', size: 48, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST })
+    this.shuffleParams = device.createBuffer({
+      label: 'esrgan-shuffle',
+      size: SHUFFLE_PARAMS_BYTES,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    })
     void device.lost.then(() => {
       this.lost = true
       this.onLost?.()
@@ -185,13 +218,15 @@ export class EsrganUpscaler {
           layout: 'auto',
           compute: { module: device.createShaderModule({ label, code }), entryPoint: 'main' },
         })
-      const [first, body, last, shuffle] = await Promise.all([
+      const [first, body, last, shuffle, shuffleAccumulate, finalize] = await Promise.all([
         pipeline('esrgan-conv-first', convFirstWgsl(options)),
         pipeline('esrgan-conv-body', convBodyWgsl(options, 64, true)),
         pipeline('esrgan-conv-last', convBodyWgsl(options, 48, false)),
-        pipeline('esrgan-shuffle', shuffleWgsl(options)),
+        pipeline('esrgan-shuffle', shuffleWgsl(options, false)),
+        pipeline('esrgan-shuffle-accumulate', shuffleWgsl(options, true)),
+        pipeline('esrgan-finalize', finalizeWgsl()),
       ])
-      return { first, body, last, shuffle }
+      return { first, body, last, shuffle, shuffleAccumulate, finalize }
     }
     try {
       let options: KernelOptions = { f16 }
@@ -236,18 +271,23 @@ export class EsrganUpscaler {
       cur.a.destroy()
       cur.b.destroy()
       cur.input.destroy()
+      cur.inputT.destroy()
     }
     const device = this.device
     const bytes = bw * paddedRows * this.bytesPerPixel
     const a = device.createBuffer({ label: 'esrgan-act-a', size: bytes, usage: GPUBufferUsage.STORAGE })
     const b = device.createBuffer({ label: 'esrgan-act-b', size: bytes, usage: GPUBufferUsage.STORAGE })
-    const input = device.createTexture({
-      label: 'esrgan-band-input',
-      size: [bw, paddedRows, 1],
-      format: 'rgba8unorm',
-      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT,
-    })
-    const view = input.createView()
+    const texture = (label: string, w: number, h: number) =>
+      device.createTexture({
+        label,
+        size: [w, h, 1],
+        format: 'rgba8unorm',
+        usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT,
+      })
+    const input = texture('esrgan-band-input', bw, paddedRows)
+    const inputT = texture('esrgan-band-input-t', paddedRows, bw)
+    const inputView = input.createView()
+    const inputViewT = inputT.createView()
     const layers: LayerGpu[] = this.weights.layers.map((layer, i) => {
       const bufs = this.layerBuffers[i]!
       const isFirst = i === 0
@@ -256,25 +296,59 @@ export class EsrganUpscaler {
       // Layer i reads a when i is odd, b when even (layer 0 reads the texture and writes a).
       const src = i % 2 === 1 ? a : b
       const dst = i % 2 === 1 ? b : a
-      const entries: GPUBindGroupEntry[] = [
-        isFirst ? { binding: 0, resource: view } : { binding: 0, resource: { buffer: src } },
-        { binding: 1, resource: { buffer: bufs.weight } },
-        { binding: 2, resource: { buffer: bufs.bias } },
-        { binding: 4, resource: { buffer: dst } },
-        { binding: 5, resource: { buffer: this.bandParams } },
-      ]
-      if (bufs.prelu) entries.push({ binding: 3, resource: { buffer: bufs.prelu } })
-      return { pipeline, bindGroup: device.createBindGroup({ label: `esrgan-${layer.name}`, layout: pipeline.getBindGroupLayout(0), entries }) }
+      const entries = (view: GPUTextureView): GPUBindGroupEntry[] => {
+        const list: GPUBindGroupEntry[] = [
+          isFirst ? { binding: 0, resource: view } : { binding: 0, resource: { buffer: src } },
+          { binding: 1, resource: { buffer: bufs.weight } },
+          { binding: 2, resource: { buffer: bufs.bias } },
+          { binding: 4, resource: { buffer: dst } },
+          { binding: 5, resource: { buffer: this.bandParams } },
+        ]
+        if (bufs.prelu) list.push({ binding: 3, resource: { buffer: bufs.prelu } })
+        return list
+      }
+      const layout = pipeline.getBindGroupLayout(0)
+      const bindGroup = device.createBindGroup({ label: `esrgan-${layer.name}`, layout, entries: entries(inputView) })
+      const bindGroupT = isFirst ? device.createBindGroup({ label: `esrgan-${layer.name}-t`, layout, entries: entries(inputViewT) }) : bindGroup
+      return { pipeline, bindGroup, bindGroupT }
     })
     // conv_last is layer 17 (odd): it writes b, which the shuffle reads.
     const lastAct = (this.weights.layers.length - 1) % 2 === 1 ? b : a
-    this.buffers = { bw, paddedRows, a, b, input, inputView: view, layers, lastAct }
+    this.buffers = { bw, paddedRows, a, b, input, inputT, inputView, inputViewT, layers, lastAct }
     return this.buffers
+  }
+
+  /** Float accumulator for one band of output (ensemble), grown on demand. */
+  private accumulator(bytes: number): GPUBuffer {
+    if (this.acc && this.acc.bytes >= bytes) return this.acc.buffer
+    this.acc?.buffer.destroy()
+    this.acc = { bytes, buffer: this.device.createBuffer({ label: 'esrgan-ensemble-acc', size: bytes, usage: GPUBufferUsage.STORAGE }) }
+    return this.acc.buffer
+  }
+
+  /**
+   * The band's padded region of the page, transformed by `t`, as an ImageBitmap of the transformed
+   * size. Drawn through the canvas matrix: a pure permutation of pixels, no resampling.
+   */
+  private transformedBand(padded: ImageBitmap, y0: number, bw: number, bh: number, t: Dihedral): ImageBitmap {
+    const { w, h } = transformedSize(bw, bh, t)
+    let scratch = this.scratch.find((s) => s.w === w && s.h === h)
+    if (!scratch) {
+      scratch = { w, h, canvas: new OffscreenCanvas(w, h) }
+      this.scratch.push(scratch)
+      while (this.scratch.length > 4) this.scratch.shift()
+    }
+    const ctx = scratch.canvas.getContext('2d')!
+    ctx.imageSmoothingEnabled = false
+    ctx.setTransform(...canvasMatrix(bw, bh, t))
+    ctx.drawImage(padded, 0, y0, bw, bh, 0, 0, bw, bh)
+    ctx.setTransform(1, 0, 0, 1, 0, 0)
+    return scratch.canvas.transferToImageBitmap()
   }
 
   /**
    * Runs the network over `source` and returns RGBA8 pixels at `factor` times the source
-   * (the caller checked `canUpscale`). Cancellable between bands through `opts.signal`.
+   * (the caller checked `canUpscale`). Cancellable between passes through `opts.signal`.
    */
   async upscale(source: ImageBitmap, factor: EsrganFactor, opts: RunOptions = {}): Promise<UpscaleResult> {
     if (this.lost) throw new Error('WebGPU device lost')
@@ -282,6 +356,8 @@ export class EsrganUpscaler {
     const H = source.height
     const plan = planBands({ w: W, h: H }, this.bytesPerPixel, this.maxActBytes)
     if (!plan) throw new Error(`Pagina ${W}×${H} troppo larga per il modello`)
+    const transforms = ensembleTransforms(opts.ensemble ?? 1)
+    const passes = transforms.length
     const outW = W * factor
     const outH = H * factor
     const outBytes = outW * outH * 4
@@ -292,55 +368,112 @@ export class EsrganUpscaler {
     const buffers = this.bandBuffers(plan.bw, paddedRows)
     const page = device.createBuffer({ label: 'esrgan-page', size: outBytes, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC })
     const readback = device.createBuffer({ label: 'esrgan-readback', size: outBytes, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ })
-    const shuffleBindGroup = device.createBindGroup({
-      label: 'esrgan-shuffle',
-      layout: this.pipelines.shuffle.getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: { buffer: buffers.lastAct } },
-        { binding: 1, resource: buffers.inputView },
-        { binding: 2, resource: { buffer: page } },
-        { binding: 3, resource: { buffer: this.shuffleParams } },
-      ],
-    })
+    const accW = outW
+    const accBuffer = passes > 1 ? this.accumulator(accW * Math.min(plan.coreRows, H) * factor * 16) : null
+    const shuffleLayout = (passes > 1 ? this.pipelines.shuffleAccumulate : this.pipelines.shuffle).getBindGroupLayout(0)
+    const shuffleGroups = [buffers.inputView, buffers.inputViewT].map((view) =>
+      device.createBindGroup({
+        label: 'esrgan-shuffle',
+        layout: shuffleLayout,
+        entries: [
+          { binding: 0, resource: { buffer: buffers.lastAct } },
+          { binding: 1, resource: view },
+          { binding: 2, resource: { buffer: accBuffer ?? page } },
+          { binding: 3, resource: { buffer: this.shuffleParams } },
+        ],
+      }),
+    )
+    const finalizeGroup = accBuffer
+      ? device.createBindGroup({
+          label: 'esrgan-finalize',
+          layout: this.pipelines.finalize.getBindGroupLayout(0),
+          entries: [
+            { binding: 0, resource: { buffer: accBuffer } },
+            { binding: 1, resource: { buffer: page } },
+            { binding: 2, resource: { buffer: this.shuffleParams } },
+          ],
+        })
+      : null
+    const total = plan.bands * passes
+    let done = 0
     try {
       for (let k = 0; k < plan.bands; k++) {
-        if (opts.signal?.aborted) throw new EsrganAborted()
         const y0 = k * plan.coreRows
         const rows = Math.min(plan.coreRows, H - y0)
         const bh = rows + 2 * CONTEXT
-        device.queue.copyExternalImageToTexture({ source: padded, origin: { x: 0, y: y0 } }, { texture: buffers.input }, [plan.bw, bh])
-        device.queue.writeBuffer(this.bandParams, 0, new Uint32Array([plan.bw, bh, 0, 0]))
-        device.queue.writeBuffer(this.shuffleParams, 0, new Uint32Array([plan.bw, bh, CONTEXT, W, y0, rows, outW, outH, factor, 0, 0, 0]))
-        // Two command buffers per band (first half of the layers, second half + shuffle): each
-        // stays well under the GPU watchdog even on a slow device.
-        const half = Math.ceil(buffers.layers.length / 2)
-        const encoders: GPUCommandBuffer[] = []
-        for (const [from, to] of [
-          [0, half],
-          [half, buffers.layers.length],
-        ] as const) {
-          const encoder = device.createCommandEncoder({ label: `esrgan-band-${k}-${from}` })
-          const pass = encoder.beginComputePass()
-          for (let i = from; i < to; i++) {
-            const layer = buffers.layers[i]!
-            pass.setPipeline(layer.pipeline)
-            pass.setBindGroup(0, layer.bindGroup)
-            if (i === 0) pass.dispatchWorkgroups(Math.ceil(plan.bw / 8), Math.ceil(bh / 8))
-            else pass.dispatchWorkgroups(Math.ceil(plan.bw / BODY_BLOCK_W), Math.ceil(bh / BODY_BLOCK_H))
+        for (let pass = 0; pass < passes; pass++) {
+          if (opts.signal?.aborted) throw new EsrganAborted()
+          const t = transforms[pass]!
+          const { w: tw, h: th } = transformedSize(plan.bw, bh, t)
+          const band = t.swap || t.flipX || t.flipY ? this.transformedBand(padded, y0, plan.bw, bh, t) : null
+          const texture = t.swap ? buffers.inputT : buffers.input
+          if (band) {
+            device.queue.copyExternalImageToTexture({ source: band }, { texture }, [tw, th])
+            band.close()
+          } else {
+            device.queue.copyExternalImageToTexture({ source: padded, origin: { x: 0, y: y0 } }, { texture }, [tw, th])
           }
-          if (to === buffers.layers.length) {
-            pass.setPipeline(this.pipelines.shuffle)
-            pass.setBindGroup(0, shuffleBindGroup)
-            pass.dispatchWorkgroups(Math.ceil(W / 8), Math.ceil(rows / 8))
+          device.queue.writeBuffer(this.bandParams, 0, new Uint32Array([tw, th, 0, 0]))
+          device.queue.writeBuffer(
+            this.shuffleParams,
+            0,
+            new Uint32Array([
+              tw,
+              th,
+              CONTEXT,
+              W,
+              y0,
+              rows,
+              outW,
+              outH,
+              factor,
+              t.swap ? 1 : 0,
+              t.flipX ? 1 : 0,
+              t.flipY ? 1 : 0,
+              pass === 0 ? 1 : 0,
+              accW,
+              passes,
+              0,
+            ]),
+          )
+          const lastPass = pass === passes - 1
+          // Two command buffers per pass (first half of the layers, second half + shuffle): each
+          // stays well under the GPU watchdog even on a slow device.
+          const half = Math.ceil(buffers.layers.length / 2)
+          const commands: GPUCommandBuffer[] = []
+          for (const [from, to] of [
+            [0, half],
+            [half, buffers.layers.length],
+          ] as const) {
+            const encoder = device.createCommandEncoder({ label: `esrgan-band-${k}-${pass}-${from}` })
+            const computePass = encoder.beginComputePass()
+            for (let i = from; i < to; i++) {
+              const layer = buffers.layers[i]!
+              computePass.setPipeline(layer.pipeline)
+              computePass.setBindGroup(0, t.swap ? layer.bindGroupT : layer.bindGroup)
+              if (i === 0) computePass.dispatchWorkgroups(Math.ceil(tw / 8), Math.ceil(th / 8))
+              else computePass.dispatchWorkgroups(Math.ceil(tw / BODY_BLOCK_W), Math.ceil(th / BODY_BLOCK_H))
+            }
+            if (to === buffers.layers.length) {
+              computePass.setPipeline(passes > 1 ? this.pipelines.shuffleAccumulate : this.pipelines.shuffle)
+              computePass.setBindGroup(0, shuffleGroups[t.swap ? 1 : 0]!)
+              computePass.dispatchWorkgroups(Math.ceil(W / 8), Math.ceil(rows / 8))
+              if (finalizeGroup && lastPass) {
+                computePass.setPipeline(this.pipelines.finalize)
+                computePass.setBindGroup(0, finalizeGroup)
+                computePass.dispatchWorkgroups(Math.ceil(accW / 8), Math.ceil((rows * factor) / 8))
+              }
+            }
+            computePass.end()
+            if (to === buffers.layers.length && lastPass && k === plan.bands - 1) encoder.copyBufferToBuffer(page, 0, readback, 0, outBytes)
+            commands.push(encoder.finish())
           }
-          pass.end()
-          if (to === buffers.layers.length && k === plan.bands - 1) encoder.copyBufferToBuffer(page, 0, readback, 0, outBytes)
-          encoders.push(encoder.finish())
+          device.queue.submit(commands)
+          // One sync per pass: a cancellation point, and no pile-up of GPU work for a page nobody looks at.
+          await device.queue.onSubmittedWorkDone()
+          done++
+          opts.onProgress?.(done, total)
         }
-        device.queue.submit(encoders)
-        // One sync per band: a cancellation point, and no pile-up of GPU work for a page nobody looks at.
-        await device.queue.onSubmittedWorkDone()
-        opts.onProgress?.(k + 1, plan.bands)
       }
       if (opts.signal?.aborted) throw new EsrganAborted()
       await readback.mapAsync(GPUMapMode.READ)
@@ -360,8 +493,11 @@ export class EsrganUpscaler {
       b.a.destroy()
       b.b.destroy()
       b.input.destroy()
+      b.inputT.destroy()
       this.buffers = null
     }
+    this.acc?.buffer.destroy()
+    this.acc = null
     for (const l of this.layerBuffers) {
       l.weight.destroy()
       l.bias.destroy()

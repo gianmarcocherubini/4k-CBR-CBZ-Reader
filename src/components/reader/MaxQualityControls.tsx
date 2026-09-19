@@ -21,7 +21,7 @@ export function MaxQualityControls({ enabled, budget, statusLine, onToggle, onBu
       </Row>
       <Row
         title="Attesa massima"
-        hint="Se la GPU prevede di impiegare di più per le pagine sullo schermo, quelle pagine usano la Super risoluzione (Anime4K)."
+        hint="Se la GPU prevede di impiegare di più per le pagine sullo schermo, quelle pagine usano la Super risoluzione (Anime4K). Il tempo che avanza va in qualità: fino a 8 passaggi su copie riflesse e ruotate della pagina, mediati (self-ensemble)."
         stacked
       >
         <Segmented<`${MaxQualityBudget}`>

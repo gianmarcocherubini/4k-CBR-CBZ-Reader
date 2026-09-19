@@ -1,6 +1,7 @@
 import { EsrganUpscaler, type EsrganFactor } from './esrganUpscaler'
-import { runSrvggReference } from './reference'
+import { runSrvggEnsembleReference, runSrvggReference } from './reference'
 import weightsUrl from './realesr-animevideov3.f16.bin?url'
+import { type EnsembleSize, ensembleTransforms } from './transforms'
 import { parseWeights } from './weights'
 
 export interface SelfTestOptions {
@@ -8,12 +9,15 @@ export interface SelfTestOptions {
   height?: number
   /** Force bands of few rows so the seam logic runs even on a tiny image. */
   smallBands?: boolean
+  /** Self-ensemble passes to compare against the CPU ensemble (default 1). */
+  ensemble?: EnsembleSize
 }
 
 export interface SelfTestResult {
   adapter: string
   precision: 'f16' | 'f32'
   bands: number
+  ensemble: EnsembleSize
   x4: { psnr: number; maxDiff: number; ms: number }
   x2: { psnr: number; maxDiff: number; ms: number }
 }
@@ -79,19 +83,21 @@ export async function esrganSelfTest(opts: SelfTestOptions = {}): Promise<SelfTe
     const rgba = synthetic(w, h)
     const canvas = new OffscreenCanvas(w, h)
     canvas.getContext('2d')!.putImageData(new ImageData(rgba, w, h), 0, 0)
+    const ensemble = opts.ensemble ?? 1
     const run = async (factor: EsrganFactor) => {
       const bitmap = await createImageBitmap(canvas)
       const t0 = performance.now()
-      let bands = 0
-      const out = await upscaler.upscale(bitmap, factor, { onProgress: (_d, total) => (bands = total) })
+      let steps = 0
+      const out = await upscaler.upscale(bitmap, factor, { ensemble, onProgress: (_d, total) => (steps = total) })
       const ms = performance.now() - t0
       bitmap.close()
-      const ref = runSrvggReference(weights, rgba, w, h, factor)
-      return { ...compare(out.data, ref), ms, bands }
+      const ref =
+        ensemble === 1 ? runSrvggReference(weights, rgba, w, h, factor) : runSrvggEnsembleReference(weights, rgba, w, h, factor, ensembleTransforms(ensemble))
+      return { ...compare(out.data, ref), ms, bands: steps / ensemble }
     }
     const x4 = await run(4)
     const x2 = await run(2)
-    return { adapter: upscaler.info.adapter, precision: upscaler.info.precision, bands: x4.bands, x4, x2 }
+    return { adapter: upscaler.info.adapter, precision: upscaler.info.precision, bands: x4.bands, ensemble, x4, x2 }
   } finally {
     upscaler.dispose()
   }

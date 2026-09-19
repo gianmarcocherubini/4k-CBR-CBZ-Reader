@@ -14,6 +14,8 @@ export interface SrResult {
   ms: number
   /** The Anime4K plan this result was computed with (absent for Real-ESRGAN results). */
   plan?: SrPlan
+  /** Real-ESRGAN: number of self-ensemble passes averaged into this result. */
+  ensemble?: number
 }
 
 export interface SrOptions {
@@ -99,6 +101,9 @@ export class SrEngine {
   private msPerUnit: number | undefined
   /** Level chosen by `auto` after the probe page; undefined until then. */
   private autoLevel: Anime4KLevel | undefined
+  /** Size (megapixels) and passes of the last measured page, for re-selecting the level on option changes. */
+  private lastMp = 1
+  private lastPasses: 1 | 2 = 2
   private readonly pendingCloses = new Set<ReturnType<typeof setTimeout>>()
   private disposed = false
   onChange: (() => void) | null = null
@@ -140,10 +145,25 @@ export class SrEngine {
   setOptions(next: SrOptions): void {
     const o = this.options
     if (o.level === next.level && o.scale === next.scale && o.restore === next.restore && o.clean === next.clean) return
-    // New settings change the cost per page: the automatic level is probed again on the next page.
-    if (o.scale !== next.scale || o.restore !== next.restore) this.autoLevel = undefined
     this.options = { ...next }
+    // New settings change the cost per page: re-select the automatic level from the throughput
+    // already measured (no new probe); before any measurement the next page probes as usual.
+    if (o.scale !== next.scale || o.restore !== next.restore) this.autoLevel = this.select(next.restore, this.passesFor(next.scale))
     this.onChange?.()
+  }
+
+  /** Passes the current scale setting implies (auto: whatever the last page needed). */
+  private passesFor(scale: SrScale): 1 | 2 {
+    return scale === 'x2' ? 1 : scale === 'x4' ? 2 : this.lastPasses
+  }
+
+  /** Strongest level whose estimated time for a page like the last one fits the budget. */
+  private select(restore: boolean, passes: 1 | 2): Anime4KLevel | undefined {
+    if (this.msPerUnit === undefined) return undefined
+    const order: Anime4KLevel[] = ['M', 'VL', 'UL']
+    let best: Anime4KLevel = 'M'
+    for (const l of order) if (this.msPerUnit * planUnits(l, restore, passes) * this.lastMp <= AUTO_BUDGET_MS) best = l
+    return best
   }
 
   /** The level `auto` currently stands for (undefined before the first measured page). */
@@ -182,14 +202,14 @@ export class SrEngine {
   private observe(plan: SrPlan, mp: number, ms: number): void {
     const sample = ms / (mp * planUnits(plan.level, plan.restore, plan.passes))
     this.msPerUnit = this.msPerUnit === undefined ? sample : this.msPerUnit * 0.6 + sample * 0.4
+    this.lastMp = mp
+    this.lastPasses = plan.passes
     if (this.options.level !== 'auto') return
-    const order: Anime4KLevel[] = ['M', 'VL', 'UL']
     if (this.autoLevel === undefined) {
-      let best: Anime4KLevel = 'M'
-      for (const l of order) if (this.msPerUnit * planUnits(l, plan.restore, plan.passes) * mp <= AUTO_BUDGET_MS) best = l
-      this.autoLevel = best
+      this.autoLevel = this.select(plan.restore, plan.passes)
       return
     }
+    const order: Anime4KLevel[] = ['M', 'VL', 'UL']
     const idx = order.indexOf(this.autoLevel)
     if (plan.level === this.autoLevel && idx > 0 && ms > AUTO_BUDGET_MS * AUTO_DOWNGRADE_FACTOR) this.autoLevel = order[idx - 1]!
   }

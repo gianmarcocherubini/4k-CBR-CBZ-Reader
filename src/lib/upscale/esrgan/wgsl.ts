@@ -160,21 +160,41 @@ ${stores.join('\n')}
 `
 }
 
+/** Uniforms of the shuffle and finalize kernels (16 x u32 = 64 bytes). */
+export const SHUFFLE_PARAMS_BYTES = 64
+
 /**
  * conv_last output (48 channels = 3 colours x 4x4 sub-pixels) → pixel shuffle, nearest-neighbour
- * residual, clamp, RGBA8. Only the core of the band is written into the page buffer; x2 output is
- * a 2x2 box of the clamped x4 pixels.
+ * residual, clamp. A thread handles one core source pixel of the band in *original* orientation;
+ * the network ran on the band transformed by (swap, flipX, flipY), so activations, base colour and
+ * the 4x4 sub-pixel grid are read at the transformed position. x2 output is a 2x2 box of the
+ * clamped x4 pixels. Direct mode writes RGBA8 into the page; accumulate mode sums float colours
+ * into the band accumulator (self-ensemble), `first` starting a fresh sum.
  */
-export function shuffleWgsl(o: KernelOptions): string {
+export function shuffleWgsl(o: KernelOptions, accumulate: boolean): string {
   const { enable, F4 } = types(o)
-  const quads = Array.from({ length: 12 }, (_, i) => `  let c${i} = act[${i}u * plane + p];`).join('\n')
-  const comp = ['x', 'y', 'z', 'w']
-  // value(colour c, dy, dx) = quad[c*4 + dy].component[dx]
-  const px = (c: number, dy: number, dx: number) => `clamp(f32(c${c * 4 + dy}.${comp[dx]}) + base.${['r', 'g', 'b'][c]}, 0.0, 1.0)`
+  const quads = Array.from({ length: 12 }, (_, i) => `  q[${i}] = act[${i}u * plane + p];`).join('\n')
+  // value(colour c, original sub-pixel dy, dx) = quad[c*4 + dv].component[du], (du, dv) = T(dx, dy) on the 4x4 grid.
+  const px = (c: number, dy: number, dx: number) => `clamp(f32(q[${c * 4}u + dv${dy}${dx}][du${dy}${dx}]) + base.${['r', 'g', 'b'][c]}, 0.0, 1.0)`
+  const sub: string[] = []
+  for (let dy = 0; dy < 4; dy++) {
+    for (let dx = 0; dx < 4; dx++) {
+      sub.push(`  let du0${dy}${dx} = select(${dx}u, ${dy}u, sp.swap == 1u);`)
+      sub.push(`  let dv0${dy}${dx} = select(${dy}u, ${dx}u, sp.swap == 1u);`)
+      sub.push(`  let du${dy}${dx} = select(du0${dy}${dx}, 3u - du0${dy}${dx}, sp.flipX == 1u);`)
+      sub.push(`  let dv${dy}${dx} = select(dv0${dy}${dx}, 3u - dv0${dy}${dx}, sp.flipY == 1u);`)
+    }
+  }
+  const store = (index: string, r: string, g: string, b: string) =>
+    accumulate
+      ? `    if (sp.first == 1u) { acc[${index}] = vec4f(${r}, ${g}, ${b}, 0.0); } else { acc[${index}] += vec4f(${r}, ${g}, ${b}, 0.0); }`
+      : `    page[${index}] = pack4x8unorm(vec4f(${r}, ${g}, ${b}, 1.0));`
+  // Direct mode indexes the whole page; accumulate mode indexes the band's own output rows.
+  const row = (dy: string, f: number) => (accumulate ? `(gid.y * ${f}u + ${dy}) * sp.accW` : `(py * ${f}u + ${dy}) * sp.outW`)
   const x4: string[] = []
   for (let dy = 0; dy < 4; dy++) {
     for (let dx = 0; dx < 4; dx++) {
-      x4.push(`    page[(py * 4u + ${dy}u) * sp.outW + px * 4u + ${dx}u] = pack4x8unorm(vec4f(${px(0, dy, dx)}, ${px(1, dy, dx)}, ${px(2, dy, dx)}, 1.0));`)
+      x4.push(store(`${row(`${dy}u`, 4)} + px * 4u + ${dx}u`, px(0, dy, dx), px(1, dy, dx), px(2, dy, dx)))
     }
   }
   const x2: string[] = []
@@ -182,28 +202,31 @@ export function shuffleWgsl(o: KernelOptions): string {
     for (let bx = 0; bx < 2; bx++) {
       const avg = (c: number) =>
         `0.25 * (${px(c, 2 * by, 2 * bx)} + ${px(c, 2 * by, 2 * bx + 1)} + ${px(c, 2 * by + 1, 2 * bx)} + ${px(c, 2 * by + 1, 2 * bx + 1)})`
-      x2.push(`    page[(py * 2u + ${by}u) * sp.outW + px * 2u + ${bx}u] = pack4x8unorm(vec4f(${avg(0)}, ${avg(1)}, ${avg(2)}, 1.0));`)
+      x2.push(store(`${row(`${by}u`, 2)} + px * 2u + ${bx}u`, avg(0), avg(1), avg(2)))
     }
   }
-  return `${enable}struct Shuffle {
-  bw: u32, bh: u32, context: u32, pageW: u32,
-  bandY0: u32, coreRows: u32, outW: u32, outH: u32,
-  factor: u32, pad0: u32, pad1: u32, pad2: u32,
-}
+  return `${enable}${SHUFFLE_STRUCT}
 @group(0) @binding(0) var<storage, read> act: array<${F4}>;
 @group(0) @binding(1) var src: texture_2d<f32>;
-@group(0) @binding(2) var<storage, read_write> page: array<u32>;
+${accumulate ? '@group(0) @binding(2) var<storage, read_write> acc: array<vec4f>;' : '@group(0) @binding(2) var<storage, read_write> page: array<u32>;'}
 @group(0) @binding(3) var<uniform> sp: Shuffle;
 
 @compute @workgroup_size(8, 8)
 fn main(@builtin(global_invocation_id) gid: vec3u) {
   if (gid.x >= sp.pageW || gid.y >= sp.coreRows) { return; }
-  let bx = gid.x + sp.context;
-  let by = gid.y + sp.context;
-  let plane = sp.bw * sp.bh;
-  let p = by * sp.bw + bx;
-  let base = textureLoad(src, vec2i(i32(bx), i32(by)), 0).rgb;
+  // Original band position of this core pixel, then where the transform put it.
+  let x = gid.x + sp.context;
+  let y = gid.y + sp.context;
+  let u0 = select(x, y, sp.swap == 1u);
+  let v0 = select(y, x, sp.swap == 1u);
+  let u = select(u0, sp.tw - 1u - u0, sp.flipX == 1u);
+  let v = select(v0, sp.th - 1u - v0, sp.flipY == 1u);
+  let plane = sp.tw * sp.th;
+  let p = v * sp.tw + u;
+  let base = textureLoad(src, vec2i(i32(u), i32(v)), 0).rgb;
+  var q: array<${F4}, 12>;
 ${quads}
+${sub.join('\n')}
   let px = gid.x;
   let py = sp.bandY0 + gid.y;
   if (sp.factor == 4u) {
@@ -211,6 +234,29 @@ ${x4.join('\n')}
   } else {
 ${x2.join('\n')}
   }
+}
+`
+}
+
+const SHUFFLE_STRUCT = `struct Shuffle {
+  tw: u32, th: u32, context: u32, pageW: u32,
+  bandY0: u32, coreRows: u32, outW: u32, outH: u32,
+  factor: u32, swap: u32, flipX: u32, flipY: u32,
+  first: u32, accW: u32, passes: u32, pad0: u32,
+}`
+
+/** Ensemble average → RGBA8 into the page: one thread per output pixel of the band. */
+export function finalizeWgsl(): string {
+  return `${SHUFFLE_STRUCT}
+@group(0) @binding(0) var<storage, read> acc: array<vec4f>;
+@group(0) @binding(1) var<storage, read_write> page: array<u32>;
+@group(0) @binding(2) var<uniform> sp: Shuffle;
+
+@compute @workgroup_size(8, 8)
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+  if (gid.x >= sp.accW || gid.y >= sp.coreRows * sp.factor) { return; }
+  let c = acc[gid.y * sp.accW + gid.x].rgb / f32(sp.passes);
+  page[(sp.bandY0 * sp.factor + gid.y) * sp.outW + gid.x] = pack4x8unorm(vec4f(c, 1.0));
 }
 `
 }

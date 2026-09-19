@@ -3,12 +3,17 @@ import { cacheBudgetBytes } from '../backend'
 import type { SrResult } from '../srEngine'
 import { EsrganAborted, type EsrganFactor, type EsrganInfo, EsrganUpscaler, workPixels } from './esrganUpscaler'
 import weightsUrl from './realesr-animevideov3.f16.bin?url'
+import type { EnsembleSize } from './transforms'
 import { parseWeights, type SrvggWeights } from './weights'
 
 export { EsrganAborted } from './esrganUpscaler'
+export type { EnsembleSize } from './transforms'
 
 /** Time not covered by the per-pixel cost: readback, bitmap creation, scheduling (ms per page). */
 const FIXED_MS_PER_PAGE = 80
+/** Each extra ensemble pass also redraws and re-uploads the band: a little more than its GPU time. */
+const ENSEMBLE_PASS_OVERHEAD = 1.06
+export const ENSEMBLE_SIZES: readonly EnsembleSize[] = [8, 4, 2, 1]
 /** Probe image: one band of a typical page, enough work for a meaningful timing. */
 const PROBE = { w: 256, h: 160 }
 const REPROBE_INTERVAL_MS = 8000
@@ -156,13 +161,23 @@ export class EsrganEngine {
     return this.upscaler.canUpscale(size)
   }
 
-  /** Predicted wall time for these pages, ms (undefined before the probe). */
-  estimateMs(sizes: readonly PageSize[]): number | undefined {
+  /** Predicted wall time for these pages with an ensemble of `ensemble` passes, ms (undefined before the probe). */
+  estimateMs(sizes: readonly PageSize[], ensemble: EnsembleSize = 1): number | undefined {
     const rate = this.msPerWorkMegapixel
     if (rate === undefined) return undefined
+    const passes = ensemble === 1 ? 1 : ensemble * ENSEMBLE_PASS_OVERHEAD
     let ms = 0
-    for (const size of sizes) ms += FIXED_MS_PER_PAGE + (rate * workPixels(size, this.upscaler.bytesPerPixel)) / 1e6
+    for (const size of sizes) ms += FIXED_MS_PER_PAGE + (rate * workPixels(size, this.upscaler.bytesPerPixel) * passes) / 1e6
     return ms
+  }
+
+  /** The largest ensemble whose predicted time for these pages fits `budgetMs` (1 when none does). */
+  ensembleFor(sizes: readonly PageSize[], budgetMs: number): EnsembleSize {
+    for (const n of ENSEMBLE_SIZES) {
+      const est = this.estimateMs(sizes, n)
+      if (est !== undefined && est <= budgetMs) return n
+    }
+    return 1
   }
 
   peek(key: string): SrResult | undefined {
@@ -181,8 +196,12 @@ export class EsrganEngine {
     this.evict()
   }
 
-  /** Processes one page (serialised with the others); the same key in flight is shared. */
-  enhance(key: string, size: PageSize, source: () => Promise<ImageBitmap>): Promise<SrResult> {
+  /**
+   * Processes one page (serialised with the others); the same key in flight is shared, and a cached
+   * result is returned whatever ensemble it was computed with (a page already on screen is never
+   * redone because the budget moved).
+   */
+  enhance(key: string, size: PageSize, source: () => Promise<ImageBitmap>, ensemble: EnsembleSize = 1): Promise<SrResult> {
     if (!this.available) return Promise.reject(new Error('Real-ESRGAN non disponibile'))
     const hit = this.peek(key)
     if (hit) return Promise.resolve(hit)
@@ -197,16 +216,17 @@ export class EsrganEngine {
       try {
         if (controller.signal.aborted) throw new EsrganAborted()
         const t0 = performance.now()
-        const out = await this.upscaler.upscale(bitmap, factor, { signal: controller.signal })
+        const out = await this.upscaler.upscale(bitmap, factor, { signal: controller.signal, ensemble })
         const result = await createImageBitmap(new ImageData(out.data, out.width, out.height))
         const ms = performance.now() - t0
-        const sample = Math.max(0.01, ms - FIXED_MS_PER_PAGE) / (workPixels(size, this.upscaler.bytesPerPixel) / 1e6)
+        const passes = ensemble === 1 ? 1 : ensemble * ENSEMBLE_PASS_OVERHEAD
+        const sample = Math.max(0.01, ms - FIXED_MS_PER_PAGE) / ((workPixels(size, this.upscaler.bytesPerPixel) * passes) / 1e6)
         this.msPerWorkMegapixel = this.msPerWorkMegapixel === undefined ? sample : this.msPerWorkMegapixel * 0.5 + sample * 0.5
         if (this.disposed) {
           result.close()
           throw new EsrganAborted()
         }
-        const sr: SrResult = { bitmap: result, level: 'GAN', factor, ms }
+        const sr: SrResult = { bitmap: result, level: 'GAN', factor, ms, ensemble }
         this.cache.set(key, sr)
         this.cacheBytes += result.width * result.height * 4
         this.evict()

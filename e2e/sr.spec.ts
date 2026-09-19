@@ -35,6 +35,7 @@ function autoWidth(srcW: number, srcH: number): number {
 }
 
 test('Anime4K super resolution: enhanced canvas, badge, level probe, faithful output (or clean fallback)', async ({ page }) => {
+  test.setTimeout(4 * 60_000) // a dozen GPU passes: minutes on the software renderer of CI
   await page.goto('/')
   const hasWebGPU = await page.evaluate(async () => !!(navigator as Navigator & { gpu?: GPU }).gpu && !!(await (navigator as Navigator & { gpu?: GPU }).gpu!.requestAdapter()))
   // 800x1200 pages shown at 1640 device px tall: clearly larger than native -> enhanced.
@@ -250,7 +251,7 @@ test('Real-ESRGAN WebGPU kernels match the float32 reference, band seams include
   await page.goto('/?test')
   const hasWebGPU = await page.evaluate(async () => !!(navigator as Navigator & { gpu?: GPU }).gpu && !!(await (navigator as Navigator & { gpu?: GPU }).gpu!.requestAdapter()))
   test.skip(!hasWebGPU, 'needs WebGPU')
-  type Hooks = { __reader?: { esrganSelfTest: (o: { width: number; height: number; smallBands: boolean }) => Promise<SelfTest> } }
+  type Hooks = { __reader?: { esrganSelfTest: (o: { width: number; height: number; smallBands: boolean; ensemble?: 1 | 2 | 4 | 8 }) => Promise<SelfTest> } }
   type SelfTest = { precision: 'f16' | 'f32'; bands: number; x4: { psnr: number; maxDiff: number }; x2: { psnr: number; maxDiff: number } }
   await page.waitForFunction(() => !!(window as unknown as Hooks).__reader)
   // A 40x56 image cut into 8-row bands: every seam of the tiled path is exercised.
@@ -264,6 +265,14 @@ test('Real-ESRGAN WebGPU kernels match the float32 reference, band seams include
   expect(result.x4.maxDiff).toBeLessThanOrEqual(maxDiff)
   expect(result.x2.psnr).toBeGreaterThan(minPsnr)
   expect(result.x2.maxDiff).toBeLessThanOrEqual(maxDiff)
+
+  // Self-ensemble: the GPU averages the passes over transformed copies exactly like the CPU does
+  // (the CPU rounds each pass to 8 bits first, hence the looser bound).
+  const ensemble = await page.evaluate(() => (window as unknown as Hooks).__reader!.esrganSelfTest({ width: 40, height: 56, smallBands: true, ensemble: 2 }))
+  console.log('Real-ESRGAN ensemble self-test:', JSON.stringify(ensemble))
+  expect(ensemble.x4.psnr).toBeGreaterThan(result.precision === 'f16' ? 38 : 50)
+  expect(ensemble.x4.maxDiff).toBeLessThanOrEqual(result.precision === 'f16' ? 12 : 2)
+  expect(ensemble.x2.maxDiff).toBeLessThanOrEqual(result.precision === 'f16' ? 12 : 2)
 })
 
 test('Qualità massima: Real-ESRGAN x4 on the visible page only, time budget falls back to Anime4K', async ({ page }) => {
@@ -341,6 +350,7 @@ test('Qualità massima: Real-ESRGAN x4 on the visible page only, time budget fal
 })
 
 test('factor x4 / x2 / auto, "Linee nitide", "Pulizia scansione"', async ({ page }) => {
+  test.setTimeout(4 * 60_000)
   await page.goto('/')
   const hasWebGPU = await page.evaluate(async () => !!(navigator as Navigator & { gpu?: GPU }).gpu && !!(await (navigator as Navigator & { gpu?: GPU }).gpu!.requestAdapter()))
   test.skip(!hasWebGPU, 'needs WebGPU')

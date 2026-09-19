@@ -137,6 +137,11 @@ browser (le app native che ci riescono usano il Neural Engine, inaccessibile a u
 - **Attesa massima** (3 s, 5 s, 10 s, Sempre; default 5 s): all'attivazione l'app compila gli shader e **misura la
   GPU** su un'immagine di prova; per ogni coppia di pagine prevede il tempo e, se supera il limite, quella coppia usa
   la Super risoluzione (Anime4K) e la riga di stato dice perché. La stima si aggiorna con ogni pagina elaborata.
+- **Self-ensemble**: il tempo che avanza sotto il limite va in qualità. La rete viene eseguita su copie della pagina
+  riflesse e ruotate (le 8 simmetrie del rettangolo) e i risultati, riportati nell'orientamento originale, vengono
+  mediati sulla GPU: gli artefatti direzionali della rete si cancellano e i bordi restano più puliti. Il numero di
+  passaggi (1, 2, 4 o 8) è il massimo che sta nel limite (5 s con «Sempre»): su un iPad M-series una pagina a ×4
+  costa circa 1 s, quindi con il limite di 5 s si arriva a 4 passaggi. La riga di stato riporta i passaggi usati.
 - La pagina resta com'è finché il risultato non è pronto, poi cambia una volta sola; in doppia pagina le due pagine
   passano a HD insieme. Risultato a fattore fisso (×4; ×2 come media 2×2 del ×4 solo se il ×4 supererebbe i 16 MP),
   poi adattato allo schermo come per Anime4K.
@@ -148,8 +153,9 @@ browser (le app native che ci riescono usano il Neural Engine, inaccessibile a u
   la pagina viene letta una sola volta. Se il modello fallisce a runtime, il volume prosegue con Anime4K.
 - **Verifica**: un'implementazione di riferimento in float32 (`reference.ts`) riproduce l'output di PyTorch dagli
   stessi pesi (fixture nel repository, differenza massima 2/255); i kernel WebGPU vengono confrontati con il
-  riferimento nei test end-to-end (`window.__reader.esrganSelfTest`, anche con fasce forzate a 8 righe): 95 dB in
-  f32, ×2 identico al bit.
+  riferimento nei test end-to-end (`window.__reader.esrganSelfTest`, anche con fasce forzate a 8 righe e con il
+  self-ensemble a 8 passaggi): 95 dB in f32, ×2 identico al bit, ensemble 59 dB (il riferimento arrotonda ogni
+  passaggio a 8 bit).
 
 I pesi si rigenerano dal checkpoint ufficiale con `scripts/convert-realesr-weights.py` (solo numpy, nessun PyTorch).
 
@@ -207,7 +213,8 @@ proprio impostare `VITE_BASE=/` nella build.
 Il service worker precarica l'intera app, compresi gli shader Anime4K e i pesi di Real-ESRGAN: dopo la prima
 apertura tutto funziona offline. Non servono intestazioni COOP/COEP: non c'è più WebAssembly multi-thread.
 
-**Aggiornamenti**: l'app installata si aggiorna da sola. A ogni avvio il service worker controlla se su Pages c'è una
+**Aggiornamenti**: il piè di pagina della libreria mostra versione, commit e data della build in uso. L'app
+installata si aggiorna da sola. A ogni avvio il service worker controlla se su Pages c'è una
 versione nuova, la scarica in background e la attiva subito; la libreria mostra il banner "Nuova versione dell'app
 pronta · Ricarica", altrimenti la versione nuova è in uso dall'avvio successivo. Non serve rimuovere e ri-aggiungere
 l'app alla schermata Home; libri, segnalibri e cache restano al loro posto.

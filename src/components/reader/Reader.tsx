@@ -11,7 +11,7 @@ import {
   rememberArchivePassword,
   resolveBookBlob,
 } from '../../lib/storage/importer'
-import { EsrganAborted } from '../../lib/upscale/esrgan/esrganEngine'
+import { type EnsembleSize, EsrganAborted } from '../../lib/upscale/esrgan/esrganEngine'
 import { SrAborted, type SrOptions, type SrPlan, type SrResult } from '../../lib/upscale/srEngine'
 import { type Book, GUTTER_FRACTION, type PageSize, type ReaderSettings } from '../../types'
 import { MaxQualityControls } from './MaxQualityControls'
@@ -525,8 +525,11 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
   /** Visible pages whose size is known, with the size baked into a key so the effect only re-runs on real changes. */
   const visibleKey = spreadPages.map((i) => `${i}:${sizes[i]?.w ?? '?'}x${sizes[i]?.h ?? '?'}`).join(',')
   const heavyBudgetMs = settings.maxQualityBudget * 1000
+  /** "Sempre" has no limit for the model itself; the ensemble still sizes itself to this target. */
+  const ensembleTargetMs = heavyBudgetMs > 0 ? heavyBudgetMs : 5000
   /** The tier decision is taken once per spread (and per budget), never revised by a later timing sample. */
-  const heavyDecision = useRef<{ key: string; use: boolean; skip: 'slow' | 'too-big' | 'error' | null } | null>(null)
+  const heavyDecision = useRef<{ key: string; use: boolean; skip: 'slow' | 'too-big' | 'error' | null; ensemble: EnsembleSize } | null>(null)
+  const [heavyEnsemble, setHeavyEnsemble] = useState<EnsembleSize>(1)
   useEffect(() => {
     heavyDecision.current = null
     setHeavyError(null)
@@ -546,31 +549,39 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
     const heavyKey = (index: number) => `${bookId}:${index}`
     const bitmapOf = async (index: number) => createImageBitmap((await cache.get(index)).blob)
 
-    // Which tier serves this spread.
+    // Which tier serves this spread, and how many self-ensemble passes the time budget allows.
     let useHeavy = false
     let skip: 'slow' | 'too-big' | 'error' | null = null
+    let ensemble: EnsembleSize = 1
     if (settings.maxQuality && heavy && pages.length > 0) {
       const decisionKey = `${visibleKey}|${heavyBudgetMs}|${heavyError ?? ''}`
       const prev = heavyDecision.current
       if (prev && prev.key === decisionKey) {
         useHeavy = prev.use
         skip = prev.skip
+        ensemble = prev.ensemble
       } else {
         if (heavyError) skip = 'error'
         else if (pages.some((i) => heavy.factorFor(sizes[i]!) === null)) skip = 'too-big'
         else {
-          const est = heavy.estimateMs(pages.map((i) => sizes[i]!))
+          const visible = pages.map((i) => sizes[i]!)
+          const est = heavy.estimateMs(visible)
           if (heavyBudgetMs > 0 && est !== undefined && est > heavyBudgetMs) {
             skip = 'slow'
             // The estimate may have been taken while Anime4K kept the GPU busy: measure again so the
             // next spread decides on fresh numbers.
             heavy.reprobe()
-          } else useHeavy = true
+          } else {
+            useHeavy = true
+            // Spare time goes into quality: more passes over flipped/rotated copies, averaged.
+            ensemble = heavy.ensembleFor(visible, ensembleTargetMs)
+          }
         }
-        heavyDecision.current = { key: decisionKey, use: useHeavy, skip }
+        heavyDecision.current = { key: decisionKey, use: useHeavy, skip, ensemble }
       }
     }
     setHeavySkip(settings.maxQuality ? skip : null)
+    setHeavyEnsemble(ensemble)
 
     let cancelled = false
     const initial = new Map<number, SrResult>()
@@ -587,7 +598,7 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
         // Both pages of a spread turn to HD together: nothing is shown until all are done.
         setEnhanced((m) => (m.size ? new Map() : m))
         setSrPending(new Set(pages))
-        Promise.all(pages.map((i, k) => hits[k] ?? heavy.enhance(heavyKey(i), sizes[i]!, () => bitmapOf(i))))
+        Promise.all(pages.map((i, k) => hits[k] ?? heavy.enhance(heavyKey(i), sizes[i]!, () => bitmapOf(i), ensemble)))
           .then((results) => {
             if (cancelled) return
             const next = new Map<number, SrResult>()
@@ -665,7 +676,7 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
       cancelled = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sr.engine, sr.tick, mq.engine, status, book, visibleKey, srOptions, settings.superResolution, settings.maxQuality, heavyBudgetMs, heavyError])
+  }, [sr.engine, sr.tick, mq.engine, status, book, visibleKey, srOptions, settings.superResolution, settings.maxQuality, heavyBudgetMs, ensembleTargetMs, heavyError])
 
   const heavyLabel = 'GAN'
   const displayed = enhanced
@@ -726,10 +737,14 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
         const engine = mq.engine
         if (!engine) return 'Pronta.'
         const parts = [`${modelName} ×4 · WebGPU ${engine.info.precision.toUpperCase()} · ${engine.info.adapter}`]
-        const est = engine.estimateMs(visibleSizes)
+        const shown = spreadPages.map((i) => displayed.get(i)).find((r) => r?.level === heavyLabel)
+        const passes = shown?.ensemble ?? heavyEnsemble
+        if (heavySkip === null && passes > 1) parts.push(`self-ensemble ×${passes} (${passes} passaggi mediati, più pulito)`)
+        const est = engine.estimateMs(visibleSizes, heavySkip === null ? heavyEnsemble : 1)
         if (est !== undefined && visibleSizes.length > 0) {
           parts.push(`stimati ${(est / 1000).toFixed(1)} s per ${visibleSizes.length > 1 ? 'la coppia' : 'la pagina'} sullo schermo`)
         }
+        if (shown && shown.ms > 0) parts.push(`ultima pagina ${(shown.ms / 1000).toFixed(1)} s`)
         if (heavySkip === 'slow') parts.push(`oltre l’attesa massima di ${settings.maxQualityBudget} s: queste pagine usano la Super risoluzione`)
         else if (heavySkip === 'too-big') parts.push('pagina troppo grande per il modello: usa la Super risoluzione')
         else if (heavySkip === 'error') parts.push(`errore (${heavyError ?? 'sconosciuto'}): uso la Super risoluzione`)

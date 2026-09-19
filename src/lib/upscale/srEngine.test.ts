@@ -106,18 +106,24 @@ describe('SrEngine automatic level', () => {
     expect(engine.currentAutoLevel).toBe('VL')
   })
 
-  it('a manual level is applied as asked and re-probes only when the settings change the cost', async () => {
+  it('a manual level is applied as asked; a cost-changing setting re-selects the level without a new probe', async () => {
+    passMs = { M: 70, VL: 160, UL: 640 }
     const engine = SrEngine.withBackend(fakeBackend())
     await enhance(engine, 0)
+    expect(engine.currentAutoLevel).toBe('UL')
     engine.setOptions({ level: 'M', scale: 'auto', restore: false, clean: false })
     expect((await enhance(engine, 0)).level).toBe('M')
     engine.setOptions({ level: 'auto', scale: 'auto', restore: false, clean: false })
     // Back to auto: the settled level is still known, the M result satisfies the page.
-    expect(engine.currentAutoLevel).not.toBeUndefined()
+    expect(engine.currentAutoLevel).toBe('UL')
     const kept = await enhance(engine, 0)
     expect(kept.level).toBe('M')
+    // "Linee nitide" doubles the work: UL no longer fits the budget, VL is chosen from the known throughput.
     engine.setOptions({ level: 'auto', scale: 'auto', restore: true, clean: false })
-    expect(engine.currentAutoLevel).toBeUndefined()
+    expect(engine.currentAutoLevel).toBe('VL')
+    const callsBefore = calls.length
+    expect((await enhance(engine, 1)).level).toBe('VL')
+    expect(calls.length - callsBefore).toBe(2) // one x4 enhancement, no extra probe
   })
 })
 
