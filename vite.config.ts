@@ -7,13 +7,6 @@ import { VitePWA } from 'vite-plugin-pwa'
 const repo = process.env.GITHUB_REPOSITORY?.split('/')[1]
 const base = process.env.VITE_BASE ?? (repo ? `/${repo}/` : '/')
 
-// Cross-origin isolation (needed for SharedArrayBuffer / WASM threads). In production the
-// service worker injects the same headers on static hosts that cannot set them.
-const coiHeaders = {
-  'Cross-Origin-Opener-Policy': 'same-origin',
-  'Cross-Origin-Embedder-Policy': 'require-corp',
-}
-
 export default defineConfig({
   base,
   plugins: [
@@ -50,10 +43,8 @@ export default defineConfig({
         ],
       },
       injectManifest: {
-        globPatterns: ['**/*.{js,css,html,svg,png,ico,wasm,woff2}'],
-        // The ONNX runtime (14–26 MB) and the model are runtime-cached on first use, never precached.
-        // onnxruntime-web also makes Vite emit hashed copies of its wasm into assets/: ignore those too.
-        globIgnores: ['**/ort/**', '**/models/**', '**/assets/ort-wasm-*'],
+        // .bin: the 1.2 MB Real-ESRGAN weights, so "Qualità massima" works offline too.
+        globPatterns: ['**/*.{js,css,html,svg,png,ico,wasm,bin,woff2}'],
         maximumFileSizeToCacheInBytes: 8 * 1024 * 1024,
       },
       devOptions: { enabled: false },
@@ -63,12 +54,10 @@ export default defineConfig({
     host: '127.0.0.1',
     port: 4877,
     strictPort: true,
-    headers: coiHeaders,
     // Playwright writes traces while tests run against this server: never reload for them.
-    // The large AI binaries never change at runtime (and Windows locks them while they are copied).
-    watch: { ignored: ['**/test-results/**', '**/playwright-report/**', '**/e2e/**', '**/public/ort/**', '**/public/models/**'] },
+    watch: { ignored: ['**/test-results/**', '**/playwright-report/**', '**/e2e/**'] },
   },
-  preview: { host: '127.0.0.1', port: 4878, strictPort: true, headers: coiHeaders },
+  preview: { host: '127.0.0.1', port: 4878, strictPort: true },
   worker: { format: 'es' },
   // The Anime4K shader library is a 3.4 MB chunk loaded on demand (and precached for offline use).
   build: { target: 'es2022', chunkSizeWarningLimit: 4000 },

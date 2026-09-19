@@ -6,8 +6,6 @@ export const flags = {
   forceIdb: params.get('storage') === 'idb',
   /** Super-resolution backend override. */
   sr: params.get('sr') as 'off' | 'webgl2' | 'webgpu' | null,
-  /** Force the CPU (WebAssembly) execution provider for the CUNet tier. */
-  cunet: params.get('cunet') as 'wasm' | null,
   /** Expose window.__reader test hooks (always on in dev). */
   test: params.has('test') || import.meta.env.DEV,
 }

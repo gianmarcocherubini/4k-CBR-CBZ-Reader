@@ -7,7 +7,7 @@ export type SrBackendPreference = 'auto' | 'webgpu' | 'webgl2'
 
 export interface SrResult {
   bitmap: ImageBitmap
-  level: Anime4KLevel | 'CUNet' | 'GAN'
+  level: Anime4KLevel | 'GAN'
   /** Upscale factor applied by the network (2 or 4) before resampling to the target. */
   factor: number
   /** Wall time of the GPU passes + readback, ms. */
@@ -38,15 +38,14 @@ export type SrDecision = SrPlan | 'too-big'
 interface Task {
   key: string
   index: number
-  plan: SrPlan
-  source: () => Promise<ImageBitmap>
-  priority: number
-  resolve: (r: SrResult) => void
-  reject: (e: unknown) => void
+  promise: Promise<SrResult>
 }
 
-/** Budget per page for the automatic level (ms). */
-const AUTO_BUDGET_MS = 100
+/**
+ * Budget per page for the automatic level (ms). A spread of two pages plus the fit must stay well
+ * under two seconds, so the strongest level that fits here is chosen.
+ */
+const AUTO_BUDGET_MS = 800
 
 /** Bytes of an RGBA bitmap. */
 const bytesOf = (b: { width: number; height: number }) => b.width * b.height * 4
@@ -64,8 +63,9 @@ export function planUnits(level: Anime4KLevel, restore: boolean, passes: 1 | 2):
 }
 
 /**
- * Serialises Anime4K work on the GPU with a priority queue (current spread first), keeps an LRU
- * of enhanced bitmaps and picks the automatic level from measured throughput.
+ * Runs Anime4K on the GPU for the pages on screen, one at a time, keeps an LRU of enhanced bitmaps
+ * and picks the automatic level from measured throughput. There is no read-ahead and no queue:
+ * the reader asks for the visible pages and cancels whatever left the screen.
  *
  * The output is always a fixed factor of the source (x2 or x4), never the size of the screen:
  * the view fits the result into its box afterwards. One result per page therefore serves every
@@ -76,8 +76,8 @@ export class SrEngine {
   private readonly cache = new Map<string, SrResult>()
   private cacheBytes = 0
   private readonly budget = cacheBudgetBytes()
-  private queue: Task[] = []
-  private running = false
+  private readonly tasks = new Map<string, Task>()
+  private chain: Promise<unknown> = Promise.resolve()
   private wanted = new Set<number>()
   private options: SrOptions = { level: 'auto', scale: 'auto', restore: false, clean: false }
   /** EMA of ms per (megapixel × plan unit). */
@@ -198,68 +198,37 @@ export class SrEngine {
     return hit
   }
 
-  /** Pages currently worth enhancing; queued work for other pages is dropped. */
+  /** Pages currently on screen; work not yet started for other pages is dropped. */
   setWanted(indices: Iterable<number>): void {
     this.wanted = new Set(indices)
-    const keep: Task[] = []
-    for (const t of this.queue) {
-      if (this.wanted.has(t.index)) keep.push(t)
-      else t.reject(new SrAborted())
-    }
-    this.queue = keep
+    this.evict()
   }
 
-  enhance(index: number, plan: SrPlan, source: () => Promise<ImageBitmap>, priority: number): Promise<SrResult> {
+  /** Enhances one page, after whatever is already running; the same plan in flight is shared. */
+  enhance(index: number, plan: SrPlan, source: () => Promise<ImageBitmap>): Promise<SrResult> {
     if (!this.available) return Promise.reject(new Error('SR non disponibile'))
     const key = this.key(index, plan)
     const hit = this.peek(index, plan)
     if (hit) return Promise.resolve(hit)
-    const existing = this.queue.find((t) => t.key === key)
-    if (existing) {
-      existing.priority = Math.min(existing.priority, priority)
-      return new Promise((resolve, reject) => {
-        const { resolve: r0, reject: j0 } = existing
-        existing.resolve = (v) => {
-          r0(v)
-          resolve(v)
-        }
-        existing.reject = (e) => {
-          j0(e)
-          reject(e)
-        }
-      })
-    }
-    return new Promise<SrResult>((resolve, reject) => {
-      this.queue.push({ key, index, plan, source, priority, resolve, reject })
-      this.queue.sort((a, b) => a.priority - b.priority)
-      void this.pump()
-    })
-  }
-
-  private async pump(): Promise<void> {
-    if (this.running) return
-    this.running = true
-    try {
-      while (this.queue.length > 0 && this.available) {
-        const task = this.queue.shift()!
-        if (!this.wanted.has(task.index)) {
-          task.reject(new SrAborted())
-          continue
-        }
-        try {
-          const result = await this.run(task)
-          this.cache.set(task.key, result)
-          this.cacheBytes += bytesOf(result.bitmap)
-          this.evict()
-          task.resolve(result)
-          this.onChange?.()
-        } catch (e) {
-          task.reject(e)
-        }
+    const existing = this.tasks.get(key)
+    if (existing) return existing.promise
+    const run = async (): Promise<SrResult> => {
+      if (!this.wanted.has(index) || !this.available) throw new SrAborted()
+      const result = await this.run(plan, source)
+      if (this.disposed) {
+        result.bitmap.close()
+        throw new SrAborted()
       }
-    } finally {
-      this.running = false
+      this.cache.set(key, result)
+      this.cacheBytes += bytesOf(result.bitmap)
+      this.evict()
+      this.onChange?.()
+      return result
     }
+    const promise = this.chain.then(run, run).finally(() => this.tasks.delete(key))
+    this.chain = promise.catch(() => undefined)
+    this.tasks.set(key, { key, index, promise })
+    return promise
   }
 
   /** LRU eviction by bytes; pages still wanted are spared unless the cache is far over budget. */
@@ -278,9 +247,8 @@ export class SrEngine {
     return this.cacheBytes
   }
 
-  private async run(task: Task): Promise<SrResult> {
-    const { plan } = task
-    const source = await task.source()
+  private async run(plan: SrPlan, load: () => Promise<ImageBitmap>): Promise<SrResult> {
+    const source = await load()
     let intermediate: ImageBitmap | null = null
     try {
       // The one-off pipeline build (shader compile) must not pollute the throughput estimate.
@@ -317,8 +285,6 @@ export class SrEngine {
 
   dispose(): void {
     this.disposed = true
-    for (const t of this.queue) t.reject(new SrAborted())
-    this.queue = []
     for (const r of this.cache.values()) r.bitmap.close()
     this.cache.clear()
     this.cacheBytes = 0

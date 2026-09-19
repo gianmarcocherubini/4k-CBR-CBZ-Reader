@@ -282,17 +282,11 @@ export function SettingsPanel({
             </div>
           </Group>
 
-          <div className={settings.maxQuality ? 'sr-settings-disabled pointer-events-none' : ''} aria-disabled={settings.maxQuality || undefined}>
-          <Group
-            title="Super risoluzione"
-            footer={
-              settings.maxQuality
-                ? 'Sostituita da «Qualità massima»: l’immagine è prodotta dal modello pesante, quindi fattore, livello e linee nitide qui non hanno effetto.'
-                : extra
-            }
-            testId="sr-section"
-          >
-            <Row title="Super risoluzione" hint="Anime4K sulla GPU: la pagina viene ingrandita ×2 o ×4 rispetto all’originale e poi adattata allo schermo. Linee e lettering più nitidi a ogni zoom.">
+          <Group title="Super risoluzione" footer={extra} testId="sr-section">
+            <Row
+              title="Super risoluzione"
+              hint="Anime4K sulla GPU, solo per le pagine sullo schermo: ingrandite ×2 o ×4 rispetto all’originale e poi adattate allo schermo, in meno di due secondi. Linee e lettering più nitidi a ogni zoom."
+            >
               <Switch checked={settings.superResolution} onChange={(v) => onChange({ superResolution: v })} label="Super risoluzione" />
             </Row>
             <Row title="Livello">
@@ -332,7 +326,6 @@ export function SettingsPanel({
               <Switch checked={settings.srClean} onChange={(v) => onChange({ srClean: v })} label="Pulizia scansione" />
             </Row>
           </Group>
-          </div>
 
           {maxQuality}
         </div>

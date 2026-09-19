@@ -73,11 +73,8 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
     const [b, c] = await Promise.all([listBooks(), listCollections()])
     if (!orphanCleanupDone.current) {
       orphanCleanupDone.current = true
-      const protectedIds = b.filter((book) => book.passwordProtected).map((book) => book.id)
-      if (protectedIds.length > 0) {
-        const { deleteCunetCache } = await import('../lib/upscale/cunet/cunetEngine')
-        await Promise.all(protectedIds.map((id) => deleteCunetCache(id)))
-      }
+      const { removeLegacySrCache } = await import('../lib/upscale/legacyCache')
+      await removeLegacySrCache()
       await cleanupOrphanedBookFiles(
         new Set(b.filter((book) => book.storage === 'opfs').map((book) => book.id)),
         async (bookId) => (await getBook(bookId))?.storage === 'opfs',

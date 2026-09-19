@@ -90,7 +90,7 @@ export class Anime4KUpscaler implements UpscaleBackend {
   static async create(): Promise<Anime4KUpscaler | null> {
     if (typeof navigator === 'undefined' || !('gpu' in navigator) || !navigator.gpu) return null
     try {
-      const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' })
+      const adapter = (await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' })) ?? (await navigator.gpu.requestAdapter())
       if (!adapter) return null
       const device = await adapter.requestDevice({
         requiredLimits: {

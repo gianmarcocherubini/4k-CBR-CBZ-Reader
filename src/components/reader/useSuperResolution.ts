@@ -11,11 +11,16 @@ export interface SrHandle {
   tick: number
 }
 
+/** How many times a lost GPU device is recreated (iPadOS drops it when the app is suspended). */
+const MAX_RECOVERIES = 3
+const RECOVERY_DELAY_MS = 800
+
 /** Creates the Anime4K engine while SR is enabled; disposes it (and its GPU device) otherwise. */
 export function useSuperResolution(enabled: boolean, options: SrOptions): SrHandle {
   const [engine, setEngine] = useState<SrEngine | null>(null)
   const [status, setStatus] = useState<SrStatus>(enabled ? 'init' : 'off')
   const [tick, setTick] = useState(0)
+  const [generation, setGeneration] = useState(0)
 
   useEffect(() => {
     if (!enabled || flags.sr === 'off') {
@@ -46,15 +51,22 @@ export function useSuperResolution(enabled: boolean, options: SrOptions): SrHand
       created?.dispose()
       created = null
     }
-  }, [enabled])
+  }, [enabled, generation])
 
   useEffect(() => {
     engine?.setOptions(options)
   }, [engine, options])
 
+  // A lost device (app suspended in the background, GPU reset) is recreated instead of leaving
+  // the rest of the session without super resolution.
   useEffect(() => {
-    if (engine && !engine.available) setStatus('unavailable')
-  }, [engine, tick])
+    if (!engine || engine.available) return
+    setStatus('unavailable')
+    setEngine(null)
+    if (generation >= MAX_RECOVERIES) return
+    const t = setTimeout(() => setGeneration((g) => g + 1), RECOVERY_DELAY_MS)
+    return () => clearTimeout(t)
+  }, [engine, tick, generation])
 
   return { status, engine, tick }
 }

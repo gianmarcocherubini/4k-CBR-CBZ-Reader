@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { openArchive, type OpenedArchive } from '../../lib/archive/openArchive'
 import { ArchiveError, describeError, isArchiveError } from '../../lib/archive/types'
-import { assertSafeEncodedImage } from '../../lib/imageDimensions'
 import { clampOffset, clampZoom, layoutSpread, type Size, zoomAround } from '../../lib/reader/layout'
 import { PageCache } from '../../lib/reader/pageCache'
 import { blankBefore, firstPage, isBlank, layoutSpreads, realPages, spreadIndexOf, spreadLabel } from '../../lib/spread'
@@ -12,9 +11,7 @@ import {
   rememberArchivePassword,
   resolveBookBlob,
 } from '../../lib/storage/importer'
-import { cacheBudgetBytes } from '../../lib/upscale/backend'
-import { deleteCunetCache } from '../../lib/upscale/cunet/cunetEngine'
-import { type HeavyFactor, heavyFactor } from '../../lib/upscale/cunet/protocol'
+import { EsrganAborted } from '../../lib/upscale/esrgan/esrganEngine'
 import { SrAborted, type SrOptions, type SrPlan, type SrResult } from '../../lib/upscale/srEngine'
 import { type Book, GUTTER_FRACTION, type PageSize, type ReaderSettings } from '../../types'
 import { MaxQualityControls } from './MaxQualityControls'
@@ -90,7 +87,6 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
         }
         b = cleaned
         if (b.storage !== 'session') await putBook(b)
-        await deleteCunetCache(b.id)
       }
       setBook(b)
       const blob = await resolveBookBlob(b)
@@ -127,7 +123,6 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
           b = protectedBook
           setBook(b)
           if (b.storage !== 'session') await putBook(b)
-          await deleteCunetCache(b.id)
         }
       }
       if (cancelled) {
@@ -504,181 +499,151 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
 
   useWakeLock(status === 'ready')
 
-  // ---- "Qualità massima" (Real-ESRGAN anime 6B at x4; cached results take precedence) ---------
-  const mq = useMaxQuality(status === 'ready' && settings.maxQuality, 'esrgan6b')
-  const heavyLabel = 'GAN'
-  /** The GAN's native factor; the worker drops to x2 only when x4 would exceed the canvas cap. */
-  const heavyMaxFactor: HeavyFactor = 4
-  /** Never persist decrypted derivatives of protected or session-only books. */
-  const persistHeavy = Boolean(book && book.storage !== 'session' && !book.passwordProtected)
-  const [cunetResults, setCunetResults] = useState<Map<number, SrResult>>(() => new Map())
-  /** A heavy result as shown: its factor is read off the bitmap (x4 results are preferred when cached). */
-  const heavyResult = useCallback(
-    (index: number, bitmap: ImageBitmap): SrResult => {
-      const size = sizes[index]
-      return { bitmap, level: heavyLabel, factor: size ? Math.max(1, Math.round(bitmap.width / size.w)) : 4, ms: 0 }
-    },
-    [sizes],
-  )
-  /** Raw page bytes straight from the archive (no decode), for the heavy-model worker. */
-  const pageBlob = useCallback(async (index: number): Promise<Blob> => {
-    const opened = archiveRef.current
-    if (!opened) throw new ArchiveError('aborted')
-    const entry = opened.pages[index]
-    if (!entry) throw new ArchiveError('missing')
-    const blob = await opened.reader.extract(entry.name)
-    await assertSafeEncodedImage(blob)
-    return blob
-  }, [])
-  useEffect(() => {
-    const engine = mq.engine
-    if (!engine || status !== 'ready' || !book) {
-      setCunetResults((m) => (m.size ? new Map() : m))
-      return
-    }
-    // The visible spread is priority 0; read-ahead pages get their reading distance. The engine's
-    // queue always runs the lowest priority next, so the expensive GAN time is spent on the page in
-    // front of the reader first and never wasted on a read-ahead page while the current one waits.
-    const outputBytes = (index: number) => {
-      const size = sizes[index]
-      if (!size) return 64 * 1024 * 1024 // conservative x4 page until dimensions are known
-      const factor = heavyFactor(size.w, size.h, heavyMaxFactor)
-      return factor ? size.w * size.h * factor * factor * 4 : 0
-    }
-    const wanted: Array<{ index: number; priority: number }> = spreadPages.map((index) => ({ index, priority: 0 }))
-    let plannedBytes = spreadPages.reduce((sum, index) => sum + outputBytes(index), 0)
-    const preloadBudget = cacheBudgetBytes()
-    for (let k = 1; k <= PRELOAD_AHEAD; k++) {
-      for (const p of realPages(spreads[spreadIndex + k] ?? [])) {
-        if (wanted.some((w) => w.index === p)) continue
-        const bytes = outputBytes(p)
-        if (bytes === 0 || plannedBytes + bytes > preloadBudget) continue
-        wanted.push({ index: p, priority: k })
-        plannedBytes += bytes
-      }
-    }
-    engine.protect(book.id, spreadPages)
-    engine.prune(
-      book.id,
-      wanted.map((w) => w.index),
-    )
-    let cancelled = false
-    const bookId = book.id
-    const batchRunning = mq.batch.running
-    const apply = (index: number, bitmap: ImageBitmap) =>
-      setCunetResults((m) => (m.get(index)?.bitmap === bitmap ? m : new Map(m).set(index, heavyResult(index, bitmap))))
-    for (const { index, priority } of wanted) {
-      const hit = engine.peek(bookId, index)
-      if (hit) {
-        if (priority === 0) apply(index, hit)
-        continue
-      }
-      if (engine.prefetchAllowed && !batchRunning) {
-        // WebGPU: enqueued in reading order, so the current page is processed before the next ones.
-        engine
-          .enhance(bookId, index, () => pageBlob(index), heavyMaxFactor, priority, persistHeavy)
-          .then((b) => {
-            if (!cancelled && priority === 0) apply(index, b)
-          })
-          .catch(() => undefined)
-      } else {
-        // CPU (too slow to process on demand) or batch running: only show what is already cached.
-        void engine.lookup(bookId, index, persistHeavy).then((bitmap) => {
-          if (!cancelled && priority === 0 && bitmap) apply(index, bitmap)
-        })
-      }
-    }
-    setCunetResults((m) => {
-      let changed = false
-      const next = new Map<number, SrResult>()
-      for (const [k, v] of m) {
-        if (spreadPages.includes(k)) next.set(k, v)
-        else changed = true
-      }
-      return changed ? next : m
-    })
-    return () => {
-      cancelled = true
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mq.engine, mq.status, mq.batch.running, status, book, spreadKey, spreads, spreadIndex, sizes, pageBlob])
-
-  // ---- super resolution (Anime4K) ------------------------------------------------------------
+  // ---- enhancement of the visible spread ------------------------------------------------------
+  // Only the pages on screen are ever processed: no read-ahead, no batch, no queue. "Qualità
+  // massima" (Real-ESRGAN) runs when its measured throughput predicts the spread within the time
+  // budget; otherwise, or when it is off or unavailable, the spread gets Anime4K.
+  const mq = useMaxQuality(status === 'ready' && settings.maxQuality)
   const srOptions = useMemo<SrOptions>(
     () => ({ level: settings.srLevel, scale: settings.srScale, restore: settings.srRestore, clean: settings.srClean }),
     [settings.srLevel, settings.srScale, settings.srRestore, settings.srClean],
   )
-  // Exclusive with the heavy tier: when "Qualità massima" is on it is the only enhancement, so the
-  // page shows plain until the GAN result is ready (one swap, no flicker) — Anime4K does not run.
-  const sr = useSuperResolution(status === 'ready' && settings.superResolution && !settings.maxQuality, srOptions)
+  const sr = useSuperResolution(status === 'ready' && settings.superResolution, srOptions)
   const [enhanced, setEnhanced] = useState<Map<number, SrResult>>(() => new Map())
   const [srPending, setSrPending] = useState<Set<number>>(() => new Set())
   const [srNative, setSrNative] = useState<Set<number>>(() => new Set())
+  /** Why Real-ESRGAN was not used for the current spread (null = used, or off). */
+  const [heavySkip, setHeavySkip] = useState<'slow' | 'too-big' | 'error' | null>(null)
+  const [heavyError, setHeavyError] = useState<string | null>(null)
+  /** Visible pages whose size is known, with the size baked into a key so the effect only re-runs on real changes. */
+  const visibleKey = spreadPages.map((i) => `${i}:${sizes[i]?.w ?? '?'}x${sizes[i]?.h ?? '?'}`).join(',')
+  const heavyBudgetMs = settings.maxQualityBudget * 1000
+  /** The tier decision is taken once per spread (and per budget), never revised by a later timing sample. */
+  const heavyDecision = useRef<{ key: string; use: boolean; skip: 'slow' | 'too-big' | 'error' | null } | null>(null)
   useEffect(() => {
-    const engine = sr.engine
-    if (!engine || status !== 'ready') {
+    heavyDecision.current = null
+    setHeavyError(null)
+  }, [mq.engine])
+  useEffect(() => {
+    const light = sr.engine?.available ? sr.engine : null
+    const heavy = mq.engine?.available ? mq.engine : null
+    const cache = cacheRef.current
+    if (status !== 'ready' || !book || !cache || (!light && !heavy)) {
       setEnhanced((m) => (m.size ? new Map() : m))
+      setSrPending((s) => (s.size ? new Set() : s))
+      setHeavySkip(null)
       return
     }
-    // The result is a fixed factor of the source, so only the pages matter (not how large they
-    // are shown): the current spread first, then the next spreads so they are ready on the turn.
-    const targets = new Map<number, { size: PageSize; priority: number }>()
-    for (const index of spreadPages) {
-      const size = sizes[index]
-      if (size) targets.set(index, { size, priority: 0 })
-    }
-    for (let k = 1; k <= PRELOAD_AHEAD; k++) {
-      for (const index of realPages(spreads[spreadIndex + k] ?? [])) {
-        const size = sizes[index]
-        if (size && !targets.has(index)) targets.set(index, { size, priority: k })
+    const pages = spreadPages.filter((i) => sizes[i])
+    const bookId = book.id
+    const heavyKey = (index: number) => `${bookId}:${index}`
+    const bitmapOf = async (index: number) => createImageBitmap((await cache.get(index)).blob)
+
+    // Which tier serves this spread.
+    let useHeavy = false
+    let skip: 'slow' | 'too-big' | 'error' | null = null
+    if (settings.maxQuality && heavy && pages.length > 0) {
+      const decisionKey = `${visibleKey}|${heavyBudgetMs}|${heavyError ?? ''}`
+      const prev = heavyDecision.current
+      if (prev && prev.key === decisionKey) {
+        useHeavy = prev.use
+        skip = prev.skip
+      } else {
+        if (heavyError) skip = 'error'
+        else if (pages.some((i) => heavy.factorFor(sizes[i]!) === null)) skip = 'too-big'
+        else {
+          const est = heavy.estimateMs(pages.map((i) => sizes[i]!))
+          if (heavyBudgetMs > 0 && est !== undefined && est > heavyBudgetMs) skip = 'slow'
+          else useHeavy = true
+        }
+        heavyDecision.current = { key: decisionKey, use: useHeavy, skip }
       }
     }
-    const wanted: number[] = []
+    setHeavySkip(settings.maxQuality ? skip : null)
+
+    let cancelled = false
+    const initial = new Map<number, SrResult>()
+    if (useHeavy && heavy) {
+      light?.setWanted([])
+      heavy.setWanted(pages.map(heavyKey))
+      setSrNative(new Set())
+      const hits = pages.map((i) => heavy.peek(heavyKey(i)))
+      if (hits.every((h) => h)) {
+        pages.forEach((i, k) => initial.set(i, hits[k]!))
+        setEnhanced(initial)
+        setSrPending(new Set())
+      } else {
+        // Both pages of a spread turn to HD together: nothing is shown until all are done.
+        setEnhanced((m) => (m.size ? new Map() : m))
+        setSrPending(new Set(pages))
+        Promise.all(pages.map((i, k) => hits[k] ?? heavy.enhance(heavyKey(i), sizes[i]!, () => bitmapOf(i))))
+          .then((results) => {
+            if (cancelled) return
+            const next = new Map<number, SrResult>()
+            pages.forEach((i, k) => next.set(i, results[k]!))
+            setEnhanced(next)
+            setSrPending(new Set())
+          })
+          .catch((e: unknown) => {
+            if (cancelled || e instanceof EsrganAborted) return
+            console.warn('Real-ESRGAN fallito', e)
+            // Give the spread to Anime4K for the rest of the session and say why.
+            setHeavyError(e instanceof Error ? e.message : String(e))
+            setSrPending(new Set())
+          })
+      }
+      return () => {
+        cancelled = true
+      }
+    }
+
+    heavy?.setWanted([])
+    if (!light || !settings.superResolution) {
+      setEnhanced((m) => (m.size ? new Map() : m))
+      setSrPending((s) => (s.size ? new Set() : s))
+      setSrNative(new Set())
+      return
+    }
     const plans = new Map<number, SrPlan>()
     const native = new Set<number>()
-    // Cap the kept results to the memory budget, visible spread first. At x4 a page is ~60 MB, so a
-    // couple of read-ahead spreads would overflow the cache and make the LRU thrash — evicting and
-    // recomputing pages, which shows up as pages flickering on/off. Read-ahead pages that do not fit
-    // are simply enhanced later, when the reader turns onto them.
-    const budget = cacheBudgetBytes()
-    let bytes = 0
-    for (const [index, t] of targets) {
-      if (cunetResults.has(index)) continue // the heavy-tier result wins
-      const decision = engine.plan(t.size)
-      if (typeof decision === 'string') {
-        native.add(index)
-        continue
-      }
-      const cost = decision.target.w * decision.target.h * 4
-      if (t.priority > 0 && bytes + cost > budget) continue
-      bytes += cost
-      wanted.push(index)
-      plans.set(index, decision)
+    for (const index of pages) {
+      const decision = light.plan(sizes[index]!)
+      if (typeof decision === 'string') native.add(index)
+      else plans.set(index, decision)
     }
-    engine.setWanted(wanted)
+    light.setWanted(plans.keys())
     setSrNative(native)
-    let cancelled = false
-    const cache = cacheRef.current
-    for (const index of wanted) {
-      const t = targets.get(index)!
-      const plan = plans.get(index)!
-      const hit = engine.peek(index, plan)
-      if (hit) {
-        setEnhanced((m) => (m.get(index) === hit ? m : new Map(m).set(index, hit)))
-        continue
+    const pendingNow = new Set<number>()
+    for (const [index, plan] of plans) {
+      const hit = light.peek(index, plan)
+      if (hit) initial.set(index, hit)
+      else pendingNow.add(index)
+    }
+    // Cached pages appear at once; results still shown from another plan (e.g. the VL probe before
+    // the auto level settles) stay until their replacement is ready, so there is no flash to plain.
+    setEnhanced((m) => {
+      const next = new Map<number, SrResult>()
+      for (const index of pages) {
+        const r = initial.get(index) ?? m.get(index)
+        if (r) next.set(index, r)
       }
-      if (!cache) continue
-      setSrPending((s) => (s.has(index) ? s : new Set(s).add(index)))
-      engine
-        .enhance(index, plan, async () => createImageBitmap((await cache.get(index)).blob), t.priority)
+      let same = next.size === m.size
+      if (same) for (const [k, v] of next) if (m.get(k) !== v) same = false
+      return same ? m : next
+    })
+    setSrPending(pendingNow)
+    for (const index of pendingNow) {
+      light
+        .enhance(index, plans.get(index)!, () => bitmapOf(index))
         .then((result) => {
           if (cancelled) return
-          setEnhanced((m) => new Map(m).set(index, result))
+          setEnhanced((m) => (m.get(index) === result ? m : new Map(m).set(index, result)))
         })
-        .catch((e) => {
+        .catch((e: unknown) => {
           if (!(e instanceof SrAborted) && !cancelled) console.warn('SR fallita', e)
         })
         .finally(() => {
+          if (cancelled) return
           setSrPending((s) => {
             if (!s.has(index)) return s
             const n = new Set(s)
@@ -687,38 +652,15 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
           })
         })
     }
-    // Forget results the engine may have evicted or that are no longer relevant.
-    setEnhanced((m) => {
-      let changed = false
-      const next = new Map<number, SrResult>()
-      for (const [k, v] of m) {
-        if (wanted.includes(k)) next.set(k, v)
-        else changed = true
-      }
-      return changed ? next : m
-    })
     return () => {
       cancelled = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sr.engine, sr.tick, status, spreadKey, spreadPages, sizes, spreads, spreadIndex, srOptions, cunetResults])
+  }, [sr.engine, sr.tick, mq.engine, status, book, visibleKey, srOptions, settings.superResolution, settings.maxQuality, heavyBudgetMs, heavyError])
 
-  /** In a double spread, reveal the GAN atomically only after both real pages are ready. */
-  const visibleHeavyComplete =
-    !settings.maxQuality ||
-    spreadPages.every((index) => cunetResults.has(index) && pageStates.get(index)?.status === 'ready')
-
-  /** What the view shows: GAN results first, then Anime4K. */
-  const displayed = useMemo(() => {
-    if (cunetResults.size === 0) return enhanced
-    const merged = new Map(enhanced)
-    for (const [k, v] of cunetResults) {
-      if (!settings.maxQuality || !spreadPages.includes(k) || visibleHeavyComplete) merged.set(k, v)
-    }
-    return merged
-  }, [enhanced, cunetResults, settings.maxQuality, spreadPages, visibleHeavyComplete])
-  const heavyEnabled = settings.maxQuality
-  const showEnhanced = (settings.superResolution && !!sr.engine) || (heavyEnabled && cunetResults.size > 0)
+  const heavyLabel = 'GAN'
+  const displayed = enhanced
+  const showEnhanced = enhanced.size > 0
 
   // Snapshot of what is on screen, taken after every render: the source of the transition ghost.
   useEffect(() => {
@@ -737,43 +679,51 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
     return () => el.removeEventListener('pointerdown', onFirst)
   }, [settings.fullscreenReading, status])
 
+  const anyTierOn = settings.superResolution || settings.maxQuality
   const srBadge = (() => {
+    if (!anyTierOn) return undefined
     const onScreen = spreadPages.filter((i) => pageStates.get(i)?.status === 'ready')
-    if (onScreen.length > 0 && onScreen.every((i) => cunetResults.has(i))) {
-      const f = Math.min(...onScreen.map((i) => cunetResults.get(i)!.factor))
+    if (onScreen.length > 0 && onScreen.every((i) => displayed.get(i)?.level === heavyLabel)) {
+      const f = Math.min(...onScreen.map((i) => displayed.get(i)!.factor))
       return `SR ×${f} ${heavyLabel}`
     }
-    if (!settings.superResolution || sr.status === 'off') return heavyEnabled ? 'SR…' : undefined
-    if (sr.status === 'init') return 'SR…'
-    if (sr.status === 'unavailable' || !sr.engine) return 'SR n/d'
-    if (onScreen.length === 0) return 'SR…'
     if (onScreen.some((i) => srPending.has(i))) return 'SR…'
     const results = onScreen.map((i) => displayed.get(i)).filter((r): r is SrResult => !!r)
     if (results.length > 0) {
       const last = results[results.length - 1]!
       return `SR ×${last.factor} ${last.level}${settings.srRestore ? '+' : ''}`
     }
-    if (onScreen.every((i) => srNative.has(i))) return 'SR n/d'
+    if (sr.status === 'init' || mq.status === 'init') return 'SR…'
+    const lightUsable = settings.superResolution && !!sr.engine
+    const heavyUsable = settings.maxQuality && !!mq.engine && heavySkip === null
+    if (!lightUsable && !heavyUsable) return 'SR n/d'
+    if (onScreen.length === 0) return 'SR…'
+    if (!heavyUsable && onScreen.every((i) => srNative.has(i))) return 'SR n/d'
     return 'SR…'
   })()
 
+  const visibleSizes = spreadPages.map((i) => sizes[i]).filter((s): s is PageSize => !!s)
   const mqStatusLine = (() => {
-    if (!heavyEnabled) return 'Disattivata. Attivandola vengono scaricati il motore (≈ 14–25 MB) e il modello (18 MB), una sola volta.'
-    const modelName = 'Real-ESRGAN anime 6B (GAN)'
+    const modelName = 'Real-ESRGAN anime v3'
+    if (!settings.maxQuality) return `Disattivata. ${modelName} ×4 sulla GPU: più nitida della Super risoluzione, qualche secondo per pagina, solo per le pagine sullo schermo.`
     switch (mq.status) {
-      case 'idle':
-      case 'loading':
-        return `Caricamento del motore e del modello ${modelName}…`
-      case 'model-missing':
-        return `Modello ${modelName} non disponibile su questo server (manca public/models: eseguire npm run setup prima della build).`
+      case 'off':
+      case 'init':
+        return 'Inizializzazione: pesi del modello (1,2 MB), compilazione degli shader e misura della GPU…'
       case 'unavailable':
-        return `Non disponibile: ${mq.engine?.error ?? 'errore sconosciuto'}`
+        return `Non disponibile: ${mq.error ?? 'errore sconosciuto'}. Le pagine usano la Super risoluzione.`
       case 'ready': {
-        const i = mq.engine?.info
-        if (!i) return 'Pronta.'
-        return i.ep === 'webgpu'
-          ? `${modelName} ×4 · WebGPU ${i.precision.toUpperCase()}${i.graphCapture ? ' · graph capture' : ''}: le pagine seguenti vengono elaborate in background mentre leggi.`
-          : `${modelName} ×4 · CPU (WebAssembly, ${i.threads} thread${i.crossOriginIsolated ? '' : ', isolamento cross-origin assente'}): troppo lenta durante la lettura, usa “Pre-elabora questo volume”.`
+        const engine = mq.engine
+        if (!engine) return 'Pronta.'
+        const parts = [`${modelName} ×4 · WebGPU ${engine.info.precision.toUpperCase()} · ${engine.info.adapter}`]
+        const est = engine.estimateMs(visibleSizes)
+        if (est !== undefined && visibleSizes.length > 0) {
+          parts.push(`stimati ${(est / 1000).toFixed(1)} s per ${visibleSizes.length > 1 ? 'la coppia' : 'la pagina'} sullo schermo`)
+        }
+        if (heavySkip === 'slow') parts.push(`oltre l’attesa massima di ${settings.maxQualityBudget} s: queste pagine usano la Super risoluzione`)
+        else if (heavySkip === 'too-big') parts.push('pagina troppo grande per il modello: usa la Super risoluzione')
+        else if (heavySkip === 'error') parts.push(`errore (${heavyError ?? 'sconosciuto'}): uso la Super risoluzione`)
+        return parts.join(' · ')
       }
     }
   })()
@@ -792,6 +742,7 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
       parts.push(`×${decision.passes === 2 ? 4 : 2} → ${decision.target.w}×${decision.target.h} px, adattata allo schermo`)
     } else if (decision === 'too-big') parts.push('pagina troppo grande per la GPU, mostrata com’è')
     if (est !== undefined) parts.push(`≈ ${Math.round(est)} ms/pagina`)
+    if (settings.maxQuality && heavySkip === null && mq.status !== 'unavailable') parts.push('in attesa: usata quando Qualità massima non sta nell’attesa massima')
     return parts.join(' · ')
   })()
 
@@ -891,17 +842,10 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
           maxQuality={
             <MaxQualityControls
               enabled={settings.maxQuality}
+              budget={settings.maxQualityBudget}
               statusLine={mqStatusLine}
-              ready={mq.status === 'ready'}
-              batch={mq.batch}
-              pageCount={pageCount}
-              persistentCache={persistHeavy}
               onToggle={(v) => updateSettings({ maxQuality: v })}
-              onStart={() => {
-                if (!book) return
-                mq.startBatch(book.id, Array.from({ length: pageCount }, (_, i) => i), pageBlob, heavyMaxFactor, persistHeavy)
-              }}
-              onCancel={mq.cancelBatch}
+              onBudget={(v) => updateSettings({ maxQualityBudget: v })}
             />
           }
         />

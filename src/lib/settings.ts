@@ -10,7 +10,9 @@ export function loadSettings(): ReaderSettings {
     const parsed = JSON.parse(raw) as Partial<ReaderSettings> & { ganModel?: boolean }
     const { ganModel, ...rest } = parsed
     // The separate "Modello GAN pesante" switch was folded into "Qualità massima".
-    return { ...DEFAULT_SETTINGS, ...rest, maxQuality: Boolean(rest.maxQuality || ganModel) }
+    const settings = { ...DEFAULT_SETTINGS, ...rest, maxQuality: Boolean(rest.maxQuality || ganModel) }
+    if (![3, 5, 10, 0].includes(settings.maxQualityBudget)) settings.maxQualityBudget = DEFAULT_SETTINGS.maxQualityBudget
+    return settings
   } catch {
     return { ...DEFAULT_SETTINGS }
   }

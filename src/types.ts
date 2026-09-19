@@ -73,8 +73,8 @@ export type SrLevel = 'auto' | 'M' | 'VL' | 'UL'
  * auto = x4 when memory and GPU allow (heavy models: their native factor), else x2.
  */
 export type SrScale = 'auto' | 'x2' | 'x4'
-/** Models of the heavy "Qualità massima" tier ('cunet' is legacy: only its caches are still cleaned up). */
-export type HeavyModel = 'cunet' | 'esrgan6b'
+/** Longest wait accepted for Real-ESRGAN on the visible spread, seconds (0 = no limit). */
+export type MaxQualityBudget = 3 | 5 | 10 | 0
 
 export interface ReaderSettings {
   direction: Direction
@@ -90,8 +90,13 @@ export interface ReaderSettings {
   srRestore: boolean
   /** Scan clean-up: paper levels + light denoise ("Pulizia scansione"). */
   srClean: boolean
-  /** "Qualità massima (lenta)": Real-ESRGAN anime 6B at x4, experimental, off by default. */
+  /** "Qualità massima": Real-ESRGAN (anime video v3) at x4 on WebGPU for the pages on screen. */
   maxQuality: boolean
+  /**
+   * Time budget for the visible spread: when the measured GPU throughput predicts a longer wait,
+   * the spread uses the standard super resolution instead.
+   */
+  maxQualityBudget: MaxQualityBudget
   theme: Theme
   stageBackground: StageBackground
   /** Centre margin between the two pages in double-page mode. */
@@ -115,6 +120,7 @@ export const DEFAULT_SETTINGS: ReaderSettings = {
   srRestore: false,
   srClean: false,
   maxQuality: false,
+  maxQualityBudget: 5,
   theme: 'system',
   stageBackground: 'default',
   gutter: 'm',
