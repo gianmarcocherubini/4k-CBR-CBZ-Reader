@@ -62,8 +62,10 @@ export default defineConfig({
         ],
       },
       injectManifest: {
-        // .bin: the 1.2 MB Real-ESRGAN weights, so "Qualità massima" works offline too.
+        // .bin: the 1.2 MB Real-ESRGAN anime v3 weights, so "Qualità massima" works offline too. The
+        // 9 MB 6B weights are optional: fetched (and runtime-cached) the first time that model is chosen.
         globPatterns: ['**/*.{js,css,html,svg,png,ico,wasm,bin,woff2}'],
+        globIgnores: ['**/realesrgan-x4plus-anime-6b*'],
         maximumFileSizeToCacheInBytes: 8 * 1024 * 1024,
       },
       devOptions: { enabled: false },

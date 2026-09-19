@@ -1,8 +1,8 @@
-import { EsrganUpscaler, type EsrganFactor } from './esrganUpscaler'
-import { runSrvggEnsembleReference, runSrvggReference } from './reference'
-import weightsUrl from './realesr-animevideov3.f16.bin?url'
+import type { MaxQualityModel } from '../../../types'
+import { loadWeights } from './esrganEngine'
+import { createUpscaler, type EsrganFactor } from './esrganUpscaler'
+import { runRrdbReference, runSrvggEnsembleReference, runSrvggReference } from './reference'
 import { type EnsembleSize, ensembleTransforms } from './transforms'
-import { parseWeights } from './weights'
 
 export interface SelfTestOptions {
   width?: number
@@ -11,9 +11,12 @@ export interface SelfTestOptions {
   smallBands?: boolean
   /** Self-ensemble passes to compare against the CPU ensemble (default 1). */
   ensemble?: EnsembleSize
+  /** Network to test (default the compact v3). */
+  model?: MaxQualityModel
 }
 
 export interface SelfTestResult {
+  model: MaxQualityModel
   adapter: string
   precision: 'f16' | 'f32'
   bands: number
@@ -70,10 +73,11 @@ function compare(a: Uint8ClampedArray, b: Uint8ClampedArray): { psnr: number; ma
  * current browser, the weight layout, the pixel shuffle, the residual and the band seams.
  */
 export async function esrganSelfTest(opts: SelfTestOptions = {}): Promise<SelfTestResult> {
+  const model = opts.model ?? 'v3'
   const w = opts.width ?? 40
   const h = opts.height ?? 56
-  const weights = parseWeights(await (await fetch(weightsUrl)).arrayBuffer())
-  const upscaler = await EsrganUpscaler.create(weights)
+  const weights = await loadWeights(model)
+  const upscaler = await createUpscaler(weights)
   if (!upscaler) throw new Error('WebGPU non disponibile')
   try {
     if (opts.smallBands) {
@@ -83,21 +87,25 @@ export async function esrganSelfTest(opts: SelfTestOptions = {}): Promise<SelfTe
     const rgba = synthetic(w, h)
     const canvas = new OffscreenCanvas(w, h)
     canvas.getContext('2d')!.putImageData(new ImageData(rgba, w, h), 0, 0)
-    const ensemble = opts.ensemble ?? 1
+    const ensemble: EnsembleSize = upscaler.supportsEnsemble ? (opts.ensemble ?? 1) : 1
     const run = async (factor: EsrganFactor) => {
       const bitmap = await createImageBitmap(canvas)
       const t0 = performance.now()
       let steps = 0
-      const out = await upscaler.upscale(bitmap, factor, { ensemble, onProgress: (_d, total) => (steps = total) })
+      const out = await upscaler.upscale(bitmap, factor, { ensemble, onProgress: (_d: number, total: number) => (steps = total) })
       const ms = performance.now() - t0
       bitmap.close()
       const ref =
-        ensemble === 1 ? runSrvggReference(weights, rgba, w, h, factor) : runSrvggEnsembleReference(weights, rgba, w, h, factor, ensembleTransforms(ensemble))
+        weights.header.arch === 'rrdb'
+          ? runRrdbReference(weights, rgba, w, h, factor, 'clamp')
+          : ensemble === 1
+            ? runSrvggReference(weights, rgba, w, h, factor)
+            : runSrvggEnsembleReference(weights, rgba, w, h, factor, ensembleTransforms(ensemble))
       return { ...compare(out.data, ref), ms, bands: steps / ensemble }
     }
     const x4 = await run(4)
     const x2 = await run(2)
-    return { adapter: upscaler.info.adapter, precision: upscaler.info.precision, bands: x4.bands, ensemble, x4, x2 }
+    return { model, adapter: upscaler.info.adapter, precision: upscaler.info.precision, bands: x4.bands, ensemble, x4, x2 }
   } finally {
     upscaler.dispose()
   }

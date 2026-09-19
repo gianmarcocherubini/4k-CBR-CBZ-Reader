@@ -56,16 +56,19 @@ export function layoutSpread(
   const widths = natural.map((s) => (s.w * H) / s.h)
   const gutterW = spread.length > 1 ? H * Math.max(0, gutterFraction) : 0
   const totalW = widths.reduce((a, b) => a + b, 0) + gutterW
+  // The filled axis is snapped up to whole device pixels: a fractional viewport size would
+  // otherwise leave a hairline of background along the far edge.
+  const snapUp = (v: number) => Math.ceil(v * Math.max(1, dpr)) / Math.max(1, dpr)
   let scale: number
   switch (fit) {
     case 'screen':
-      scale = Math.min(viewport.w / totalW, viewport.h / H)
+      scale = Math.min(snapUp(viewport.w) / totalW, snapUp(viewport.h) / H)
       break
     case 'height':
-      scale = viewport.h / H
+      scale = snapUp(viewport.h) / H
       break
     case 'width':
-      scale = viewport.w / totalW
+      scale = snapUp(viewport.w) / totalW
       break
     case 'original':
       scale = 1 / Math.max(1, dpr)

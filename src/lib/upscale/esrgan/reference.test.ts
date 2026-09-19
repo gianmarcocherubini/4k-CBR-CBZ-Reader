@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { runSrvggReference } from './reference'
+import { runRrdbReference, runSrvggReference } from './reference'
 import { f16ToF32, parseWeights } from './weights'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -91,5 +91,50 @@ describe('SRVGG reference implementation', () => {
         }
       }
     }
+  })
+})
+
+describe('RRDB (x4plus anime 6B) weight file and reference implementation', () => {
+  it('parses the shipped 6B weights: 6 blocks x 15 convolutions plus the six head/tail layers', () => {
+    const w = parseWeights(load('realesrgan-x4plus-anime-6b.f16.bin'))
+    expect(w.header.arch).toBe('rrdb')
+    expect(w.header.numBlock).toBe(6)
+    expect(w.header.numGrowCh).toBe(32)
+    expect(w.layers).toHaveLength(96)
+    expect(w.byName.get('body.0.rdb1.conv2')).toMatchObject({ cin: 96, cout: 32 })
+    expect(w.byName.get('body.5.rdb3.conv5')).toMatchObject({ cin: 192, cout: 64 })
+    expect(w.byName.get('conv_last')).toMatchObject({ cin: 64, cout: 4, realCout: 3 })
+    // The padding channel of conv_last is exactly zero.
+    const last = w.byName.get('conv_last')!
+    for (let i = 3; i < last.weight.length; i += 4) expect(last.weight[i]).toBe(0)
+  })
+
+  // Fixture produced with PyTorch (RRDBNet as in Real-ESRGAN, zero padding) from the same f16 weights.
+  it('matches the PyTorch output of RRDBNet on a whole small image', () => {
+    const weights = parseWeights(load('realesrgan-x4plus-anime-6b.f16.bin'))
+    const w = 16
+    const h = 12
+    const rgb = new Uint8Array(load('__fixtures__/rrdb-input-16x12.rgb'))
+    const expected = new Uint8Array(load('__fixtures__/rrdb-expected-64x48.rgb'))
+    const rgba = new Uint8ClampedArray(w * h * 4)
+    for (let i = 0; i < w * h; i++) {
+      rgba[i * 4] = rgb[i * 3]!
+      rgba[i * 4 + 1] = rgb[i * 3 + 1]!
+      rgba[i * 4 + 2] = rgb[i * 3 + 2]!
+      rgba[i * 4 + 3] = 255
+    }
+    const out = runRrdbReference(weights, rgba, w, h, 4, 'zero')
+    let maxDiff = 0
+    let se = 0
+    for (let i = 0; i < w * h * 16; i++) {
+      for (let c = 0; c < 3; c++) {
+        const d = Math.abs(out[i * 4 + c]! - expected[i * 3 + c]!)
+        maxDiff = Math.max(maxDiff, d)
+        se += d * d
+      }
+    }
+    const psnr = 10 * Math.log10((255 * 255) / (se / (w * h * 16 * 3)))
+    expect(maxDiff).toBeLessThanOrEqual(2)
+    expect(psnr).toBeGreaterThan(55)
   })
 })

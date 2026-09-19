@@ -128,11 +128,22 @@ le linee pulite. Obiettivo: la coppia di pagine pronta in **meno di due secondi*
 
 ### "Qualità massima" (Real-ESRGAN, spenta di default)
 
-Il livello forte è **Real-ESRGAN "anime video v3"** (`realesr-animevideov3`, rete SRVGGNetCompact: 3→64, 16
-convoluzioni 64→64 con PReLU, 64→48, pixel shuffle ×4; 621k parametri, BSD-3), implementato **direttamente in WGSL**
-su WebGPU: niente ONNX Runtime, niente WebAssembly. È il modello Real-ESRGAN più forte che una GPU da iPad può
-eseguire in pochi secondi per pagina; il 6B a ×4 costa nove volte tanto e non sta in nessun budget ragionevole in un
-browser (le app native che ci riescono usano il Neural Engine, inaccessibile a una web app).
+Due reti Real-ESRGAN, entrambe implementate **direttamente in WGSL** su WebGPU (niente ONNX Runtime, niente
+WebAssembly), selezionabili in **Modello**:
+
+- **Anime v3** (default): `realesr-animevideov3`, SRVGGNetCompact (3→64, 16 convoluzioni 64→64 con PReLU, 64→48,
+  pixel shuffle ×4; 621k parametri, BSD-3). Circa **1 s per pagina** su un iPad M-series; il tempo che avanza va nel
+  self-ensemble (sotto).
+- **Anime 6B** (opzionale): `RealESRGAN_x4plus_anime_6B`, RRDBNet con 6 blocchi residual-in-residual dense (3 blocchi
+  densi da 5 convoluzioni ciascuno, 64 feature, 32 canali di crescita, scala residua 0,2, coda con due upsample
+  nearest + convoluzioni; 4,47 M parametri, BSD-3). Nove volte il lavoro di v3: **~10 s per pagina** sullo stesso iPad,
+  quindi va usato con «Attesa massima» a 10 s o «Sempre». I pesi (8,9 MB in FP16) non sono precaricati: vengono
+  scaricati e messi in cache dal service worker la prima volta che il modello viene scelto. Niente self-ensemble.
+  Implementazione: quattro buffer di feature a rotazione, buffer di crescita a 128 canali riempito per copia dopo
+  ogni convoluzione densa (una dispatch WebGPU non può leggere e scrivere lo stesso buffer), residui ripiegati
+  nell'epilogo delle convoluzioni, coda ×4 a strisce di 8 righe con 2 righe di contesto (64 canali a ×4 per una
+  fascia intera non starebbero in memoria). Le giunzioni tra fasce non sono esatte al bit (campo recettivo teorico
+  ~100 px contro 24 di contesto) ma la differenza misurata è ≤ 2/255 (62,8 dB con fasce forzate a 8 righe).
 
 - **Attesa massima** (3 s, 5 s, 10 s, Sempre; default 5 s): all'attivazione l'app compila gli shader e **misura la
   GPU** su un'immagine di prova; per ogni coppia di pagine prevede il tempo e, se supera il limite, quella coppia usa
@@ -151,13 +162,14 @@ browser (le app native che ci riescono usano il Neural Engine, inaccessibile a u
   kernel f16 vengono rifiutati). La pagina è elaborata a fasce orizzontali con 24 px di contesto (campo recettivo
   18 px), quindi le giunzioni sono esatte; il pixel shuffle, il residuo e la conversione RGBA8 avvengono sulla GPU e
   la pagina viene letta una sola volta. Se il modello fallisce a runtime, il volume prosegue con Anime4K.
-- **Verifica**: un'implementazione di riferimento in float32 (`reference.ts`) riproduce l'output di PyTorch dagli
-  stessi pesi (fixture nel repository, differenza massima 2/255); i kernel WebGPU vengono confrontati con il
-  riferimento nei test end-to-end (`window.__reader.esrganSelfTest`, anche con fasce forzate a 8 righe e con il
-  self-ensemble a 8 passaggi): 95 dB in f32, ×2 identico al bit, ensemble 59 dB (il riferimento arrotonda ogni
-  passaggio a 8 bit).
+- **Verifica**: un'implementazione di riferimento in float32 (`reference.ts`, entrambe le reti) riproduce l'output
+  di PyTorch dagli stessi pesi (fixture nel repository, differenza massima 2/255); i kernel WebGPU vengono
+  confrontati con il riferimento nei test end-to-end (`window.__reader.esrganSelfTest`, anche con fasce forzate a
+  8 righe e con il self-ensemble a 8 passaggi): v3 95 dB in f32 e ×2 identico al bit, ensemble 59 dB (il
+  riferimento arrotonda ogni passaggio a 8 bit), 6B identico al bit su una fascia.
 
-I pesi si rigenerano dal checkpoint ufficiale con `scripts/convert-realesr-weights.py` (solo numpy, nessun PyTorch).
+I pesi si rigenerano dai checkpoint ufficiali con `scripts/convert-realesr-weights.py` (solo numpy, nessun PyTorch;
+riconosce entrambe le architetture dai nomi dei tensori).
 
 ## Formati e limiti
 

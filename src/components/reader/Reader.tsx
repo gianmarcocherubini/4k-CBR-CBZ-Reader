@@ -11,7 +11,7 @@ import {
   rememberArchivePassword,
   resolveBookBlob,
 } from '../../lib/storage/importer'
-import { type EnsembleSize, EsrganAborted } from '../../lib/upscale/esrgan/esrganEngine'
+import { type EnsembleSize, EsrganAborted, MODELS } from '../../lib/upscale/esrgan/esrganEngine'
 import { SrAborted, type SrOptions, type SrPlan, type SrResult } from '../../lib/upscale/srEngine'
 import { type Book, GUTTER_FRACTION, type PageSize, type ReaderSettings } from '../../types'
 import { MaxQualityControls } from './MaxQualityControls'
@@ -43,6 +43,32 @@ function sameMap<K, V>(a: ReadonlyMap<K, V>, b: ReadonlyMap<K, V>): boolean {
   if (a.size !== b.size) return false
   for (const [k, v] of a) if (b.get(k) !== v) return false
   return true
+}
+
+/** Safe-area insets as resolved by the browser (env() cannot be read from a custom property). */
+function safeAreaInsets(): { top: number; bottom: number } {
+  const probe = document.createElement('div')
+  probe.className = 'pt-safe pb-safe'
+  probe.style.cssText = 'position:fixed;left:-9999px;top:0;width:0;height:0;visibility:hidden'
+  document.body.appendChild(probe)
+  const style = getComputedStyle(probe)
+  const insets = { top: parseFloat(style.paddingTop) || 0, bottom: parseFloat(style.paddingBottom) || 0 }
+  probe.remove()
+  return insets
+}
+
+function describeViewport(viewport: Size, layout: { w: number; h: number }): string {
+  const px = (v: number) => Math.round(v * 10) / 10
+  const safe = safeAreaInsets()
+  const parts = [
+    `area di lettura ${px(viewport.w)}×${px(viewport.h)} px`,
+    `pagine ${px(layout.w)}×${px(layout.h)} px`,
+    `finestra ${window.innerWidth}×${window.innerHeight}`,
+    `schermo ${screen.width}×${screen.height} (×${window.devicePixelRatio || 1})`,
+    `margini sicuri alto ${px(safe.top)} / basso ${px(safe.bottom)}`,
+  ]
+  if (window.visualViewport) parts.push(`viewport visivo ${px(window.visualViewport.width)}×${px(window.visualViewport.height)}`)
+  return parts.join(' · ')
 }
 
 function toArchiveError(e: unknown): ArchiveError {
@@ -176,17 +202,28 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
   }, [bookId, sessionBook, onClose, requestPassword])
 
   // ---- viewport ------------------------------------------------------------------------------
+  // The stage is measured, not assumed: on iPadOS the layout viewport of an installed app can
+  // change after mount (status bar, safe areas, orientation), and not every change reaches the
+  // ResizeObserver, so window and visual-viewport resizes re-measure too.
   useEffect(() => {
     const el = stageRef.current
     if (!el) return
     const update = () => {
       const r = el.getBoundingClientRect()
-      if (r.width > 0 && r.height > 0) setViewport({ w: r.width, h: r.height })
+      if (r.width > 0 && r.height > 0) setViewport((v) => (v.w === r.width && v.h === r.height ? v : { w: r.width, h: r.height }))
     }
     update()
     const ro = new ResizeObserver(update)
     ro.observe(el)
-    return () => ro.disconnect()
+    window.addEventListener('resize', update)
+    window.addEventListener('orientationchange', update)
+    window.visualViewport?.addEventListener('resize', update)
+    return () => {
+      ro.disconnect()
+      window.removeEventListener('resize', update)
+      window.removeEventListener('orientationchange', update)
+      window.visualViewport?.removeEventListener('resize', update)
+    }
   }, [status])
 
   // ---- layout --------------------------------------------------------------------------------
@@ -510,7 +547,7 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
   // Only the pages on screen are ever processed: no read-ahead, no batch, no queue. "Qualità
   // massima" (Real-ESRGAN) runs when its measured throughput predicts the spread within the time
   // budget; otherwise, or when it is off or unavailable, the spread gets Anime4K.
-  const mq = useMaxQuality(status === 'ready' && settings.maxQuality)
+  const mq = useMaxQuality(status === 'ready' && settings.maxQuality, settings.maxQualityModel)
   const srOptions = useMemo<SrOptions>(
     () => ({ level: settings.srLevel, scale: settings.srScale, restore: settings.srRestore, clean: settings.srClean }),
     [settings.srLevel, settings.srScale, settings.srRestore, settings.srClean],
@@ -725,12 +762,12 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
 
   const visibleSizes = spreadPages.map((i) => sizes[i]).filter((s): s is PageSize => !!s)
   const mqStatusLine = (() => {
-    const modelName = 'Real-ESRGAN anime v3'
-    if (!settings.maxQuality) return `Disattivata. ${modelName} ×4 sulla GPU: più nitida della Super risoluzione, qualche secondo per pagina, solo per le pagine sullo schermo.`
+    const modelName = MODELS[settings.maxQualityModel].label
+    if (!settings.maxQuality) return `Disattivata. ${modelName} ×4 sulla GPU: più nitida della Super risoluzione, solo per le pagine sullo schermo.`
     switch (mq.status) {
       case 'off':
       case 'init':
-        return 'Inizializzazione: pesi del modello (1,2 MB), compilazione degli shader e misura della GPU…'
+        return `Inizializzazione di ${modelName}: ${mq.progress ?? 'avvio'}`
       case 'unavailable':
         return `Non disponibile: ${mq.error ?? 'errore sconosciuto'}. Le pagine usano la Super risoluzione.`
       case 'ready': {
@@ -792,6 +829,8 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
   }
 
   const label = spread.length ? spreadLabel(spread) : '–'
+  /** Where the pixels go: measured stage vs. screen, window and safe areas (to read a black band). */
+  const viewportDiagnostics = settingsOpen ? describeViewport(viewport, layout) : ''
   /** HD indicator: filled "HD" when the enhancement is on the page, dimmed while it works, struck when n/d. */
   const hdState: 'applied' | 'pending' | 'na' | null = !srBadge
     ? null
@@ -864,13 +903,16 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
           }}
           onClose={() => setSettingsOpen(false)}
           extra={<span data-testid="sr-status">{srStatusLine}</span>}
+          viewportInfo={viewportDiagnostics}
           maxQuality={
             <MaxQualityControls
               enabled={settings.maxQuality}
               budget={settings.maxQualityBudget}
+              model={settings.maxQualityModel}
               statusLine={mqStatusLine}
               onToggle={(v) => updateSettings({ maxQuality: v })}
               onBudget={(v) => updateSettings({ maxQualityBudget: v })}
+              onModel={(v) => updateSettings({ maxQualityModel: v })}
             />
           }
         />
