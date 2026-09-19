@@ -1,7 +1,7 @@
 {
   "name": "4k-cbr-cbz-reader",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "description": "Lettore CBZ/CBR per iPad (PWA, manga-first, alta risoluzione)",
   "scripts": {
