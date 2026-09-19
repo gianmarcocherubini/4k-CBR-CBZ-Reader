@@ -84,12 +84,17 @@ export function layerParams(p: {
   return buffer
 }
 
-function activate(F4: string, activation: Activation, a: string, quad: string): string {
+/**
+ * Activation epilogue. Only the most basic WGSL forms are used (scalar conversions, vector × scalar):
+ * WebKit rejected the 6B kernels in f16 where Chrome accepted them, and a rejected f16 program
+ * falls back to f32 at twice the cost.
+ */
+function activate(F: string, F4: string, activation: Activation, a: string, quad: string): string {
   switch (activation) {
     case 'prelu':
-      return `select(${a} * prelu[${quad}], ${a}, ${a} > ${F4}(0.0))`
+      return `select(${a} * prelu[${quad}], ${a}, ${a} > ${F4}(${F}(0.0)))`
     case 'lrelu':
-      return `select(${a} * ${F4}(0.2), ${a}, ${a} > ${F4}(0.0))`
+      return `select(${a} * ${F}(0.2), ${a}, ${a} > ${F4}(${F}(0.0)))`
     case 'none':
       return a
   }
@@ -103,7 +108,7 @@ export function convFirstWgsl(o: KernelOptions, activation: Activation): string 
     { length: 16 },
     (_, i) => `      a${i} += r * weights[wb + ${i}u] + g * weights[wb + ${16 + i}u] + b * weights[wb + ${32 + i}u];`,
   ).join('\n')
-  const store = Array.from({ length: 16 }, (_, i) => `  dst[(lp.dstPlane + ${i}u) * plane + p] = ${activate(F4, activation, `a${i}`, `${i}u`)};`).join('\n')
+  const store = Array.from({ length: 16 }, (_, i) => `  dst[(lp.dstPlane + ${i}u) * plane + p] = ${activate(F, F4, activation, `a${i}`, `${i}u`)};`).join('\n')
   return `${enable}${BAND_STRUCT}
 ${LAYER_STRUCT}
 @group(0) @binding(0) var src: texture_2d<f32>;
@@ -148,7 +153,7 @@ ${store}
  * 4 adjacent columns of `rows` output rows.
  */
 export function convWgsl(o: KernelOptions, spec: ConvSpec, rows: ConvRows = 1): string {
-  const { enable, F4 } = types(o)
+  const { enable, F, F4 } = types(o)
   const groups = spec.cout / 16
   const cout4 = spec.cout / 4
   const comp = ['x', 'y', 'z', 'w']
@@ -197,12 +202,12 @@ ${body('src1', 'ci4 - lp.splitPlane')}
       }`
     : ''
   const epilogue = (r: number, k: number, j: number): string => {
-    const a = activate(F4, spec.activation, `a${r}${k}${j}`, `q4 + ${j}u`)
+    const a = activate(F, F4, spec.activation, `a${r}${k}${j}`, `q4 + ${j}u`)
     if (spec.residual === 0) return a
     const r1 = `res1[(q4 + ${j}u) * plane + idx]`
-    if (spec.residual === 1) return `${r1} + ${F4}(lp.res1Scale) * (${a})`
+    if (spec.residual === 1) return `${r1} + s1 * (${a})`
     const r2 = `res2[(q4 + ${j}u) * plane + idx]`
-    return `${r1} + ${F4}(lp.res1Scale) * (${r2} + ${F4}(lp.res2Scale) * (${a}))`
+    return `${r1} + s1 * (${r2} + s2 * (${a}))`
   }
   const stores: string[] = []
   for (let r = 0; r < rows; r++) {
@@ -252,6 +257,8 @@ fn main(@builtin(local_invocation_index) lid: u32, @builtin(workgroup_id) wid: v
   let sc = i32(lp.inScale);
   let ox = i32(lp.srcX0);
   let oy = i32(lp.srcY0);
+${spec.residual >= 1 ? `  let s1 = ${F}(lp.res1Scale);` : ''}
+${spec.residual === 2 ? `  let s2 = ${F}(lp.res2Scale);` : ''}
 ${accInit.join('\n')}
   // Input columns of the 6 taps that cover the 4 output pixels (nearest-upsampled and clamped).
   let xi0 = u32(clamp(((x0 - 1) - ((x0 - 1) % sc + sc) % sc) / sc + ox, 0, sw - 1));
@@ -409,7 +416,7 @@ fn pixel(x: i32, y: i32) -> vec3f {
       }
     }
   }
-  return clamp(vec3f(a.xyz), vec3f(0.0), vec3f(1.0));
+  return clamp(vec3f(f32(a.x), f32(a.y), f32(a.z)), vec3f(0.0), vec3f(1.0));
 }
 
 @compute @workgroup_size(8, 8)

@@ -795,6 +795,7 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
         const engine = mq.engine
         if (!engine) return 'Pronta.'
         const parts = [`${modelName} ×4 · WebGPU ${engine.info.precision.toUpperCase()} · kernel 4×${engine.kernelVariant} · ${engine.info.adapter}`]
+        if (engine.info.f16Error) parts.push(`kernel f16 rifiutati dalla GPU (${engine.info.f16Error})`)
         const shown = spreadPages.map((i) => displayed.get(i)).find((r) => r?.level === heavyLabel)
         const passes = shown?.ensemble ?? heavyEnsemble
         if (heavySkip === null && passes > 1) parts.push(`self-ensemble ×${passes} (${passes} passaggi mediati, più pulito)`)
