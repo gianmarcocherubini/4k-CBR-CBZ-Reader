@@ -2,6 +2,7 @@ import type { MaxQualityModel, PageSize } from '../../../types'
 import { cacheBudgetBytes } from '../backend'
 import type { SrResult } from '../srEngine'
 import { createUpscaler, EsrganAborted, type EsrganFactor, type EsrganInfo, type Upscaler } from './esrganUpscaler'
+import type { ConvRows } from './wgsl'
 import weightsUrl6b from './realesrgan-x4plus-anime-6b.f16.bin?url'
 import weightsUrlV3 from './realesr-animevideov3.f16.bin?url'
 import type { EnsembleSize } from './transforms'
@@ -134,33 +135,56 @@ export class EsrganEngine {
     return this.upscaler.supportsEnsemble
   }
 
-  /**
-   * Warms the pipelines up on a tiny image (first-use compilation must not be measured), then times
-   * one band-sized image so the first real page already has an estimate.
-   */
-  private async benchmark(): Promise<void> {
-    const warm = synthetic(64, 64)
-    try {
-      await this.upscaler.upscale(warm, 4)
-    } finally {
-      warm.close()
-    }
-    await this.probe()
+  /** Convolution kernel variant the benchmark selected (output rows per thread). */
+  get kernelVariant(): ConvRows {
+    return this.upscaler.variant
   }
 
-  /** Times the probe image and folds the sample into the throughput estimate. */
-  private async probe(): Promise<void> {
+  /**
+   * Picks the convolution kernel variant for this GPU and seeds the throughput estimate: each
+   * variant is warmed up on a tiny image (first-use compilation must not be measured) and timed on
+   * one band-sized image; the fastest stays. All variants compute the same numbers.
+   */
+  private async benchmark(): Promise<void> {
+    let best: { variant: ConvRows; ms: number } | undefined
+    for (const variant of this.upscaler.variants) {
+      this.upscaler.variant = variant
+      const warm = synthetic(64, 64)
+      try {
+        await this.upscaler.upscale(warm, 4)
+      } finally {
+        warm.close()
+      }
+      const ms = await this.timeProbe()
+      if (!best || ms < best.ms) best = { variant, ms }
+    }
+    if (best) {
+      this.upscaler.variant = best.variant
+      this.observeProbe(best.ms)
+    }
+  }
+
+  /** Wall time of the probe image, ms. */
+  private async timeProbe(): Promise<number> {
     const probe = synthetic(PROBE.w, PROBE.h)
     try {
       const t0 = performance.now()
       await this.upscaler.upscale(probe, 4)
-      const ms = performance.now() - t0
-      const sample = Math.max(0.01, ms - FIXED_MS_PER_PAGE / 4) / (this.upscaler.workPixels(PROBE) / 1e6)
-      this.msPerWorkMegapixel = this.msPerWorkMegapixel === undefined ? sample : this.msPerWorkMegapixel * 0.5 + sample * 0.5
-      this.lastProbeAt = performance.now()
+      return performance.now() - t0
     } finally {
       probe.close()
     }
+  }
+
+  private observeProbe(ms: number): void {
+    const sample = Math.max(0.01, ms - FIXED_MS_PER_PAGE / 4) / (this.upscaler.workPixels(PROBE) / 1e6)
+    this.msPerWorkMegapixel = this.msPerWorkMegapixel === undefined ? sample : this.msPerWorkMegapixel * 0.5 + sample * 0.5
+    this.lastProbeAt = performance.now()
+  }
+
+  /** Times the probe image and folds the sample into the throughput estimate. */
+  private async probe(): Promise<void> {
+    this.observeProbe(await this.timeProbe())
   }
 
   /**

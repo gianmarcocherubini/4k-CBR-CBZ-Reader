@@ -3,6 +3,7 @@ import { loadWeights } from './esrganEngine'
 import { createUpscaler, type EsrganFactor } from './esrganUpscaler'
 import { runRrdbReference, runSrvggEnsembleReference, runSrvggReference } from './reference'
 import { type EnsembleSize, ensembleTransforms } from './transforms'
+import type { ConvRows } from './wgsl'
 
 export interface SelfTestOptions {
   width?: number
@@ -13,10 +14,13 @@ export interface SelfTestOptions {
   ensemble?: EnsembleSize
   /** Network to test (default the compact v3). */
   model?: MaxQualityModel
+  /** Convolution kernel variant (output rows per thread), default 1. */
+  variant?: ConvRows
 }
 
 export interface SelfTestResult {
   model: MaxQualityModel
+  variant: ConvRows
   adapter: string
   precision: 'f16' | 'f32'
   bands: number
@@ -79,6 +83,7 @@ export async function esrganSelfTest(opts: SelfTestOptions = {}): Promise<SelfTe
   const weights = await loadWeights(model)
   const upscaler = await createUpscaler(weights)
   if (!upscaler) throw new Error('WebGPU non disponibile')
+  upscaler.variant = opts.variant ?? 1
   try {
     if (opts.smallBands) {
       // 8 core rows per band: (w + 48) * (8 + 48) pixels of activations.
@@ -105,7 +110,7 @@ export async function esrganSelfTest(opts: SelfTestOptions = {}): Promise<SelfTe
     }
     const x4 = await run(4)
     const x2 = await run(2)
-    return { model, adapter: upscaler.info.adapter, precision: upscaler.info.precision, bands: x4.bands, ensemble, x4, x2 }
+    return { model, variant: upscaler.variant, adapter: upscaler.info.adapter, precision: upscaler.info.precision, bands: x4.bands, ensemble, x4, x2 }
   } finally {
     upscaler.dispose()
   }

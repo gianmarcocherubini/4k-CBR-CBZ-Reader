@@ -37,6 +37,10 @@ interface SpreadViewProps {
   enterClass?: string
   ghost?: SpreadGhost | null
   onRetry: (index: number) => void
+  /** Pages whose plain image is blurred while their HD version is being computed (anti-spoiler). */
+  blurred?: ReadonlySet<number>
+  /** Pages whose HD version just arrived: the enhanced canvas animates from blurred to sharp. */
+  revealing?: ReadonlySet<number>
 }
 
 const GUTTER_BG: Record<GutterColor, string> = {
@@ -61,9 +65,11 @@ interface SpreadCanvasProps {
   gutterColor: GutterColor
   onRetry?: (index: number) => void
   testId: string
+  blurred?: ReadonlySet<number>
+  revealing?: ReadonlySet<number>
 }
 
-function SpreadCanvas({ canvasRef, layout, view, pages, enhanced, gutterColor, onRetry, testId }: SpreadCanvasProps) {
+function SpreadCanvas({ canvasRef, layout, view, pages, enhanced, gutterColor, onRetry, testId, blurred, revealing }: SpreadCanvasProps) {
   const z = view.zoom
   return (
     <div
@@ -92,14 +98,17 @@ function SpreadCanvas({ canvasRef, layout, view, pages, enhanced, gutterColor, o
         }
         const state = pages.get(box.index)
         const sr = enhanced?.get(box.index)
+        const isBlurred = !sr && blurred?.has(box.index) === true
+        const isRevealing = !!sr && revealing?.has(box.index) === true
         return (
           <div
             key={box.index}
-            className="absolute"
+            className={`absolute ${isBlurred ? 'overflow-hidden' : ''} ${isRevealing ? 'hd-reveal' : ''}`}
             style={style}
             data-testid={testId === 'canvas' ? 'page' : undefined}
             data-page={box.index + 1}
             data-sr={sr ? sr.level : undefined}
+            data-blurred={isBlurred || undefined}
           >
             {state?.status === 'ready' && sr ? (
               <EnhancedCanvas bitmap={sr.bitmap} width={box.w * z} height={box.h * z} alt={`Pagina ${box.index + 1}`} />
@@ -109,7 +118,7 @@ function SpreadCanvas({ canvasRef, layout, view, pages, enhanced, gutterColor, o
                 alt={`Pagina ${box.index + 1}`}
                 width={Math.round(box.w * z)}
                 height={Math.round(box.h * z)}
-                className="block h-full w-full"
+                className={`block h-full w-full ${isBlurred ? 'antispoiler' : ''}`}
                 decoding="async"
                 draggable={false}
               />
@@ -152,6 +161,8 @@ export function SpreadView({
   enterClass,
   ghost,
   onRetry,
+  blurred,
+  revealing,
 }: SpreadViewProps) {
   return (
     <div
@@ -176,6 +187,8 @@ export function SpreadView({
           gutterColor={gutterColor}
           onRetry={onRetry}
           testId="canvas"
+          blurred={blurred}
+          revealing={revealing}
         />
       </div>
     </div>

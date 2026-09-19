@@ -5,14 +5,18 @@ interface MaxQualityControlsProps {
   enabled: boolean
   budget: MaxQualityBudget
   model: MaxQualityModel
+  ensemble: boolean
+  blur: boolean
   statusLine: string
   onToggle: (v: boolean) => void
   onBudget: (v: MaxQualityBudget) => void
   onModel: (v: MaxQualityModel) => void
+  onEnsemble: (v: boolean) => void
+  onBlur: (v: boolean) => void
 }
 
-/** Settings block of the Real-ESRGAN tier: switch, network, time budget, and a status line. */
-export function MaxQualityControls({ enabled, budget, model, statusLine, onToggle, onBudget, onModel }: MaxQualityControlsProps) {
+/** Settings block of the Real-ESRGAN tier: switch, network, time budget, ensemble, anti-spoiler blur, status line. */
+export function MaxQualityControls({ enabled, budget, model, ensemble, blur, statusLine, onToggle, onBudget, onModel, onEnsemble, onBlur }: MaxQualityControlsProps) {
   return (
     <Group title="Qualità massima" testId="mq-section" footer={<span data-testid="mq-status">{statusLine}</span>}>
       <Row
@@ -23,7 +27,7 @@ export function MaxQualityControls({ enabled, budget, model, statusLine, onToggl
       </Row>
       <Row
         title="Modello"
-        hint="Anime v3: compatto, circa 1 s per pagina su un iPad M, con self-ensemble. 6B: la rete grande di Real-ESRGAN (9× il lavoro, ~10 s per pagina sullo stesso iPad, pesi da 9 MB scaricati alla prima attivazione); richiede un’attesa massima di 10 s o «Sempre»."
+        hint="Anime v3: compatto, circa 1 s per pagina su un iPad M (3–4 s con il self-ensemble). 6B: la rete grande di Real-ESRGAN, nove volte il lavoro, decine di secondi per pagina (pesi da 9 MB scaricati alla prima attivazione); richiede «Sempre» o un’attesa massima adeguata."
         stacked
       >
         <Segmented<MaxQualityModel>
@@ -39,7 +43,7 @@ export function MaxQualityControls({ enabled, budget, model, statusLine, onToggl
       </Row>
       <Row
         title="Attesa massima"
-        hint="Se la GPU prevede di impiegare di più per le pagine sullo schermo, quelle pagine usano la Super risoluzione (Anime4K). Il tempo che avanza va in qualità: fino a 8 passaggi su copie riflesse e ruotate della pagina, mediati (self-ensemble)."
+        hint="Se la GPU prevede di impiegare di più per le pagine sullo schermo, quelle pagine usano la Super risoluzione (Anime4K)."
         stacked
       >
         <Segmented<`${MaxQualityBudget}`>
@@ -54,6 +58,18 @@ export function MaxQualityControls({ enabled, budget, model, statusLine, onToggl
             { value: '0', label: 'Sempre' },
           ]}
         />
+      </Row>
+      <Row
+        title="Self-ensemble"
+        hint="Solo Anime v3: il tempo che avanza sotto l’attesa massima va in qualità, fino a 8 passaggi su copie riflesse e ruotate della pagina, mediati (bordi più puliti). Spento: un passaggio, circa 1 s."
+      >
+        <Switch checked={ensemble} onChange={onEnsemble} label="Self-ensemble" />
+      </Row>
+      <Row
+        title="Sfocatura anti-spoiler"
+        hint="Mentre la versione HD viene calcolata, la pagina resta sfocata e si rivela solo quando è pronta."
+      >
+        <Switch checked={blur} onChange={onBlur} label="Sfocatura anti-spoiler" />
       </Row>
     </Group>
   )

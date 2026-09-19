@@ -31,7 +31,17 @@ export interface ConvSpec {
 
 export const BODY_PIXELS_PER_THREAD = 4
 export const BODY_BLOCK_W = 32
-export const BODY_BLOCK_H = 4
+/** Rows covered by one workgroup: 4 thread rows × `rows` output rows per thread. */
+export const bodyBlockH = (rows: ConvRows): number => 4 * rows
+
+/**
+ * Output rows per thread. 1: a thread computes 4 pixels of one row (16 accumulators). 2: the same
+ * 4 columns of two rows (32 accumulators): every weight loaded feeds 8 multiply-adds instead of 4
+ * and the three input rows of one output row are shared with the next. Same arithmetic order per
+ * accumulator, so both variants produce identical results; the faster one is picked on the device.
+ */
+export type ConvRows = 1 | 2
+export const CONV_VARIANTS: readonly ConvRows[] = [1, 2]
 
 const types = (o: KernelOptions) => ({
   enable: o.f16 ? 'enable f16;\n' : '',
@@ -134,59 +144,60 @@ ${store}
 /**
  * Generic 3x3 convolution over plane buffers: `cin` input channels (any multiple of 4, from one
  * or two buffers), `cout` outputs, optional nearest upsampling of the input on read, optional
- * residual epilogue. Workgroup = 32 threads per output-channel group of 16.
+ * residual epilogue. Workgroup = 32 threads per output-channel group of 16; each thread computes
+ * 4 adjacent columns of `rows` output rows.
  */
-export function convWgsl(o: KernelOptions, spec: ConvSpec): string {
+export function convWgsl(o: KernelOptions, spec: ConvSpec, rows: ConvRows = 1): string {
   const { enable, F4 } = types(o)
   const groups = spec.cout / 16
   const cout4 = spec.cout / 4
-  const accInit: string[] = []
-  for (let k = 0; k < 4; k++) for (let j = 0; j < 4; j++) accInit.push(`  var a${k}${j} = bias[q4 + ${j}u];`)
   const comp = ['x', 'y', 'z', 'w']
-  // The inner block: 3 taps of one input quad, 4 weight loads per component, 16 FMAs each.
-  const tapBlocks = (cinExpr: string): string => {
-    const blocks: string[] = []
-    for (let kx = 0; kx < 3; kx++) {
-      const block: string[] = []
-      block.push(`        {`)
-      block.push(`          let wb = ((ky3 + ${kx}u) * ${cinExpr} + ci4 * 4u) * ${cout4}u + q4;`)
-      for (let c = 0; c < 4; c++) {
-        block.push(`          {`)
-        for (let j = 0; j < 4; j++) block.push(`            let w${j} = weights[wb + ${c * cout4 + j}u];`)
-        for (let k = 0; k < 4; k++) {
-          const v = `p${k + kx}.${comp[c]}`
-          for (let j = 0; j < 4; j++) block.push(`            a${k}${j} += ${v} * w${j};`)
-        }
-        block.push(`          }`)
-      }
-      block.push(`        }`)
-      blocks.push(block.join('\n'))
-    }
-    return blocks.join('\n')
-  }
-  const loads = (buf: string, planeExpr: string) =>
+  const accInit: string[] = []
+  for (let r = 0; r < rows; r++) for (let k = 0; k < 4; k++) for (let j = 0; j < 4; j++) accInit.push(`  var a${r}${k}${j} = bias[q4 + ${j}u];`)
+  // Six input columns (x0-1 .. x0+4) of one input row, as p{n}_{row}: loaded per input row.
+  const loadRow = (buf: string, planeExpr: string, rowVar: string, tag: string) =>
     [
-      `        let pb = (${planeExpr}) * splane + srow;`,
-      `        let p0 = ${buf}[pb + xm1];`,
-      `        let p1 = ${buf}[pb + xp0];`,
-      `        let p2 = ${buf}[pb + xp1];`,
-      `        let p3 = ${buf}[pb + xp2];`,
-      `        let p4 = ${buf}[pb + xp3];`,
-      `        let p5 = ${buf}[pb + xp4];`,
+      `        let pb${tag} = (${planeExpr}) * splane + ${rowVar};`,
+      ...[0, 1, 2, 3, 4, 5].map((n) => `        let p${n}_${tag} = ${buf}[pb${tag} + xi${n}];`),
     ].join('\n')
+  // One tap (ky, kx): 4 weight loads per input component, feeding all output rows and columns.
+  const tapBlock = (ky: number, kx: number, cinExpr: string, inputTagOfRow: (r: number) => string): string => {
+    const block: string[] = []
+    block.push(`        {`)
+    block.push(`          let wb = (${ky * 3 + kx}u * ${cinExpr} + ci4 * 4u) * ${cout4}u + q4;`)
+    for (let c = 0; c < 4; c++) {
+      block.push(`          {`)
+      for (let j = 0; j < 4; j++) block.push(`            let w${j} = weights[wb + ${c * cout4 + j}u];`)
+      for (let r = 0; r < rows; r++) {
+        for (let k = 0; k < 4; k++) {
+          const v = `p${k + kx}_${inputTagOfRow(r)}.${comp[c]}`
+          for (let j = 0; j < 4; j++) block.push(`            a${r}${k}${j} += ${v} * w${j};`)
+        }
+      }
+      block.push(`          }`)
+    }
+    block.push(`        }`)
+    return block.join('\n')
+  }
   const cinExpr = '(lp.cin4 * 4u)'
+  // Per input quad: the `rows + 2` input rows (y-1 .. y+rows) are loaded once and each tap row
+  // ky combines input row (r + ky) for output row r.
+  const body = (buf: string, planeExpr: string): string => {
+    const lines: string[] = []
+    for (let n = 0; n < rows + 2; n++) lines.push(loadRow(buf, planeExpr, `srow${n}`, `${n}`))
+    for (let ky = 0; ky < 3; ky++) for (let kx = 0; kx < 3; kx++) lines.push(tapBlock(ky, kx, cinExpr, (r) => `${r + ky}`))
+    return lines.join('\n')
+  }
   const loop0 = `      for (var ci4 = 0u; ci4 < ${spec.split ? 'min(lp.cin4, lp.splitPlane)' : 'lp.cin4'}; ci4++) {
-${loads('src', 'ci4')}
-${tapBlocks(cinExpr)}
+${body('src', 'ci4')}
       }`
   const loop1 = spec.split
     ? `      for (var ci4 = lp.splitPlane; ci4 < lp.cin4; ci4++) {
-${loads('src1', 'ci4 - lp.splitPlane')}
-${tapBlocks(cinExpr)}
+${body('src1', 'ci4 - lp.splitPlane')}
       }`
     : ''
-  const epilogue = (k: number, j: number): string => {
-    const a = activate(F4, spec.activation, `a${k}${j}`, `q4 + ${j}u`)
+  const epilogue = (r: number, k: number, j: number): string => {
+    const a = activate(F4, spec.activation, `a${r}${k}${j}`, `q4 + ${j}u`)
     if (spec.residual === 0) return a
     const r1 = `res1[(q4 + ${j}u) * plane + idx]`
     if (spec.residual === 1) return `${r1} + ${F4}(lp.res1Scale) * (${a})`
@@ -194,12 +205,22 @@ ${tapBlocks(cinExpr)}
     return `${r1} + ${F4}(lp.res1Scale) * (${r2} + ${F4}(lp.res2Scale) * (${a}))`
   }
   const stores: string[] = []
-  for (let k = 0; k < 4; k++) {
-    stores.push(`  if (x0 + ${k} < bw) {`)
-    stores.push(`    let idx = row + u32(x0 + ${k});`)
-    for (let j = 0; j < 4; j++) stores.push(`    dst[(lp.dstPlane + q4 + ${j}u) * plane + idx] = ${epilogue(k, j)};`)
+  for (let r = 0; r < rows; r++) {
+    stores.push(`  if (y + ${r} < bh) {`)
+    stores.push(`    let row = u32(y + ${r}) * band.bw;`)
+    for (let k = 0; k < 4; k++) {
+      stores.push(`    if (x0 + ${k} < bw) {`)
+      stores.push(`      let idx = row + u32(x0 + ${k});`)
+      for (let j = 0; j < 4; j++) stores.push(`      dst[(lp.dstPlane + q4 + ${j}u) * plane + idx] = ${epilogue(r, k, j)};`)
+      stores.push(`    }`)
+    }
     stores.push(`  }`)
   }
+  // Input rows y-1 .. y+rows, nearest-upsampled, offset and clamped to the source buffer.
+  const srows = Array.from({ length: rows + 2 }, (_, n) => {
+    const yy = n === 0 ? '(y - 1)' : `(y + ${n - 1})`
+    return `  let srow${n} = u32(clamp((${yy} - ((${yy} % sc + sc) % sc)) / sc + oy, 0, sh - 1)) * band.srcW;`
+  }).join('\n')
   return `${enable}${BAND_STRUCT}
 ${LAYER_STRUCT}
 // Inputs are read-only bindings; a dense block that reads and writes the same growth buffer binds
@@ -225,7 +246,7 @@ fn main(@builtin(local_invocation_index) lid: u32, @builtin(workgroup_id) wid: v
   let sw = i32(band.srcW);
   let sh = i32(band.srcH);
   let x0 = i32(wid.x * ${BODY_BLOCK_W}u + g * 4u);
-  let y = i32(wid.y * ${BODY_BLOCK_H}u + r);
+  let y = i32(wid.y * ${bodyBlockH(rows)}u + r * ${rows}u);
   let plane = band.bw * band.bh;
   let splane = band.srcW * band.srcH;
   let sc = i32(lp.inScale);
@@ -233,22 +254,15 @@ fn main(@builtin(local_invocation_index) lid: u32, @builtin(workgroup_id) wid: v
   let oy = i32(lp.srcY0);
 ${accInit.join('\n')}
   // Input columns of the 6 taps that cover the 4 output pixels (nearest-upsampled and clamped).
-  let xm1 = u32(clamp(((x0 - 1) - ((x0 - 1) % sc + sc) % sc) / sc + ox, 0, sw - 1));
-  let xp0 = u32(clamp(x0 / sc + ox, 0, sw - 1));
-  let xp1 = u32(clamp((x0 + 1) / sc + ox, 0, sw - 1));
-  let xp2 = u32(clamp((x0 + 2) / sc + ox, 0, sw - 1));
-  let xp3 = u32(clamp((x0 + 3) / sc + ox, 0, sw - 1));
-  let xp4 = u32(clamp((x0 + 4) / sc + ox, 0, sw - 1));
-  for (var ky = 0; ky < 3; ky++) {
-    let yy = y + ky - 1;
-    let sy = (yy - ((yy % sc + sc) % sc)) / sc + oy;
-    let srow = u32(clamp(sy, 0, sh - 1)) * band.srcW;
-    let ky3 = u32(ky) * 3u;
+  let xi0 = u32(clamp(((x0 - 1) - ((x0 - 1) % sc + sc) % sc) / sc + ox, 0, sw - 1));
+  let xi1 = u32(clamp(x0 / sc + ox, 0, sw - 1));
+  let xi2 = u32(clamp((x0 + 1) / sc + ox, 0, sw - 1));
+  let xi3 = u32(clamp((x0 + 2) / sc + ox, 0, sw - 1));
+  let xi4 = u32(clamp((x0 + 3) / sc + ox, 0, sw - 1));
+  let xi5 = u32(clamp((x0 + 4) / sc + ox, 0, sw - 1));
+${srows}
 ${loop0}
 ${loop1}
-  }
-  if (y >= bh) { return; }
-  let row = u32(y) * band.bw;
 ${stores.join('\n')}
 }
 `

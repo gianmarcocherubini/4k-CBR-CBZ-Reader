@@ -5,9 +5,12 @@ import { canvasMatrix, type Dihedral, type EnsembleSize, ensembleTransforms, IDE
 import { CONTEXT, f16ArrayToF32, type Layer, type ModelWeights } from './weights'
 import {
   BAND_PARAMS_BYTES,
-  BODY_BLOCK_H,
   BODY_BLOCK_W,
+  bodyBlockH,
+  CONV_VARIANTS,
   convFirstWgsl,
+  type ConvRows,
+  type ConvSpec,
   convWgsl,
   finalizeWgsl,
   type KernelOptions,
@@ -125,6 +128,12 @@ export interface Upscaler {
   onLost: (() => void) | null
   /** Whether `upscale` honours `ensemble` (the RRDB tail is not transform-aware). */
   readonly supportsEnsemble: boolean
+  /**
+   * Convolution kernel variant in use (output rows per thread). All variants compute the same
+   * numbers; the engine times them on the device and keeps the fastest.
+   */
+  variant: ConvRows
+  readonly variants: readonly ConvRows[]
   /** Activation-memory cap used to cut bands (tests lower it to exercise multi-band seams on tiny images). */
   maxActBytes: number
   /** Activation bytes per band pixel that the cap applies to. */
@@ -177,29 +186,71 @@ async function requestDevice(): Promise<DeviceInfo | null> {
   return { device, f16, name: name || 'WebGPU' }
 }
 
+/** A convolution compiled in every variant; bind groups made with `layout` fit all of them. */
+export interface ConvPipelines {
+  layout: GPUBindGroupLayout
+  byRows: Record<ConvRows, GPUComputePipeline>
+}
+
+/** Explicit layout of the conv kernel bindings (shared by the variants, which 'auto' layouts would not guarantee). */
+function convLayout(device: GPUDevice, spec: ConvSpec): GPUBindGroupLayout {
+  const visibility = GPUShaderStage.COMPUTE
+  const ro = (binding: number): GPUBindGroupLayoutEntry => ({ binding, visibility, buffer: { type: 'read-only-storage' } })
+  const entries: GPUBindGroupLayoutEntry[] = [ro(0), ro(1), ro(2)]
+  if (spec.activation === 'prelu') entries.push(ro(3))
+  entries.push({ binding: 4, visibility, buffer: { type: 'storage' } })
+  entries.push({ binding: 5, visibility, buffer: { type: 'uniform' } })
+  entries.push({ binding: 6, visibility, buffer: { type: 'uniform' } })
+  if (spec.split) entries.push(ro(7))
+  if (spec.residual >= 1) entries.push(ro(8))
+  if (spec.residual === 2) entries.push(ro(9))
+  return device.createBindGroupLayout({ entries })
+}
+
+type PipelineFn = (label: string, code: string) => Promise<GPUComputePipeline>
+type ConvFn = (label: string, spec: ConvSpec) => Promise<ConvPipelines>
+
 /**
  * Compiles the kernels of a program, preferring f16 and falling back to f32 when a driver that
- * advertises shader-f16 still rejects the half-precision kernels.
+ * advertises shader-f16 still rejects the half-precision kernels. Convolutions are compiled in
+ * every row variant.
  */
 async function compileProgram<T>(
   device: GPUDevice,
   f16: boolean,
-  build: (options: KernelOptions, pipeline: (label: string, code: string) => Promise<GPUComputePipeline>) => Promise<T>,
+  build: (options: KernelOptions, pipeline: PipelineFn, conv: ConvFn) => Promise<T>,
 ): Promise<{ options: KernelOptions; pipelines: T }> {
-  const pipeline = (label: string, code: string) =>
+  const pipeline: PipelineFn = (label, code) =>
     device.createComputePipelineAsync({
       label,
       layout: 'auto',
       compute: { module: device.createShaderModule({ label, code }), entryPoint: 'main' },
     })
+  const convFor =
+    (options: KernelOptions): ConvFn =>
+    async (label, spec) => {
+      const layout = convLayout(device, spec)
+      const pipelineLayout = device.createPipelineLayout({ bindGroupLayouts: [layout] })
+      const built = await Promise.all(
+        CONV_VARIANTS.map((rows) =>
+          device.createComputePipelineAsync({
+            label: `${label}-x${rows}`,
+            layout: pipelineLayout,
+            compute: { module: device.createShaderModule({ label: `${label}-x${rows}`, code: convWgsl(options, spec, rows) }), entryPoint: 'main' },
+          }),
+        ),
+      )
+      const byRows = Object.fromEntries(CONV_VARIANTS.map((rows, i) => [rows, built[i]!])) as Record<ConvRows, GPUComputePipeline>
+      return { layout, byRows }
+    }
   let options: KernelOptions = { f16 }
   try {
-    return { options, pipelines: await build(options, pipeline) }
+    return { options, pipelines: await build(options, pipeline, convFor(options)) }
   } catch (e) {
     if (!f16) throw e
     console.warn('Real-ESRGAN: kernel f16 rifiutati, uso f32.', e)
     options = { f16: false }
-    return { options, pipelines: await build(options, pipeline) }
+    return { options, pipelines: await build(options, pipeline, convFor(options)) }
   }
 }
 
@@ -223,6 +274,8 @@ abstract class GpuUpscaler implements Upscaler {
   readonly device: GPUDevice
   readonly info: EsrganInfo
   abstract readonly supportsEnsemble: boolean
+  variant: ConvRows = 1
+  readonly variants = CONV_VARIANTS
   /** Bytes of activation memory per band pixel that the band planner must keep under `maxActBytes`. */
   abstract readonly bytesPerPixel: number
   maxActBytes: number
@@ -440,8 +493,12 @@ abstract class GpuUpscaler implements Upscaler {
   protected abstract disposeBuffers(): void
 }
 
-const bindGroup = (device: GPUDevice, label: string, pipeline: GPUComputePipeline, entries: Array<[number, GPUBindingResource]>) =>
-  device.createBindGroup({ label, layout: pipeline.getBindGroupLayout(0), entries: entries.map(([binding, resource]) => ({ binding, resource })) })
+const bindGroup = (device: GPUDevice, label: string, target: GPUComputePipeline | GPUBindGroupLayout, entries: Array<[number, GPUBindingResource]>) =>
+  device.createBindGroup({
+    label,
+    layout: 'getBindGroupLayout' in target ? target.getBindGroupLayout(0) : target,
+    entries: entries.map(([binding, resource]) => ({ binding, resource })),
+  })
 
 /** Bytes of one vec4 activation (4 channels). */
 const quadBytes = (o: KernelOptions) => (o.f16 ? 8 : 16)
@@ -453,8 +510,8 @@ const SRVGG_MAX_ACT_BYTES = 48 * 1024 * 1024
 
 interface SrvggPipelines {
   first: GPUComputePipeline
-  body: GPUComputePipeline
-  last: GPUComputePipeline
+  body: ConvPipelines
+  last: ConvPipelines
   shuffle: GPUComputePipeline
   shuffleAccumulate: GPUComputePipeline
   finalize: GPUComputePipeline
@@ -472,7 +529,7 @@ class SrvggUpscaler extends GpuUpscaler {
   private readonly lpFirst: GPUBuffer
   private readonly lp64: GPUBuffer
   private readonly shuffleParams: GPUBuffer
-  private buffers: { a: GPUBuffer; b: GPUBuffer; layers: Array<{ pipeline: GPUComputePipeline; bindGroup: GPUBindGroup; bindGroupT: GPUBindGroup }>; lastAct: GPUBuffer } | null = null
+  private buffers: { a: GPUBuffer; b: GPUBuffer; layers: Array<{ conv: ConvPipelines | null; bindGroup: GPUBindGroup; bindGroupT: GPUBindGroup }>; lastAct: GPUBuffer } | null = null
   private acc: { bytes: number; buffer: GPUBuffer } | null = null
   private run: { shuffleGroups: GPUBindGroup[]; finalizeGroup: GPUBindGroup | null; accW: number } | null = null
 
@@ -486,11 +543,11 @@ class SrvggUpscaler extends GpuUpscaler {
   }
 
   static async create(dev: DeviceInfo, weights: ModelWeights): Promise<SrvggUpscaler> {
-    const { options, pipelines } = await compileProgram(dev.device, dev.f16, async (o, pipeline) => {
+    const { options, pipelines } = await compileProgram(dev.device, dev.f16, async (o, pipeline, conv) => {
       const [first, body, last, shuffle, shuffleAccumulate, finalize] = await Promise.all([
         pipeline('srvgg-conv-first', convFirstWgsl(o, 'prelu')),
-        pipeline('srvgg-conv-body', convWgsl(o, { cout: 64, activation: 'prelu', residual: 0, split: false })),
-        pipeline('srvgg-conv-last', convWgsl(o, { cout: 48, activation: 'none', residual: 0, split: false })),
+        conv('srvgg-conv-body', { cout: 64, activation: 'prelu', residual: 0, split: false }),
+        conv('srvgg-conv-last', { cout: 48, activation: 'none', residual: 0, split: false }),
         pipeline('srvgg-shuffle', shuffleWgsl(o, false)),
         pipeline('srvgg-shuffle-accumulate', shuffleWgsl(o, true)),
         pipeline('srvgg-finalize', finalizeWgsl()),
@@ -511,7 +568,8 @@ class SrvggUpscaler extends GpuUpscaler {
       const bufs = this.weightsOf(layer.name)
       const isFirst = i === 0
       const isLast = i === this.weights.layers.length - 1
-      const pipeline = isFirst ? this.pipelines.first : isLast ? this.pipelines.last : this.pipelines.body
+      const conv = isFirst ? null : isLast ? this.pipelines.last : this.pipelines.body
+      const target = conv ? conv.layout : this.pipelines.first
       // Layer i reads a when i is odd, b when even (layer 0 reads the texture and writes a).
       const src = i % 2 === 1 ? a : b
       const dst = i % 2 === 1 ? b : a
@@ -527,8 +585,8 @@ class SrvggUpscaler extends GpuUpscaler {
         if (bufs.prelu) list.push([3, { buffer: bufs.prelu }])
         return list
       }
-      const group = bindGroup(device, `srvgg-${layer.name}`, pipeline, entries(view))
-      return { pipeline, bindGroup: group, bindGroupT: isFirst ? bindGroup(device, `srvgg-${layer.name}-t`, pipeline, entries(viewT)) : group }
+      const group = bindGroup(device, `srvgg-${layer.name}`, target, entries(view))
+      return { conv, bindGroup: group, bindGroupT: isFirst ? bindGroup(device, `srvgg-${layer.name}-t`, target, entries(viewT)) : group }
     })
     const lastAct = (this.weights.layers.length - 1) % 2 === 1 ? b : a
     this.buffers = { a, b, layers, lastAct }
@@ -591,10 +649,10 @@ class SrvggUpscaler extends GpuUpscaler {
       const computePass = encoder.beginComputePass()
       for (let i = from; i < to; i++) {
         const layer = buffers.layers[i]!
-        computePass.setPipeline(layer.pipeline)
+        computePass.setPipeline(layer.conv ? layer.conv.byRows[this.variant] : this.pipelines.first)
         computePass.setBindGroup(0, t.swap ? layer.bindGroupT : layer.bindGroup)
-        if (i === 0) computePass.dispatchWorkgroups(Math.ceil(tw / 8), Math.ceil(th / 8))
-        else computePass.dispatchWorkgroups(Math.ceil(tw / BODY_BLOCK_W), Math.ceil(th / BODY_BLOCK_H))
+        if (!layer.conv) computePass.dispatchWorkgroups(Math.ceil(tw / 8), Math.ceil(th / 8))
+        else computePass.dispatchWorkgroups(Math.ceil(tw / BODY_BLOCK_W), Math.ceil(th / bodyBlockH(this.variant)))
       }
       if (to === buffers.layers.length) {
         computePass.setPipeline(passes > 1 ? this.pipelines.shuffleAccumulate : this.pipelines.shuffle)
@@ -636,23 +694,24 @@ class SrvggUpscaler extends GpuUpscaler {
  * Trunk activation memory per band: four rotating 64-channel feature buffers (block input and
  * the outputs of the three dense blocks), the 128-channel growth buffer of a dense block plus the
  * 32-channel scratch its convolutions write, and the conv_first features kept for the skip.
+ * 192 MB buys ~160-row bands on a typical page (8 bands instead of 11: less context recomputed).
  */
-const RRDB_MAX_ACT_BYTES = 128 * 1024 * 1024
+const RRDB_MAX_ACT_BYTES = 192 * 1024 * 1024
 const RRDB_PLANES = 16 * 4 + 32 + 8 + 16
 
 interface RrdbPipelines {
   first: GPUComputePipeline
-  conv1: GPUComputePipeline
-  convDense: GPUComputePipeline
-  conv5: GPUComputePipeline
-  conv5Last: GPUComputePipeline
-  body: GPUComputePipeline
-  up: GPUComputePipeline
+  conv1: ConvPipelines
+  convDense: ConvPipelines
+  conv5: ConvPipelines
+  conv5Last: ConvPipelines
+  body: ConvPipelines
+  up: ConvPipelines
   rgb: GPUComputePipeline
 }
 
 interface Dispatch {
-  pipeline: GPUComputePipeline
+  conv: ConvPipelines
   group: GPUBindGroup
   /** Growth block (0..3) the output is copied into after the dispatch, for conv1–conv4. */
   growth?: number
@@ -724,15 +783,15 @@ class RrdbUpscaler extends GpuUpscaler {
   }
 
   static async create(dev: DeviceInfo, weights: ModelWeights): Promise<RrdbUpscaler> {
-    const { options, pipelines } = await compileProgram(dev.device, dev.f16, async (o, pipeline) => {
+    const { options, pipelines } = await compileProgram(dev.device, dev.f16, async (o, pipeline, conv) => {
       const [first, conv1, convDense, conv5, conv5Last, body, up, rgb] = await Promise.all([
         pipeline('rrdb-conv-first', convFirstWgsl(o, 'none')),
-        pipeline('rrdb-conv1', convWgsl(o, { cout: 32, activation: 'lrelu', residual: 0, split: false })),
-        pipeline('rrdb-conv-dense', convWgsl(o, { cout: 32, activation: 'lrelu', residual: 0, split: true })),
-        pipeline('rrdb-conv5', convWgsl(o, { cout: 64, activation: 'none', residual: 1, split: true })),
-        pipeline('rrdb-conv5-last', convWgsl(o, { cout: 64, activation: 'none', residual: 2, split: true })),
-        pipeline('rrdb-conv-body', convWgsl(o, { cout: 64, activation: 'none', residual: 1, split: false })),
-        pipeline('rrdb-conv-up', convWgsl(o, { cout: 64, activation: 'lrelu', residual: 0, split: false })),
+        conv('rrdb-conv1', { cout: 32, activation: 'lrelu', residual: 0, split: false }),
+        conv('rrdb-conv-dense', { cout: 32, activation: 'lrelu', residual: 0, split: true }),
+        conv('rrdb-conv5', { cout: 64, activation: 'none', residual: 1, split: true }),
+        conv('rrdb-conv5-last', { cout: 64, activation: 'none', residual: 2, split: true }),
+        conv('rrdb-conv-body', { cout: 64, activation: 'none', residual: 1, split: false }),
+        conv('rrdb-conv-up', { cout: 64, activation: 'lrelu', residual: 0, split: false }),
         pipeline('rrdb-rgb-out', rgbOutWgsl(o)),
       ])
       return { first, conv1, convDense, conv5, conv5Last, body, up, rgb }
@@ -764,11 +823,11 @@ class RrdbUpscaler extends GpuUpscaler {
       [5, { buffer: this.bandParams }],
       [6, { buffer: this.lp.first }],
     ])
-    const conv = (pipeline: GPUComputePipeline, name: string, entries: Array<[number, GPUBindingResource]>, growth?: number): Dispatch => {
+    const conv = (pipelines: ConvPipelines, name: string, entries: Array<[number, GPUBindingResource]>, growth?: number): Dispatch => {
       const w = this.weightsOf(name)
       return {
-        pipeline,
-        group: bindGroup(device, `rrdb-${name}`, pipeline, [[1, { buffer: w.weight }], [2, { buffer: w.bias }], [5, { buffer: this.bandParams }], ...entries]),
+        conv: pipelines,
+        group: bindGroup(device, `rrdb-${name}`, pipelines.layout, [[1, { buffer: w.weight }], [2, { buffer: w.bias }], [5, { buffer: this.bandParams }], ...entries]),
         growth,
       }
     }
@@ -822,7 +881,7 @@ class RrdbUpscaler extends GpuUpscaler {
       strips.push({
         lpUp1,
         rgbParams: this.uniform(`rgb-${k}`, RGB_OUT_PARAMS_BYTES),
-        up1: bindGroup(device, `rrdb-up1-${k}`, this.pipelines.up, [
+        up1: bindGroup(device, `rrdb-up1-${k}`, this.pipelines.up.layout, [
           [0, { buffer: feat2 }],
           [1, { buffer: wUp1.weight }],
           [2, { buffer: wUp1.bias }],
@@ -830,7 +889,7 @@ class RrdbUpscaler extends GpuUpscaler {
           [5, { buffer: this.bandUp1 }],
           [6, { buffer: lpUp1 }],
         ]),
-        up2: bindGroup(device, 'rrdb-up2', this.pipelines.up, [
+        up2: bindGroup(device, 'rrdb-up2', this.pipelines.up.layout, [
           [0, { buffer: u1 }],
           [1, { buffer: wUp2.weight }],
           [2, { buffer: wUp2.bias }],
@@ -838,7 +897,7 @@ class RrdbUpscaler extends GpuUpscaler {
           [5, { buffer: this.bandUp2 }],
           [6, { buffer: this.lp.up2 }],
         ]),
-        hr: bindGroup(device, 'rrdb-hr', this.pipelines.up, [
+        hr: bindGroup(device, 'rrdb-hr', this.pipelines.up.layout, [
           [0, { buffer: u2 }],
           [1, { buffer: wHr.weight }],
           [2, { buffer: wHr.bias }],
@@ -887,11 +946,13 @@ class RrdbUpscaler extends GpuUpscaler {
       )
     }
     const commands: GPUCommandBuffer[] = []
+    const blockH = bodyBlockH(this.variant)
+    const up = this.pipelines.up.byRows[this.variant]
     const trunkDispatch = (encoder: GPUCommandEncoder, d: Dispatch) => {
       const pass = encoder.beginComputePass()
-      pass.setPipeline(d.pipeline)
+      pass.setPipeline(d.conv.byRows[this.variant])
       pass.setBindGroup(0, d.group)
-      pass.dispatchWorkgroups(Math.ceil(bw / BODY_BLOCK_W), Math.ceil(bh / BODY_BLOCK_H))
+      pass.dispatchWorkgroups(Math.ceil(bw / BODY_BLOCK_W), Math.ceil(bh / blockH))
       pass.end()
       if (d.growth !== undefined) encoder.copyBufferToBuffer(buffers.s, 0, buffers.g, d.growth * 8 * planeBytes, 8 * planeBytes)
     }
@@ -923,13 +984,13 @@ class RrdbUpscaler extends GpuUpscaler {
       const pass = encoder.beginComputePass()
       for (let k = k0; k < Math.min(stripCount, k0 + 4); k++) {
         const strip = buffers.strips[k]!
-        pass.setPipeline(this.pipelines.up)
+        pass.setPipeline(up)
         pass.setBindGroup(0, strip.up1)
-        pass.dispatchWorkgroups(Math.ceil((bw * 2) / BODY_BLOCK_W), Math.ceil((tailRows * 2) / BODY_BLOCK_H))
+        pass.dispatchWorkgroups(Math.ceil((bw * 2) / BODY_BLOCK_W), Math.ceil((tailRows * 2) / blockH))
         pass.setBindGroup(0, strip.up2)
-        pass.dispatchWorkgroups(Math.ceil((bw * 4) / BODY_BLOCK_W), Math.ceil((tailRows * 4) / BODY_BLOCK_H))
+        pass.dispatchWorkgroups(Math.ceil((bw * 4) / BODY_BLOCK_W), Math.ceil((tailRows * 4) / blockH))
         pass.setBindGroup(0, strip.hr)
-        pass.dispatchWorkgroups(Math.ceil((bw * 4) / BODY_BLOCK_W), Math.ceil((tailRows * 4) / BODY_BLOCK_H))
+        pass.dispatchWorkgroups(Math.ceil((bw * 4) / BODY_BLOCK_W), Math.ceil((tailRows * 4) / blockH))
         pass.setPipeline(this.pipelines.rgb)
         pass.setBindGroup(0, run.rgbGroups[k]!)
         pass.dispatchWorkgroups(Math.ceil((W * factor) / 8), Math.ceil((TAIL_ROWS * factor) / 8))

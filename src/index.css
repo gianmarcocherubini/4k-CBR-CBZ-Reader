@@ -545,6 +545,46 @@ input[type='range'].slider::-moz-range-thumb {
   }
 }
 
+/*
+ * Anti-spoiler: while "Qualità massima" computes the HD version of a page, its plain image stays
+ * unreadable (breathing blur, slightly enlarged so the blurred edges do not fade into the
+ * background); the HD canvas then sharpens in.
+ */
+.antispoiler {
+  filter: blur(18px);
+  transform: scale(1.06);
+  animation: antispoiler-breathe 2.6s ease-in-out infinite;
+  will-change: filter;
+}
+@keyframes antispoiler-breathe {
+  0%,
+  100% {
+    filter: blur(16px);
+  }
+  50% {
+    filter: blur(24px);
+  }
+}
+.hd-reveal {
+  animation: hd-reveal 650ms ease-out both;
+}
+@keyframes hd-reveal {
+  from {
+    filter: blur(18px);
+  }
+  to {
+    filter: blur(0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .antispoiler {
+    animation: none;
+  }
+  .hd-reveal {
+    animation: none;
+  }
+}
+
 /* HD indicator: gentle pulse while the enhancement is being computed. */
 @keyframes hd-pulse {
   0%,
