@@ -169,7 +169,9 @@ export class Anime4KUpscaler implements UpscaleBackend {
     if (this.lost) throw new Error('WebGPU device lost')
     const W = source.width
     const H = source.height
-    const { canvas: padded, strips: nStrips } = padForStrips(source)
+    const { canvas: paddedCanvas, strips: nStrips } = padForStrips(source)
+    // An ImageBitmap is the copy source every WebGPU implementation accepts (canvases are not).
+    const padded = paddedCanvas.transferToImageBitmap()
     const outW = Math.max(1, Math.round(opts.target.w))
     const outH = Math.max(1, Math.round(opts.target.h))
     const scale = outW / W
@@ -224,6 +226,7 @@ export class Anime4KUpscaler implements UpscaleBackend {
       readback.unmap()
       return { data, width: outW, height: outH }
     } finally {
+      padded.close()
       readback.destroy()
       output.destroy()
     }

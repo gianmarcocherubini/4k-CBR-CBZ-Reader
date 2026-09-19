@@ -286,7 +286,8 @@ export class EsrganUpscaler {
     const outH = H * factor
     const outBytes = outW * outH * 4
     const device = this.device
-    const padded = padPage(source)
+    // An ImageBitmap is the copy source every WebGPU implementation accepts (canvases are not).
+    const padded = padPage(source).transferToImageBitmap()
     const paddedRows = Math.min(plan.coreRows, H) + 2 * CONTEXT
     const buffers = this.bandBuffers(plan.bw, paddedRows)
     const page = device.createBuffer({ label: 'esrgan-page', size: outBytes, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC })
@@ -347,6 +348,7 @@ export class EsrganUpscaler {
       readback.unmap()
       return { data, width: outW, height: outH }
     } finally {
+      padded.close()
       readback.destroy()
       page.destroy()
     }
