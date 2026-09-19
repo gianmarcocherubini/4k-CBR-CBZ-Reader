@@ -1,17 +1,39 @@
-import type { PageSize } from '../../../types'
+import type { MaxQualityModel, PageSize } from '../../../types'
 import { cacheBudgetBytes } from '../backend'
 import type { SrResult } from '../srEngine'
-import { EsrganAborted, type EsrganFactor, type EsrganInfo, EsrganUpscaler, workPixels } from './esrganUpscaler'
-import weightsUrl from './realesr-animevideov3.f16.bin?url'
-import { parseWeights, type SrvggWeights } from './weights'
+import { createUpscaler, EsrganAborted, type EsrganFactor, type EsrganInfo, type Upscaler } from './esrganUpscaler'
+import weightsUrl6b from './realesrgan-x4plus-anime-6b.f16.bin?url'
+import weightsUrlV3 from './realesr-animevideov3.f16.bin?url'
+import type { EnsembleSize } from './transforms'
+import { type ModelWeights, parseWeights } from './weights'
 
 export { EsrganAborted } from './esrganUpscaler'
+export type { EnsembleSize } from './transforms'
 
 /** Time not covered by the per-pixel cost: readback, bitmap creation, scheduling (ms per page). */
 const FIXED_MS_PER_PAGE = 80
+/** Each extra ensemble pass also redraws and re-uploads the band: a little more than its GPU time. */
+const ENSEMBLE_PASS_OVERHEAD = 1.06
+export const ENSEMBLE_SIZES: readonly EnsembleSize[] = [8, 4, 2, 1]
 /** Probe image: one band of a typical page, enough work for a meaningful timing. */
 const PROBE = { w: 256, h: 160 }
 const REPROBE_INTERVAL_MS = 8000
+/** Evicted bitmaps are closed a little later: React may still be painting them. */
+const CLOSE_DELAY_MS = 1200
+
+export interface ModelInfo {
+  id: MaxQualityModel
+  /** Short name for the settings and the badge. */
+  label: string
+  url: string
+  /** Weight file size, for the download message. */
+  megabytes: number
+}
+
+export const MODELS: Record<MaxQualityModel, ModelInfo> = {
+  v3: { id: 'v3', label: 'Real-ESRGAN anime v3', url: weightsUrlV3, megabytes: 1.2 },
+  '6b': { id: '6b', label: 'Real-ESRGAN x4plus anime 6B', url: weightsUrl6b, megabytes: 8.9 },
+}
 
 function synthetic(w: number, h: number): ImageBitmap {
   const canvas = new OffscreenCanvas(w, h)
@@ -32,32 +54,38 @@ interface Task {
   promise: Promise<SrResult>
 }
 
-let weightsPromise: Promise<SrvggWeights> | null = null
+const weightsPromises = new Map<MaxQualityModel, Promise<ModelWeights>>()
 
-/** The 1.2 MB weight file ships with the app (precached by the service worker); parsed once per session. */
-function loadWeights(): Promise<SrvggWeights> {
-  if (!weightsPromise) {
-    weightsPromise = fetch(weightsUrl)
+/**
+ * Weight files ship with the app: the small one is precached by the service worker, the 6B one is
+ * fetched (and runtime-cached) the first time that model is selected. Parsed once per session.
+ */
+export function loadWeights(model: MaxQualityModel): Promise<ModelWeights> {
+  let promise = weightsPromises.get(model)
+  if (!promise) {
+    promise = fetch(MODELS[model].url)
       .then(async (r) => {
         if (!r.ok) throw new Error(`Pesi del modello non disponibili (${r.status})`)
         return parseWeights(await r.arrayBuffer())
       })
       .catch((e: unknown) => {
-        weightsPromise = null
+        weightsPromises.delete(model)
         throw e
       })
+    weightsPromises.set(model, promise)
   }
-  return weightsPromise
+  return promise
 }
 
 /**
- * "Qualità massima": Real-ESRGAN (anime video v3) at x4 on WebGPU, for the pages on screen only.
- * Work is run one page at a time, anything no longer wanted is cancelled, results are kept in a
- * byte-bounded LRU. The throughput measured on this device (ms per processed megapixel) tells the
- * reader up front whether a spread fits the time budget.
+ * "Qualità massima": Real-ESRGAN at x4 on WebGPU, for the pages on screen only. Work is run one
+ * page at a time, anything no longer wanted is cancelled, results are kept in a byte-bounded LRU.
+ * The throughput measured on this device (ms per processed megapixel) tells the reader up front
+ * whether a spread fits the time budget and how many self-ensemble passes it can afford.
  */
 export class EsrganEngine {
-  readonly upscaler: EsrganUpscaler
+  readonly model: ModelInfo
+  readonly upscaler: Upscaler
   readonly info: EsrganInfo
   /** EMA of the cost on this device, ms per megapixel of processed source (context included). */
   msPerWorkMegapixel: number | undefined
@@ -68,9 +96,13 @@ export class EsrganEngine {
   private readonly tasks = new Map<string, Task>()
   private wanted = new Set<string>()
   private chain: Promise<unknown> = Promise.resolve()
+  private readonly pendingCloses = new Set<ReturnType<typeof setTimeout>>()
+  private lastProbeAt = 0
+  private reprobing = false
   private disposed = false
 
-  private constructor(upscaler: EsrganUpscaler) {
+  private constructor(model: ModelInfo, upscaler: Upscaler) {
+    this.model = model
     this.upscaler = upscaler
     this.info = upscaler.info
     upscaler.onLost = () => {
@@ -80,18 +112,26 @@ export class EsrganEngine {
   }
 
   /** Resolves null when WebGPU is absent; rejects with a readable message on any other failure. */
-  static async create(): Promise<EsrganEngine | null> {
-    const weights = await loadWeights()
-    const upscaler = await EsrganUpscaler.create(weights)
+  static async create(model: MaxQualityModel, onStatus?: (message: string) => void): Promise<EsrganEngine | null> {
+    onStatus?.(`Caricamento dei pesi (${MODELS[model].megabytes.toLocaleString('it-IT')} MB)…`)
+    const weights = await loadWeights(model)
+    onStatus?.('Compilazione degli shader…')
+    const upscaler = await createUpscaler(weights)
     if (!upscaler) return null
-    const engine = new EsrganEngine(upscaler)
+    const engine = new EsrganEngine(MODELS[model], upscaler)
     try {
+      onStatus?.('Misura della GPU…')
       await engine.benchmark()
     } catch (e) {
       engine.dispose()
       throw e
     }
     return engine
+  }
+
+  /** Whether `upscale` averages several passes when asked (the 6B network runs single-pass). */
+  get supportsEnsemble(): boolean {
+    return this.upscaler.supportsEnsemble
   }
 
   /**
@@ -115,16 +155,13 @@ export class EsrganEngine {
       const t0 = performance.now()
       await this.upscaler.upscale(probe, 4)
       const ms = performance.now() - t0
-      const sample = Math.max(0.01, ms - FIXED_MS_PER_PAGE / 4) / (workPixels(PROBE, this.upscaler.bytesPerPixel) / 1e6)
+      const sample = Math.max(0.01, ms - FIXED_MS_PER_PAGE / 4) / (this.upscaler.workPixels(PROBE) / 1e6)
       this.msPerWorkMegapixel = this.msPerWorkMegapixel === undefined ? sample : this.msPerWorkMegapixel * 0.5 + sample * 0.5
       this.lastProbeAt = performance.now()
     } finally {
       probe.close()
     }
   }
-
-  private lastProbeAt = 0
-  private reprobing = false
 
   /**
    * Measures the GPU again (at most every few seconds, after any page in flight). Called when a
@@ -153,13 +190,24 @@ export class EsrganEngine {
     return this.upscaler.canUpscale(size)
   }
 
-  /** Predicted wall time for these pages, ms (undefined before the probe). */
-  estimateMs(sizes: readonly PageSize[]): number | undefined {
+  /** Predicted wall time for these pages with an ensemble of `ensemble` passes, ms (undefined before the probe). */
+  estimateMs(sizes: readonly PageSize[], ensemble: EnsembleSize = 1): number | undefined {
     const rate = this.msPerWorkMegapixel
     if (rate === undefined) return undefined
+    const passes = ensemble === 1 || !this.supportsEnsemble ? 1 : ensemble * ENSEMBLE_PASS_OVERHEAD
     let ms = 0
-    for (const size of sizes) ms += FIXED_MS_PER_PAGE + (rate * workPixels(size, this.upscaler.bytesPerPixel)) / 1e6
+    for (const size of sizes) ms += FIXED_MS_PER_PAGE + (rate * this.upscaler.workPixels(size) * passes) / 1e6
     return ms
+  }
+
+  /** The largest ensemble whose predicted time for these pages fits `budgetMs` (1 when none does). */
+  ensembleFor(sizes: readonly PageSize[], budgetMs: number): EnsembleSize {
+    if (!this.supportsEnsemble) return 1
+    for (const n of ENSEMBLE_SIZES) {
+      const est = this.estimateMs(sizes, n)
+      if (est !== undefined && est <= budgetMs) return n
+    }
+    return 1
   }
 
   peek(key: string): SrResult | undefined {
@@ -178,8 +226,12 @@ export class EsrganEngine {
     this.evict()
   }
 
-  /** Processes one page (serialised with the others); the same key in flight is shared. */
-  enhance(key: string, size: PageSize, source: () => Promise<ImageBitmap>): Promise<SrResult> {
+  /**
+   * Processes one page (serialised with the others); the same key in flight is shared, and a cached
+   * result is returned whatever ensemble it was computed with (a page already on screen is never
+   * redone because the budget moved).
+   */
+  enhance(key: string, size: PageSize, source: () => Promise<ImageBitmap>, ensemble: EnsembleSize = 1): Promise<SrResult> {
     if (!this.available) return Promise.reject(new Error('Real-ESRGAN non disponibile'))
     const hit = this.peek(key)
     if (hit) return Promise.resolve(hit)
@@ -188,22 +240,24 @@ export class EsrganEngine {
     const factor = this.factorFor(size)
     if (!factor) return Promise.reject(new Error(`Pagina ${size.w}×${size.h} troppo grande per Real-ESRGAN`))
     const controller = new AbortController()
+    const passes = this.supportsEnsemble ? ensemble : 1
     const run = async (): Promise<SrResult> => {
       if (controller.signal.aborted || !this.available) throw new EsrganAborted()
       const bitmap = await source()
       try {
         if (controller.signal.aborted) throw new EsrganAborted()
         const t0 = performance.now()
-        const out = await this.upscaler.upscale(bitmap, factor, { signal: controller.signal })
+        const out = await this.upscaler.upscale(bitmap, factor, { signal: controller.signal, ensemble: passes })
         const result = await createImageBitmap(new ImageData(out.data, out.width, out.height))
         const ms = performance.now() - t0
-        const sample = Math.max(0.01, ms - FIXED_MS_PER_PAGE) / (workPixels(size, this.upscaler.bytesPerPixel) / 1e6)
+        const passCost = passes === 1 ? 1 : passes * ENSEMBLE_PASS_OVERHEAD
+        const sample = Math.max(0.01, ms - FIXED_MS_PER_PAGE) / ((this.upscaler.workPixels(size) * passCost) / 1e6)
         this.msPerWorkMegapixel = this.msPerWorkMegapixel === undefined ? sample : this.msPerWorkMegapixel * 0.5 + sample * 0.5
         if (this.disposed) {
           result.close()
           throw new EsrganAborted()
         }
-        const sr: SrResult = { bitmap: result, level: 'GAN', factor, ms }
+        const sr: SrResult = { bitmap: result, level: 'GAN', factor, ms, ensemble: passes }
         this.cache.set(key, sr)
         this.cacheBytes += result.width * result.height * 4
         this.evict()
@@ -219,15 +273,24 @@ export class EsrganEngine {
     return promise
   }
 
-  /** LRU eviction by bytes; results still wanted are spared unless the cache is far over budget. */
+  /** LRU eviction by bytes; results of the pages on screen are never evicted. */
   private evict(): void {
     for (const [key, r] of this.cache) {
       if (this.cacheBytes <= this.budget) break
-      if (this.wanted.has(key) && this.cacheBytes <= this.budget * 1.5) continue
+      if (this.wanted.has(key)) continue
       this.cache.delete(key)
       this.cacheBytes -= r.bitmap.width * r.bitmap.height * 4
-      r.bitmap.close()
+      this.closeLater(r.bitmap)
     }
+  }
+
+  /** The view (or the ghost of a page turn) may still paint an evicted bitmap for a moment. */
+  private closeLater(bitmap: ImageBitmap): void {
+    const timer = setTimeout(() => {
+      this.pendingCloses.delete(timer)
+      bitmap.close()
+    }, CLOSE_DELAY_MS)
+    this.pendingCloses.add(timer)
   }
 
   get cacheSizeBytes(): number {
@@ -237,7 +300,12 @@ export class EsrganEngine {
   dispose(): void {
     this.disposed = true
     for (const task of this.tasks.values()) task.controller.abort()
-    for (const r of this.cache.values()) r.bitmap.close()
+    for (const timer of this.pendingCloses) clearTimeout(timer)
+    this.pendingCloses.clear()
+    const bitmaps = [...this.cache.values()].map((r) => r.bitmap)
+    setTimeout(() => {
+      for (const b of bitmaps) b.close()
+    }, CLOSE_DELAY_MS)
     this.cache.clear()
     this.cacheBytes = 0
     this.upscaler.dispose()

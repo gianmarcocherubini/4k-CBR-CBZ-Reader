@@ -1,9 +1,13 @@
-The file realesr-animevideov3.f16.bin contains the weights of the Real-ESRGAN model
-"realesr-animevideov3" (SRVGGNetCompact), converted to FP16 from the official checkpoint
-realesr-animevideov3.pth (release v0.2.5.0 of https://github.com/xinntao/Real-ESRGAN,
-SHA-256 b8a8376811077954d82ca3fcf476f1ac3da3e8a68a4f4d71363008000a18b75d) with
-scripts/convert-realesr-weights.py. The weights are redistributed under the license of that
-project, reproduced below. The WGSL implementation in this directory is part of this repository.
+The weight files in this directory are converted to FP16 from the official Real-ESRGAN
+checkpoints (https://github.com/xinntao/Real-ESRGAN) with scripts/convert-realesr-weights.py:
+
+  realesr-animevideov3.f16.bin        realesr-animevideov3.pth, release v0.2.5.0 (SRVGGNetCompact)
+                                      SHA-256 b8a8376811077954d82ca3fcf476f1ac3da3e8a68a4f4d71363008000a18b75d
+  realesrgan-x4plus-anime-6b.f16.bin  RealESRGAN_x4plus_anime_6B.pth, release v0.2.2.4 (RRDBNet)
+                                      SHA-256 f872d837d3c90ed2e05227bed711af5671a6fd1c9f7d7e91c911a61f155e99da
+
+The weights are redistributed under the license of that project, reproduced below. The WGSL
+implementation in this directory is part of this repository.
 
 BSD 3-Clause License
 

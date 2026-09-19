@@ -11,7 +11,7 @@ import {
   rememberArchivePassword,
   resolveBookBlob,
 } from '../../lib/storage/importer'
-import { EsrganAborted } from '../../lib/upscale/esrgan/esrganEngine'
+import { type EnsembleSize, EsrganAborted, MODELS } from '../../lib/upscale/esrgan/esrganEngine'
 import { SrAborted, type SrOptions, type SrPlan, type SrResult } from '../../lib/upscale/srEngine'
 import { type Book, GUTTER_FRACTION, type PageSize, type ReaderSettings } from '../../types'
 import { MaxQualityControls } from './MaxQualityControls'
@@ -43,6 +43,32 @@ function sameMap<K, V>(a: ReadonlyMap<K, V>, b: ReadonlyMap<K, V>): boolean {
   if (a.size !== b.size) return false
   for (const [k, v] of a) if (b.get(k) !== v) return false
   return true
+}
+
+/** Safe-area insets as resolved by the browser (env() cannot be read from a custom property). */
+function safeAreaInsets(): { top: number; bottom: number } {
+  const probe = document.createElement('div')
+  probe.className = 'pt-safe pb-safe'
+  probe.style.cssText = 'position:fixed;left:-9999px;top:0;width:0;height:0;visibility:hidden'
+  document.body.appendChild(probe)
+  const style = getComputedStyle(probe)
+  const insets = { top: parseFloat(style.paddingTop) || 0, bottom: parseFloat(style.paddingBottom) || 0 }
+  probe.remove()
+  return insets
+}
+
+function describeViewport(viewport: Size, layout: { w: number; h: number }): string {
+  const px = (v: number) => Math.round(v * 10) / 10
+  const safe = safeAreaInsets()
+  const parts = [
+    `area di lettura ${px(viewport.w)}×${px(viewport.h)} px`,
+    `pagine ${px(layout.w)}×${px(layout.h)} px`,
+    `finestra ${window.innerWidth}×${window.innerHeight}`,
+    `schermo ${screen.width}×${screen.height} (×${window.devicePixelRatio || 1})`,
+    `margini sicuri alto ${px(safe.top)} / basso ${px(safe.bottom)}`,
+  ]
+  if (window.visualViewport) parts.push(`viewport visivo ${px(window.visualViewport.width)}×${px(window.visualViewport.height)}`)
+  return parts.join(' · ')
 }
 
 function toArchiveError(e: unknown): ArchiveError {
@@ -176,17 +202,28 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
   }, [bookId, sessionBook, onClose, requestPassword])
 
   // ---- viewport ------------------------------------------------------------------------------
+  // The stage is measured, not assumed: on iPadOS the layout viewport of an installed app can
+  // change after mount (status bar, safe areas, orientation), and not every change reaches the
+  // ResizeObserver, so window and visual-viewport resizes re-measure too.
   useEffect(() => {
     const el = stageRef.current
     if (!el) return
     const update = () => {
       const r = el.getBoundingClientRect()
-      if (r.width > 0 && r.height > 0) setViewport({ w: r.width, h: r.height })
+      if (r.width > 0 && r.height > 0) setViewport((v) => (v.w === r.width && v.h === r.height ? v : { w: r.width, h: r.height }))
     }
     update()
     const ro = new ResizeObserver(update)
     ro.observe(el)
-    return () => ro.disconnect()
+    window.addEventListener('resize', update)
+    window.addEventListener('orientationchange', update)
+    window.visualViewport?.addEventListener('resize', update)
+    return () => {
+      ro.disconnect()
+      window.removeEventListener('resize', update)
+      window.removeEventListener('orientationchange', update)
+      window.visualViewport?.removeEventListener('resize', update)
+    }
   }, [status])
 
   // ---- layout --------------------------------------------------------------------------------
@@ -510,7 +547,7 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
   // Only the pages on screen are ever processed: no read-ahead, no batch, no queue. "Qualità
   // massima" (Real-ESRGAN) runs when its measured throughput predicts the spread within the time
   // budget; otherwise, or when it is off or unavailable, the spread gets Anime4K.
-  const mq = useMaxQuality(status === 'ready' && settings.maxQuality)
+  const mq = useMaxQuality(status === 'ready' && settings.maxQuality, settings.maxQualityModel)
   const srOptions = useMemo<SrOptions>(
     () => ({ level: settings.srLevel, scale: settings.srScale, restore: settings.srRestore, clean: settings.srClean }),
     [settings.srLevel, settings.srScale, settings.srRestore, settings.srClean],
@@ -525,8 +562,11 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
   /** Visible pages whose size is known, with the size baked into a key so the effect only re-runs on real changes. */
   const visibleKey = spreadPages.map((i) => `${i}:${sizes[i]?.w ?? '?'}x${sizes[i]?.h ?? '?'}`).join(',')
   const heavyBudgetMs = settings.maxQualityBudget * 1000
+  /** "Sempre" has no limit for the model itself; the ensemble still sizes itself to this target. */
+  const ensembleTargetMs = heavyBudgetMs > 0 ? heavyBudgetMs : 5000
   /** The tier decision is taken once per spread (and per budget), never revised by a later timing sample. */
-  const heavyDecision = useRef<{ key: string; use: boolean; skip: 'slow' | 'too-big' | 'error' | null } | null>(null)
+  const heavyDecision = useRef<{ key: string; use: boolean; skip: 'slow' | 'too-big' | 'error' | null; ensemble: EnsembleSize } | null>(null)
+  const [heavyEnsemble, setHeavyEnsemble] = useState<EnsembleSize>(1)
   useEffect(() => {
     heavyDecision.current = null
     setHeavyError(null)
@@ -546,31 +586,39 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
     const heavyKey = (index: number) => `${bookId}:${index}`
     const bitmapOf = async (index: number) => createImageBitmap((await cache.get(index)).blob)
 
-    // Which tier serves this spread.
+    // Which tier serves this spread, and how many self-ensemble passes the time budget allows.
     let useHeavy = false
     let skip: 'slow' | 'too-big' | 'error' | null = null
+    let ensemble: EnsembleSize = 1
     if (settings.maxQuality && heavy && pages.length > 0) {
       const decisionKey = `${visibleKey}|${heavyBudgetMs}|${heavyError ?? ''}`
       const prev = heavyDecision.current
       if (prev && prev.key === decisionKey) {
         useHeavy = prev.use
         skip = prev.skip
+        ensemble = prev.ensemble
       } else {
         if (heavyError) skip = 'error'
         else if (pages.some((i) => heavy.factorFor(sizes[i]!) === null)) skip = 'too-big'
         else {
-          const est = heavy.estimateMs(pages.map((i) => sizes[i]!))
+          const visible = pages.map((i) => sizes[i]!)
+          const est = heavy.estimateMs(visible)
           if (heavyBudgetMs > 0 && est !== undefined && est > heavyBudgetMs) {
             skip = 'slow'
             // The estimate may have been taken while Anime4K kept the GPU busy: measure again so the
             // next spread decides on fresh numbers.
             heavy.reprobe()
-          } else useHeavy = true
+          } else {
+            useHeavy = true
+            // Spare time goes into quality: more passes over flipped/rotated copies, averaged.
+            ensemble = heavy.ensembleFor(visible, ensembleTargetMs)
+          }
         }
-        heavyDecision.current = { key: decisionKey, use: useHeavy, skip }
+        heavyDecision.current = { key: decisionKey, use: useHeavy, skip, ensemble }
       }
     }
     setHeavySkip(settings.maxQuality ? skip : null)
+    setHeavyEnsemble(ensemble)
 
     let cancelled = false
     const initial = new Map<number, SrResult>()
@@ -587,7 +635,7 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
         // Both pages of a spread turn to HD together: nothing is shown until all are done.
         setEnhanced((m) => (m.size ? new Map() : m))
         setSrPending(new Set(pages))
-        Promise.all(pages.map((i, k) => hits[k] ?? heavy.enhance(heavyKey(i), sizes[i]!, () => bitmapOf(i))))
+        Promise.all(pages.map((i, k) => hits[k] ?? heavy.enhance(heavyKey(i), sizes[i]!, () => bitmapOf(i), ensemble)))
           .then((results) => {
             if (cancelled) return
             const next = new Map<number, SrResult>()
@@ -665,7 +713,7 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
       cancelled = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sr.engine, sr.tick, mq.engine, status, book, visibleKey, srOptions, settings.superResolution, settings.maxQuality, heavyBudgetMs, heavyError])
+  }, [sr.engine, sr.tick, mq.engine, status, book, visibleKey, srOptions, settings.superResolution, settings.maxQuality, heavyBudgetMs, ensembleTargetMs, heavyError])
 
   const heavyLabel = 'GAN'
   const displayed = enhanced
@@ -714,22 +762,26 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
 
   const visibleSizes = spreadPages.map((i) => sizes[i]).filter((s): s is PageSize => !!s)
   const mqStatusLine = (() => {
-    const modelName = 'Real-ESRGAN anime v3'
-    if (!settings.maxQuality) return `Disattivata. ${modelName} ×4 sulla GPU: più nitida della Super risoluzione, qualche secondo per pagina, solo per le pagine sullo schermo.`
+    const modelName = MODELS[settings.maxQualityModel].label
+    if (!settings.maxQuality) return `Disattivata. ${modelName} ×4 sulla GPU: più nitida della Super risoluzione, solo per le pagine sullo schermo.`
     switch (mq.status) {
       case 'off':
       case 'init':
-        return 'Inizializzazione: pesi del modello (1,2 MB), compilazione degli shader e misura della GPU…'
+        return `Inizializzazione di ${modelName}: ${mq.progress ?? 'avvio'}`
       case 'unavailable':
         return `Non disponibile: ${mq.error ?? 'errore sconosciuto'}. Le pagine usano la Super risoluzione.`
       case 'ready': {
         const engine = mq.engine
         if (!engine) return 'Pronta.'
         const parts = [`${modelName} ×4 · WebGPU ${engine.info.precision.toUpperCase()} · ${engine.info.adapter}`]
-        const est = engine.estimateMs(visibleSizes)
+        const shown = spreadPages.map((i) => displayed.get(i)).find((r) => r?.level === heavyLabel)
+        const passes = shown?.ensemble ?? heavyEnsemble
+        if (heavySkip === null && passes > 1) parts.push(`self-ensemble ×${passes} (${passes} passaggi mediati, più pulito)`)
+        const est = engine.estimateMs(visibleSizes, heavySkip === null ? heavyEnsemble : 1)
         if (est !== undefined && visibleSizes.length > 0) {
           parts.push(`stimati ${(est / 1000).toFixed(1)} s per ${visibleSizes.length > 1 ? 'la coppia' : 'la pagina'} sullo schermo`)
         }
+        if (shown && shown.ms > 0) parts.push(`ultima pagina ${(shown.ms / 1000).toFixed(1)} s`)
         if (heavySkip === 'slow') parts.push(`oltre l’attesa massima di ${settings.maxQualityBudget} s: queste pagine usano la Super risoluzione`)
         else if (heavySkip === 'too-big') parts.push('pagina troppo grande per il modello: usa la Super risoluzione')
         else if (heavySkip === 'error') parts.push(`errore (${heavyError ?? 'sconosciuto'}): uso la Super risoluzione`)
@@ -777,6 +829,8 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
   }
 
   const label = spread.length ? spreadLabel(spread) : '–'
+  /** Where the pixels go: measured stage vs. screen, window and safe areas (to read a black band). */
+  const viewportDiagnostics = settingsOpen ? describeViewport(viewport, layout) : ''
   /** HD indicator: filled "HD" when the enhancement is on the page, dimmed while it works, struck when n/d. */
   const hdState: 'applied' | 'pending' | 'na' | null = !srBadge
     ? null
@@ -849,13 +903,16 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
           }}
           onClose={() => setSettingsOpen(false)}
           extra={<span data-testid="sr-status">{srStatusLine}</span>}
+          viewportInfo={viewportDiagnostics}
           maxQuality={
             <MaxQualityControls
               enabled={settings.maxQuality}
               budget={settings.maxQualityBudget}
+              model={settings.maxQualityModel}
               statusLine={mqStatusLine}
               onToggle={(v) => updateSettings({ maxQuality: v })}
               onBudget={(v) => updateSettings({ maxQualityBudget: v })}
+              onModel={(v) => updateSettings({ maxQualityModel: v })}
             />
           }
         />

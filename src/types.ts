@@ -75,6 +75,8 @@ export type SrLevel = 'auto' | 'M' | 'VL' | 'UL'
 export type SrScale = 'auto' | 'x2' | 'x4'
 /** Longest wait accepted for Real-ESRGAN on the visible spread, seconds (0 = no limit). */
 export type MaxQualityBudget = 3 | 5 | 10 | 0
+/** Real-ESRGAN network of "Qualità massima": the compact anime video v3 or the 6-block RRDB (about 9x the work). */
+export type MaxQualityModel = 'v3' | '6b'
 
 export interface ReaderSettings {
   direction: Direction
@@ -97,6 +99,7 @@ export interface ReaderSettings {
    * the spread uses the standard super resolution instead.
    */
   maxQualityBudget: MaxQualityBudget
+  maxQualityModel: MaxQualityModel
   theme: Theme
   stageBackground: StageBackground
   /** Centre margin between the two pages in double-page mode. */
@@ -121,6 +124,7 @@ export const DEFAULT_SETTINGS: ReaderSettings = {
   srClean: false,
   maxQuality: false,
   maxQualityBudget: 5,
+  maxQualityModel: 'v3',
   theme: 'system',
   stageBackground: 'default',
   gutter: 'm',

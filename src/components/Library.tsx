@@ -500,6 +500,9 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
               : 'Spazio disponibile: sconosciuto'}
           </span>
           <span>{books?.length ?? 0} nella libreria</span>
+          <span className="tabular-nums" data-testid="app-version">
+            Versione {__APP_VERSION__} ({__APP_BUILD__})
+          </span>
         </div>
         {showInstallHint && (
           <p className="mx-auto mt-2 w-full max-w-6xl" data-testid="install-hint">

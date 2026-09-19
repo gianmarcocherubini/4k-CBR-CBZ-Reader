@@ -12,6 +12,7 @@ export function loadSettings(): ReaderSettings {
     // The separate "Modello GAN pesante" switch was folded into "Qualità massima".
     const settings = { ...DEFAULT_SETTINGS, ...rest, maxQuality: Boolean(rest.maxQuality || ganModel) }
     if (![3, 5, 10, 0].includes(settings.maxQualityBudget)) settings.maxQualityBudget = DEFAULT_SETTINGS.maxQualityBudget
+    if (settings.maxQualityModel !== 'v3' && settings.maxQualityModel !== '6b') settings.maxQualityModel = DEFAULT_SETTINGS.maxQualityModel
     return settings
   } catch {
     return { ...DEFAULT_SETTINGS }

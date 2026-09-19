@@ -27,6 +27,8 @@ interface SettingsPanelProps {
   extra?: ReactNode
   /** The "Qualità massima" section. */
   maxQuality?: ReactNode
+  /** Measured reading area, window, screen and safe areas (diagnostics under "Adattamento"). */
+  viewportInfo?: string
 }
 
 export function Segmented<T extends string>({
@@ -105,6 +107,7 @@ export function SettingsPanel({
   onClose,
   extra,
   maxQuality,
+  viewportInfo,
 }: SettingsPanelProps) {
   return (
     <div className="absolute inset-0 z-30 flex justify-end bg-black/10" role="presentation" onClick={onClose}>
@@ -264,7 +267,20 @@ export function SettingsPanel({
             </Row>
           </Group>
 
-          <Group title="Adattamento" footer="Pizzica per ingrandire, doppio tocco al centro per lo zoom rapido. 1:1 = un pixel dell’immagine per pixel dello schermo.">
+          <Group
+            title="Adattamento"
+            footer={
+              <>
+                Pizzica per ingrandire, doppio tocco al centro per lo zoom rapido. 1:1 = un pixel dell’immagine per pixel dello schermo.
+                {viewportInfo && (
+                  <>
+                    <br />
+                    <span data-testid="viewport-info">Misure: {viewportInfo}.</span>
+                  </>
+                )}
+              </>
+            }
+          >
             <div className="row">
               <Segmented<FitMode>
                 className="w-full"

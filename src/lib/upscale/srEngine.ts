@@ -12,6 +12,10 @@ export interface SrResult {
   factor: number
   /** Wall time of the GPU passes + readback, ms. */
   ms: number
+  /** The Anime4K plan this result was computed with (absent for Real-ESRGAN results). */
+  plan?: SrPlan
+  /** Real-ESRGAN: number of self-ensemble passes averaged into this result. */
+  ensemble?: number
 }
 
 export interface SrOptions {
@@ -46,6 +50,13 @@ interface Task {
  * under two seconds, so the strongest level that fits here is chosen.
  */
 const AUTO_BUDGET_MS = 800
+/** A page slower than this (× budget) at the automatic level makes the level step down. */
+const AUTO_DOWNGRADE_FACTOR = 1.5
+/**
+ * Evicted bitmaps are closed a little later: React may still be painting them (or the ghost of a
+ * page turn). A closed ImageBitmap paints nothing, which is what a page going blank looks like.
+ */
+const CLOSE_DELAY_MS = 1200
 
 /** Bytes of an RGBA bitmap. */
 const bytesOf = (b: { width: number; height: number }) => b.width * b.height * 4
@@ -70,6 +81,12 @@ export function planUnits(level: Anime4KLevel, restore: boolean, passes: 1 | 2):
  * The output is always a fixed factor of the source (x2 or x4), never the size of the screen:
  * the view fits the result into its box afterwards. One result per page therefore serves every
  * zoom level, orientation and layout, and downsampling a x4 result is what gives clean lines.
+ *
+ * The automatic level is decided once, from the first measured page, and afterwards can only
+ * step down (a page far over budget). A page that already has a result under the current settings
+ * is never enhanced again because the level moved: re-deciding after every timing sample made the
+ * level flip around the budget threshold, and every flip re-enhanced the visible pages while the
+ * LRU closed the bitmaps still on screen — pages and the HD badge blinked on and off.
  */
 export class SrEngine {
   readonly upscaler: UpscaleBackend
@@ -82,6 +99,12 @@ export class SrEngine {
   private options: SrOptions = { level: 'auto', scale: 'auto', restore: false, clean: false }
   /** EMA of ms per (megapixel × plan unit). */
   private msPerUnit: number | undefined
+  /** Level chosen by `auto` after the probe page; undefined until then. */
+  private autoLevel: Anime4KLevel | undefined
+  /** Size (megapixels) and passes of the last measured page, for re-selecting the level on option changes. */
+  private lastMp = 1
+  private lastPasses: 1 | 2 = 2
+  private readonly pendingCloses = new Set<ReturnType<typeof setTimeout>>()
   private disposed = false
   onChange: (() => void) | null = null
 
@@ -91,6 +114,11 @@ export class SrEngine {
       this.disposed = true
       this.onChange?.()
     }
+  }
+
+  /** An engine over a given backend (tests inject a fake one). */
+  static withBackend(upscaler: UpscaleBackend): SrEngine {
+    return new SrEngine(upscaler)
   }
 
   /** WebGPU when available (iPadOS 26+), otherwise the WebGL2 runner of the same shaders. */
@@ -118,7 +146,29 @@ export class SrEngine {
     const o = this.options
     if (o.level === next.level && o.scale === next.scale && o.restore === next.restore && o.clean === next.clean) return
     this.options = { ...next }
+    // New settings change the cost per page: re-select the automatic level from the throughput
+    // already measured (no new probe); before any measurement the next page probes as usual.
+    if (o.scale !== next.scale || o.restore !== next.restore) this.autoLevel = this.select(next.restore, this.passesFor(next.scale))
     this.onChange?.()
+  }
+
+  /** Passes the current scale setting implies (auto: whatever the last page needed). */
+  private passesFor(scale: SrScale): 1 | 2 {
+    return scale === 'x2' ? 1 : scale === 'x4' ? 2 : this.lastPasses
+  }
+
+  /** Strongest level whose estimated time for a page like the last one fits the budget. */
+  private select(restore: boolean, passes: 1 | 2): Anime4KLevel | undefined {
+    if (this.msPerUnit === undefined) return undefined
+    const order: Anime4KLevel[] = ['M', 'VL', 'UL']
+    let best: Anime4KLevel = 'M'
+    for (const l of order) if (this.msPerUnit * planUnits(l, restore, passes) * this.lastMp <= AUTO_BUDGET_MS) best = l
+    return best
+  }
+
+  /** The level `auto` currently stands for (undefined before the first measured page). */
+  get currentAutoLevel(): Anime4KLevel | undefined {
+    return this.autoLevel
   }
 
   /** Maximum level allowed by device memory (rough jetsam guard). */
@@ -129,18 +179,39 @@ export class SrEngine {
     return 'UL'
   }
 
-  /** Level for a page of `size` under the current options (auto = strongest within the budget). */
-  resolveLevel(size: PageSize, passes: 1 | 2 = 1): Anime4KLevel {
+  /**
+   * Level for a page under the current options: the manual one, the sticky automatic one, or VL
+   * for the probe page (M on small-memory devices). `size` is unused: the automatic level is a
+   * property of the device, not of the page, so consecutive pages look the same.
+   */
+  resolveLevel(_size?: PageSize, _passes: 1 | 2 = 1): Anime4KLevel {
     const cap = this.memoryCap()
     const order: Anime4KLevel[] = ['M', 'VL', 'UL']
     const capIdx = order.indexOf(cap)
-    const { level, restore } = this.options
+    const { level } = this.options
     if (level !== 'auto') return order[Math.min(order.indexOf(level), capIdx)]!
-    if (this.msPerUnit === undefined) return capIdx >= 1 ? 'VL' : 'M' // probe with VL first
-    const mp = (size.w * size.h) / 1e6
-    let best: Anime4KLevel = 'M'
-    for (const l of order.slice(0, capIdx + 1)) if (this.msPerUnit * planUnits(l, restore, passes) * mp <= AUTO_BUDGET_MS) best = l
-    return best
+    if (this.autoLevel !== undefined) return order[Math.min(order.indexOf(this.autoLevel), capIdx)]!
+    return capIdx >= 1 ? 'VL' : 'M' // probe with VL first
+  }
+
+  /**
+   * Folds one measured page into the throughput estimate and settles the automatic level: chosen
+   * once from the probe (the strongest level within the budget for that page), stepped down when a
+   * page at that level ran far over budget, never stepped up again in this session.
+   */
+  private observe(plan: SrPlan, mp: number, ms: number): void {
+    const sample = ms / (mp * planUnits(plan.level, plan.restore, plan.passes))
+    this.msPerUnit = this.msPerUnit === undefined ? sample : this.msPerUnit * 0.6 + sample * 0.4
+    this.lastMp = mp
+    this.lastPasses = plan.passes
+    if (this.options.level !== 'auto') return
+    if (this.autoLevel === undefined) {
+      this.autoLevel = this.select(plan.restore, plan.passes)
+      return
+    }
+    const order: Anime4KLevel[] = ['M', 'VL', 'UL']
+    const idx = order.indexOf(this.autoLevel)
+    if (plan.level === this.autoLevel && idx > 0 && ms > AUTO_BUDGET_MS * AUTO_DOWNGRADE_FACTOR) this.autoLevel = order[idx - 1]!
   }
 
   /** Measured cost estimate for the UI, ms per page (undefined before the probe). */
@@ -188,14 +259,42 @@ export class SrEngine {
     return `${index}:${plan.level}:${plan.passes}:${plan.restore ? 'r' : '-'}:${plan.clean ? 'c' : '-'}:${plan.target.w}x${plan.target.h}`
   }
 
+  private indexOf(key: string): number {
+    return Number(key.split(':')[0])
+  }
+
+  /**
+   * Whether an existing result satisfies `plan` under the current settings. With the automatic
+   * level any level does: the level is the engine's business, not a reason to redo a page.
+   */
+  private compatible(result: SrResult, plan: SrPlan): boolean {
+    const p = result.plan
+    if (!p) return false
+    if (p.passes !== plan.passes || p.restore !== plan.restore || p.clean !== plan.clean) return false
+    if (p.target.w !== plan.target.w || p.target.h !== plan.target.h) return false
+    return this.options.level === 'auto' || p.level === plan.level
+  }
+
+  private touch(key: string, result: SrResult): void {
+    this.cache.delete(key)
+    this.cache.set(key, result)
+  }
+
+  /** A cached result for this page that satisfies `plan` (see `compatible`), most recent first. */
   peek(index: number, plan: SrPlan): SrResult | undefined {
-    const k = this.key(index, plan)
-    const hit = this.cache.get(k)
+    const exact = this.key(index, plan)
+    const hit = this.cache.get(exact)
     if (hit) {
-      this.cache.delete(k)
-      this.cache.set(k, hit)
+      this.touch(exact, hit)
+      return hit
     }
-    return hit
+    for (const [key, result] of [...this.cache].reverse()) {
+      if (this.indexOf(key) === index && this.compatible(result, plan)) {
+        this.touch(key, result)
+        return result
+      }
+    }
+    return undefined
   }
 
   /** Pages currently on screen; work not yet started for other pages is dropped. */
@@ -214,11 +313,16 @@ export class SrEngine {
     if (existing) return existing.promise
     const run = async (): Promise<SrResult> => {
       if (!this.wanted.has(index) || !this.available) throw new SrAborted()
+      // Decided when the work starts, not when it was requested: the probe may have settled meanwhile.
+      const again = this.peek(index, plan)
+      if (again) return again
       const result = await this.run(plan, source)
       if (this.disposed) {
         result.bitmap.close()
         throw new SrAborted()
       }
+      // One result per page: an older variant (other settings) is replaced, not kept alongside.
+      for (const [k, r] of this.cache) if (this.indexOf(k) === index) this.drop(k, r)
       this.cache.set(key, result)
       this.cacheBytes += bytesOf(result.bitmap)
       this.evict()
@@ -231,15 +335,23 @@ export class SrEngine {
     return promise
   }
 
-  /** LRU eviction by bytes; pages still wanted are spared unless the cache is far over budget. */
+  /** LRU eviction by bytes; results of the pages on screen are never evicted. */
   private evict(): void {
     for (const [key, r] of this.cache) {
       if (this.cacheBytes <= this.budget) break
-      if (this.wanted.has(Number(key.split(':')[0])) && this.cacheBytes <= this.budget * 1.5) continue
-      this.cache.delete(key)
-      this.cacheBytes -= bytesOf(r.bitmap)
-      r.bitmap.close()
+      if (this.wanted.has(this.indexOf(key))) continue
+      this.drop(key, r)
     }
+  }
+
+  private drop(key: string, r: SrResult): void {
+    this.cache.delete(key)
+    this.cacheBytes -= bytesOf(r.bitmap)
+    const timer = setTimeout(() => {
+      this.pendingCloses.delete(timer)
+      r.bitmap.close()
+    }, CLOSE_DELAY_MS)
+    this.pendingCloses.add(timer)
   }
 
   /** Bytes currently held by enhanced bitmaps (for the settings status line). */
@@ -270,13 +382,9 @@ export class SrEngine {
         result = await this.upscaler.upscale(intermediate, { level: 'M', restore: false, clean: plan.clean, target: plan.target })
       }
       const ms = performance.now() - t0
-      if (!built1 && !built2) {
-        const mp = (source.width * source.height) / 1e6
-        const sample = ms / (mp * planUnits(plan.level, plan.restore, plan.passes))
-        this.msPerUnit = this.msPerUnit === undefined ? sample : this.msPerUnit * 0.6 + sample * 0.4
-      }
+      if (!built1 && !built2) this.observe(plan, (source.width * source.height) / 1e6, ms)
       const bitmap = await createImageBitmap(new ImageData(result.data, result.width, result.height))
-      return { bitmap, level: plan.level, factor: plan.passes === 2 ? 4 : 2, ms }
+      return { bitmap, level: plan.level, factor: plan.passes === 2 ? 4 : 2, ms, plan }
     } finally {
       source.close()
       intermediate?.close()
@@ -285,7 +393,13 @@ export class SrEngine {
 
   dispose(): void {
     this.disposed = true
-    for (const r of this.cache.values()) r.bitmap.close()
+    for (const timer of this.pendingCloses) clearTimeout(timer)
+    this.pendingCloses.clear()
+    // The view may still hold these bitmaps for a frame: close them a moment later.
+    const bitmaps = [...this.cache.values()].map((r) => r.bitmap)
+    setTimeout(() => {
+      for (const b of bitmaps) b.close()
+    }, CLOSE_DELAY_MS)
     this.cache.clear()
     this.cacheBytes = 0
     this.upscaler.dispose()

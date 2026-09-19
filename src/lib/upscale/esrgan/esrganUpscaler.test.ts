@@ -4,6 +4,7 @@ import { esrganFactor, planBands, workPixels } from './esrganUpscaler'
 import { CONTEXT } from './weights'
 
 const F16_BYTES_PER_PIXEL = 16 * 8
+const MAX_ACT = 48 * 1024 * 1024
 
 describe('esrganFactor', () => {
   it('uses x4 when it fits the canvas cap, x2 when only x2 fits, and refuses oversized pages', () => {
@@ -25,8 +26,10 @@ describe('esrganFactor', () => {
 describe('planBands', () => {
   it('cuts a typical page into bands that cover every row exactly once', () => {
     const size = { w: 800, h: 1200 }
-    const plan = planBands(size, F16_BYTES_PER_PIXEL)!
+    const plan = planBands(size, F16_BYTES_PER_PIXEL, MAX_ACT)!
     expect(plan.bw).toBe(800 + 2 * CONTEXT)
+    // Odd widths are padded to a multiple of 4 (sub-range alignment of the activation buffers).
+    expect(planBands({ w: 801, h: 1200 }, F16_BYTES_PER_PIXEL, MAX_ACT)!.bw).toBe(852)
     expect(plan.coreRows).toBeGreaterThan(0)
     expect(plan.bands).toBe(Math.ceil(1200 / plan.coreRows))
     expect((plan.bands - 1) * plan.coreRows).toBeLessThan(1200)
@@ -35,18 +38,18 @@ describe('planBands', () => {
   })
 
   it('shrinks the bands for wide pages and gives up when even a few rows do not fit', () => {
-    const wide = planBands({ w: 2400, h: 1600 }, F16_BYTES_PER_PIXEL)!
-    const normal = planBands({ w: 800, h: 1200 }, F16_BYTES_PER_PIXEL)!
+    const wide = planBands({ w: 2400, h: 1600 }, F16_BYTES_PER_PIXEL, MAX_ACT)!
+    const normal = planBands({ w: 800, h: 1200 }, F16_BYTES_PER_PIXEL, MAX_ACT)!
     expect(wide.coreRows).toBeLessThan(normal.coreRows)
     expect(planBands({ w: 2400, h: 1600 }, F16_BYTES_PER_PIXEL, 1024 * 1024)).toBeNull()
   })
 
   it('a small image is a single band and f32 activations halve the rows', () => {
-    const tiny = planBands({ w: 40, h: 56 }, F16_BYTES_PER_PIXEL)!
+    const tiny = planBands({ w: 40, h: 56 }, F16_BYTES_PER_PIXEL, MAX_ACT)!
     expect(tiny.bands).toBe(1)
     expect(tiny.coreRows).toBe(56)
-    const f16 = planBands({ w: 3000, h: 1200 }, F16_BYTES_PER_PIXEL)!
-    const f32 = planBands({ w: 3000, h: 1200 }, F16_BYTES_PER_PIXEL * 2)!
+    const f16 = planBands({ w: 3000, h: 1200 }, F16_BYTES_PER_PIXEL, MAX_ACT)!
+    const f32 = planBands({ w: 3000, h: 1200 }, F16_BYTES_PER_PIXEL * 2, MAX_ACT)!
     expect(f32.coreRows).toBeLessThan(f16.coreRows)
   })
 })
@@ -54,9 +57,19 @@ describe('planBands', () => {
 describe('workPixels', () => {
   it('counts the context of every band, so the cost estimate scales with what the GPU really does', () => {
     const size = { w: 800, h: 1200 }
-    const plan = planBands(size, F16_BYTES_PER_PIXEL)!
-    const px = workPixels(size, F16_BYTES_PER_PIXEL)
+    const plan = planBands(size, F16_BYTES_PER_PIXEL, MAX_ACT)!
+    const px = workPixels(size, F16_BYTES_PER_PIXEL, MAX_ACT)
     expect(px).toBeGreaterThan(size.w * size.h)
     expect(px).toBe(plan.bw * (size.h + plan.bands * 2 * CONTEXT))
+  })
+})
+
+describe('RRDB band planning', () => {
+  it('fits a typical page in bands of about 150 rows under the 128 MB trunk budget', () => {
+    const rrdbBytesPerPixel = (16 * 4 + 32 + 8 + 16) * 8
+    const plan = planBands({ w: 800, h: 1200 }, rrdbBytesPerPixel, 128 * 1024 * 1024)!
+    expect(plan.coreRows).toBeGreaterThanOrEqual(100)
+    expect(plan.coreRows).toBeLessThanOrEqual(160)
+    expect(plan.bw * (plan.coreRows + 2 * CONTEXT) * rrdbBytesPerPixel).toBeLessThanOrEqual(128 * 1024 * 1024)
   })
 })

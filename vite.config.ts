@@ -1,5 +1,7 @@
 import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
+import { execSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import { defineConfig } from 'vite'
 import { VitePWA } from 'vite-plugin-pwa'
 
@@ -7,8 +9,25 @@ import { VitePWA } from 'vite-plugin-pwa'
 const repo = process.env.GITHUB_REPOSITORY?.split('/')[1]
 const base = process.env.VITE_BASE ?? (repo ? `/${repo}/` : '/')
 
+// Shown in the library footer, so an installed (and possibly stale) app can be told apart.
+const { version } = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as { version: string }
+function commitHash(): string {
+  const sha = process.env.GITHUB_SHA
+  if (sha) return sha.slice(0, 7)
+  try {
+    return execSync('git rev-parse --short HEAD', { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim()
+  } catch {
+    return 'dev'
+  }
+}
+const build = `${commitHash()} · ${new Date().toISOString().slice(0, 10)}`
+
 export default defineConfig({
   base,
+  define: {
+    __APP_VERSION__: JSON.stringify(version),
+    __APP_BUILD__: JSON.stringify(build),
+  },
   plugins: [
     react(),
     tailwindcss(),
@@ -43,8 +62,10 @@ export default defineConfig({
         ],
       },
       injectManifest: {
-        // .bin: the 1.2 MB Real-ESRGAN weights, so "Qualità massima" works offline too.
+        // .bin: the 1.2 MB Real-ESRGAN anime v3 weights, so "Qualità massima" works offline too. The
+        // 9 MB 6B weights are optional: fetched (and runtime-cached) the first time that model is chosen.
         globPatterns: ['**/*.{js,css,html,svg,png,ico,wasm,bin,woff2}'],
+        globIgnores: ['**/realesrgan-x4plus-anime-6b*'],
         maximumFileSizeToCacheInBytes: 8 * 1024 * 1024,
       },
       devOptions: { enabled: false },
