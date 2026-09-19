@@ -29,6 +29,8 @@ declare global {
     __reader?: {
       importFiles: (files: File[]) => Promise<void>
       openSession: (file: File) => Promise<void>
+      /** Compares the Real-ESRGAN WebGPU kernels with the float32 reference on a synthetic image. */
+      esrganSelfTest: (opts?: import('../lib/upscale/esrgan/selfTest').SelfTestOptions) => Promise<import('../lib/upscale/esrgan/selfTest').SelfTestResult>
     }
   }
 }
@@ -200,7 +202,11 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
   // Test hooks (dev / ?test): drive imports without a file picker.
   useEffect(() => {
     if (!flags.test) return
-    window.__reader = { importFiles: startImport, openSession }
+    window.__reader = {
+      importFiles: startImport,
+      openSession,
+      esrganSelfTest: (opts) => import('../lib/upscale/esrgan/selfTest').then((m) => m.esrganSelfTest(opts)),
+    }
     return () => {
       delete window.__reader
     }

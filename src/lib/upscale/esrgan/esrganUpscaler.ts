@@ -123,6 +123,8 @@ export class EsrganUpscaler {
   private buffers: BandBuffers | null = null
   private lost = false
   onLost: (() => void) | null = null
+  /** Activation-buffer cap used to cut bands (tests lower it to exercise multi-band seams on tiny images). */
+  maxActBytes = MAX_ACT_BYTES
 
   private constructor(
     device: GPUDevice,
@@ -172,24 +174,38 @@ export class EsrganUpscaler {
     })
     const adapterInfo = (adapter as GPUAdapter & { info?: GPUAdapterInfo }).info
     const name = adapterInfo ? [adapterInfo.vendor, adapterInfo.architecture, adapterInfo.description].filter(Boolean).join(' ') : ''
-    const options: KernelOptions = { f16 }
-    const compile = (label: string, code: string) =>
-      device.createComputePipelineAsync({
-        label,
-        layout: 'auto',
-        compute: { module: device.createShaderModule({ label, code }), entryPoint: 'main' },
-      })
-    try {
+    const compile = async (options: KernelOptions) => {
+      const pipeline = (label: string, code: string) =>
+        device.createComputePipelineAsync({
+          label,
+          layout: 'auto',
+          compute: { module: device.createShaderModule({ label, code }), entryPoint: 'main' },
+        })
       const [first, body, last, shuffle] = await Promise.all([
-        compile('esrgan-conv-first', convFirstWgsl(options)),
-        compile('esrgan-conv-body', convBodyWgsl(options, 64, true)),
-        compile('esrgan-conv-last', convBodyWgsl(options, 48, false)),
-        compile('esrgan-shuffle', shuffleWgsl(options)),
+        pipeline('esrgan-conv-first', convFirstWgsl(options)),
+        pipeline('esrgan-conv-body', convBodyWgsl(options, 64, true)),
+        pipeline('esrgan-conv-last', convBodyWgsl(options, 48, false)),
+        pipeline('esrgan-shuffle', shuffleWgsl(options)),
       ])
-      return new EsrganUpscaler(device, { adapter: name || 'WebGPU', precision: f16 ? 'f16' : 'f32' }, weights, options, { first, body, last, shuffle })
+      return { first, body, last, shuffle }
+    }
+    try {
+      let options: KernelOptions = { f16 }
+      let pipelines: EsrganUpscaler['pipelines']
+      try {
+        pipelines = await compile(options)
+      } catch (e) {
+        // A driver may advertise shader-f16 and still reject the half-precision kernels: the f32
+        // kernels are the same network, only slower.
+        if (!f16) throw e
+        console.warn('Real-ESRGAN: kernel f16 rifiutati, uso f32.', e)
+        options = { f16: false }
+        pipelines = await compile(options)
+      }
+      return new EsrganUpscaler(device, { adapter: name || 'WebGPU', precision: options.f16 ? 'f16' : 'f32' }, weights, options, pipelines)
     } catch (e) {
       device.destroy()
-      throw e
+      throw e instanceof Error ? e : new Error(String(e))
     }
   }
 
@@ -201,7 +217,7 @@ export class EsrganUpscaler {
   canUpscale(size: PageSize): EsrganFactor | null {
     const factor = esrganFactor(size)
     if (!factor) return null
-    if (!planBands(size, this.bytesPerPixel)) return null
+    if (!planBands(size, this.bytesPerPixel, this.maxActBytes)) return null
     const outBytes = size.w * size.h * factor * factor * 4
     const limits = this.device.limits
     if (outBytes > limits.maxStorageBufferBindingSize || outBytes > limits.maxBufferSize) return null
@@ -260,7 +276,7 @@ export class EsrganUpscaler {
     if (this.lost) throw new Error('WebGPU device lost')
     const W = source.width
     const H = source.height
-    const plan = planBands({ w: W, h: H }, this.bytesPerPixel)
+    const plan = planBands({ w: W, h: H }, this.bytesPerPixel, this.maxActBytes)
     if (!plan) throw new Error(`Pagina ${W}×${H} troppo larga per il modello`)
     const outW = W * factor
     const outH = H * factor

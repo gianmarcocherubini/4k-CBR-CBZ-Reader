@@ -127,7 +127,7 @@ test('Anime4K super resolution: enhanced canvas, badge, level probe, faithful ou
   await expect(page.locator('[data-testid=page][data-page="1"]')).toHaveAttribute('data-sr', 'M', { timeout: 45_000 })
   await page.getByRole('button', { name: 'Chiudi impostazioni' }).click()
 
-  // Turning the page keeps enhancing (preloaded pages are already done or in flight).
+  // Turning the page enhances the new spread on demand (no read-ahead).
   await page.keyboard.press('ArrowLeft')
   await expect(page.getByTestId('page-label')).toHaveText('2-3')
   await expect(page.locator('[data-testid=page][data-page="2"] canvas[data-testid=enhanced]')).toBeVisible({ timeout: 45_000 })
@@ -245,37 +245,52 @@ test('WebGL2 fallback runs the same shaders and matches the WebGPU output', asyn
   expect(psnr).toBeGreaterThan(40)
 })
 
-test('Qualità massima: Real-ESRGAN x4 batch job, results win over Anime4K and survive a reload', async ({ page }) => {
+test('Real-ESRGAN WebGPU kernels match the float32 reference, band seams included', async ({ page }) => {
+  test.setTimeout(10 * 60_000)
+  await page.goto('/?test')
+  const hasWebGPU = await page.evaluate(async () => !!(navigator as Navigator & { gpu?: GPU }).gpu && !!(await (navigator as Navigator & { gpu?: GPU }).gpu!.requestAdapter()))
+  test.skip(!hasWebGPU, 'needs WebGPU')
+  type Hooks = { __reader?: { esrganSelfTest: (o: { width: number; height: number; smallBands: boolean }) => Promise<SelfTest> } }
+  type SelfTest = { precision: 'f16' | 'f32'; bands: number; x4: { psnr: number; maxDiff: number }; x2: { psnr: number; maxDiff: number } }
+  await page.waitForFunction(() => !!(window as unknown as Hooks).__reader)
+  // A 40x56 image cut into 8-row bands: every seam of the tiled path is exercised.
+  const result = await page.evaluate(() => (window as unknown as Hooks).__reader!.esrganSelfTest({ width: 40, height: 56, smallBands: true }))
+  console.log('Real-ESRGAN self-test:', JSON.stringify(result))
+  expect(result.bands).toBeGreaterThan(1)
+  // f32 kernels reproduce the reference to the rounding bit; f16 storage/arithmetic stays visually identical.
+  const minPsnr = result.precision === 'f16' ? 38 : 60
+  const maxDiff = result.precision === 'f16' ? 12 : 2
+  expect(result.x4.psnr).toBeGreaterThan(minPsnr)
+  expect(result.x4.maxDiff).toBeLessThanOrEqual(maxDiff)
+  expect(result.x2.psnr).toBeGreaterThan(minPsnr)
+  expect(result.x2.maxDiff).toBeLessThanOrEqual(maxDiff)
+})
+
+test('Qualità massima: Real-ESRGAN x4 on the visible page only, time budget falls back to Anime4K', async ({ page }) => {
   test.setTimeout(15 * 60_000)
   await page.goto('/')
+  const hasWebGPU = await page.evaluate(async () => !!(navigator as Navigator & { gpu?: GPU }).gpu && !!(await (navigator as Navigator & { gpu?: GPU }).gpu!.requestAdapter()))
+  test.skip(!hasWebGPU, 'needs WebGPU')
   await importAndOpen(page, 'tiny-book.cbz', 'tiny-book')
   await page.mouse.move(590, 410)
   await page.getByTestId('settings').click()
   await expect(page.getByTestId('mq-status')).toContainText('Disattivata')
-  // The preference stays checked, but its engine and controls are disabled while the heavy tier
-  // is active: only one enhanced/plain swap can happen.
-  await expect(page.getByRole('switch', { name: 'Super risoluzione' })).toHaveAttribute('aria-checked', 'true')
+  // No batch job, no queue: only the switch and the time budget.
+  await expect(page.getByTestId('mq-start')).toHaveCount(0)
   await page.getByRole('switch', { name: 'Qualità massima' }).click()
-  await expect(page.getByTestId('sr-section').locator('..')).toHaveAttribute('aria-disabled', 'true')
+  await page.getByTestId('mq-budget-0').click() // "Sempre": a software GPU must not be excluded by the budget
+  // The Anime4K controls stay enabled: it is the fallback, not a replaced tier.
+  await expect(page.getByTestId('sr-section').locator('..')).not.toHaveAttribute('aria-disabled', 'true')
   const status = page.getByTestId('mq-status')
-  await expect(status).not.toContainText('Caricamento', { timeout: 180_000 })
+  await expect(status).not.toContainText('Inizializzazione', { timeout: 5 * 60_000 })
   const text = (await status.textContent()) ?? ''
-  test.skip(text.includes('non disponibile su questo server'), 'GAN model not fetched (npm run setup)')
-  expect(text).toMatch(/Real-ESRGAN anime 6B \(GAN\) ×4 · (WebGPU|CPU)/)
-  const hasShaderF16 = await page.evaluate(async () => {
-    const gpu = (navigator as Navigator & { gpu?: GPU }).gpu
-    return !!gpu && (await gpu.requestAdapter({ powerPreference: 'high-performance' }))?.features.has('shader-f16') === true
-  })
-  if (text.includes('WebGPU') && hasShaderF16) expect(text).toContain('WebGPU FP16 · graph capture')
-  console.log('GAN:', text)
-
-  await page.getByTestId('mq-start').click()
-  await expect(page.getByTestId('mq-cancel')).toBeVisible()
-  await expect(page.getByText(/^Completato: 2 pagine in cache\./)).toBeVisible({ timeout: 12 * 60_000 })
+  console.log('Qualità massima:', text)
+  expect(text).toMatch(/Real-ESRGAN anime v3 ×4 · WebGPU F(16|32)/)
+  expect(text).toMatch(/stimati [\d.]+ s per la pagina/)
   await page.getByRole('button', { name: 'Chiudi impostazioni' }).click()
 
   const p1 = page.locator('[data-testid=page][data-page="1"]')
-  await expect(p1).toHaveAttribute('data-sr', 'GAN', { timeout: 30_000 })
+  await expect(p1).toHaveAttribute('data-sr', 'GAN', { timeout: 8 * 60_000 })
   // Native x4 output (300 px pages -> 1200), fitted to the box.
   await expect(p1.locator('canvas[data-testid=enhanced]')).toHaveAttribute('data-sr-width', '1200')
   await page.mouse.move(600, 420)
@@ -303,83 +318,26 @@ test('Qualità massima: Real-ESRGAN x4 batch job, results win over Anime4K and s
   expect(stats.dark).toBeGreaterThan(stats.total * 0.02)
   expect(stats.light).toBeGreaterThan(stats.total * 0.3)
 
-  // Cached results are served after a reload without recomputing.
-  await page.reload()
-  await expect(page.getByTestId('reader')).toHaveAttribute('data-status', 'ready', { timeout: 20_000 })
-  await expect(page.locator('[data-testid=page][data-page="1"]')).toHaveAttribute('data-sr', 'GAN', { timeout: 15_000 })
+  // Going back to an already processed page is instant (in-memory LRU), the next one is computed on demand.
   await page.keyboard.press('ArrowLeft')
-  await expect(page.locator('[data-testid=page][data-page="2"]')).toHaveAttribute('data-sr', 'GAN', { timeout: 15_000 })
-})
+  await expect(page.getByTestId('page-label')).toHaveText('2')
+  await expect(page.locator('[data-testid=page][data-page="2"]')).toHaveAttribute('data-sr', 'GAN', { timeout: 8 * 60_000 })
+  await page.keyboard.press('ArrowRight')
+  await expect(page.getByTestId('page-label')).toHaveText('1')
+  await expect(p1).toHaveAttribute('data-sr', 'GAN', { timeout: 5_000 })
 
-test('GAN requeues pruned pages and reveals a double spread atomically', async ({ page }) => {
-  test.setTimeout(5 * 60_000)
-  await page.goto('/')
-  await importAndOpen(page, 'tiny-queue.cbz', 'tiny-queue')
-  await page.mouse.move(590, 410)
+  // With a 3 s budget a GPU that predicts more (the software renderer of CI does) hands the spread to Anime4K.
+  const estimated = Number(/stimati ([\d.]+) s/.exec(text)?.[1] ?? '0')
+  await page.mouse.move(600, 420)
   await page.getByTestId('settings').click()
-  await page.getByRole('switch', { name: 'Qualità massima' }).click()
-  const status = page.getByTestId('mq-status')
-  await expect(status).not.toContainText('Caricamento', { timeout: 180_000 })
-  const statusText = (await status.textContent()) ?? ''
-  test.skip(!statusText.includes('WebGPU'), 'on-demand queue needs WebGPU')
-
-  // Disabling Anime4K dims controls, not their card/background (the comic must not show through).
-  const srWrapper = page.getByTestId('sr-section').locator('..')
-  await expect(srWrapper).toHaveCSS('opacity', '1')
-  const cardAlpha = await page
-    .getByTestId('sr-section')
-    .locator('.group-card')
-    .evaluate((element) => getComputedStyle(element).backgroundColor)
-  expect(cardAlpha).not.toMatch(/rgba\([^)]*,\s*0(?:\.0+)?\)$/)
-  await page.getByRole('button', { name: 'Chiudi impostazioni' }).click()
-
-  // Drop queued read-ahead jobs, then immediately turn onto pages 2-3. Before the fix those
-  // dropped Promises stayed in `inflight` forever and these pages could never be requeued.
-  await page.keyboard.press('End')
-  await page.keyboard.press('Home')
-  await page.keyboard.press('ArrowLeft')
-  await expect(page.getByTestId('page-label')).toHaveText('2-3')
-  await page.evaluate(() => {
-    const state = (window as unknown as { __partialGan?: boolean; __ganObserver?: MutationObserver })
-    state.__partialGan = false
-    state.__ganObserver = new MutationObserver(() => {
-      const pages = [...document.querySelectorAll('[data-testid="page"]')]
-      const enhanced = pages.filter((element) => element.getAttribute('data-sr') === 'GAN').length
-      if (pages.length === 2 && enhanced === 1) state.__partialGan = true
-    })
-    state.__ganObserver.observe(document.body, { subtree: true, attributes: true, childList: true })
-  })
-  const p2 = page.locator('[data-testid=page][data-page="2"]')
-  const p3 = page.locator('[data-testid=page][data-page="3"]')
-  await expect(p2).toHaveAttribute('data-sr', 'GAN', { timeout: 120_000 })
-  await expect(p3).toHaveAttribute('data-sr', 'GAN', { timeout: 120_000 })
-  await expect(p2.locator('canvas[data-testid=enhanced]')).toBeVisible()
-  await expect(p3.locator('canvas[data-testid=enhanced]')).toBeVisible()
-  expect(await page.evaluate(() => (window as unknown as { __partialGan?: boolean }).__partialGan)).toBe(false)
-  await page.evaluate(() => (window as unknown as { __ganObserver?: MutationObserver }).__ganObserver?.disconnect())
-})
-
-test('Qualità massima on the CPU (WebAssembly threads): batch job only', async ({ page }) => {
-  test.setTimeout(20 * 60_000)
-  await page.goto('/?cunet=wasm')
-  await importAndOpen(page, 'tiny-book.cbz', 'tiny-book')
-  await page.mouse.move(590, 410)
-  await page.getByTestId('settings').click()
-  await page.getByRole('switch', { name: 'Qualità massima' }).click()
-  const status = page.getByTestId('mq-status')
-  await expect(status).not.toContainText('Caricamento', { timeout: 180_000 })
-  const text = (await status.textContent()) ?? ''
-  test.skip(text.includes('non disponibile su questo server'), 'GAN model not fetched (npm run setup)')
-  expect(text).toContain('CPU (WebAssembly')
-  const isolated = await page.evaluate(() => crossOriginIsolated)
-  console.log('GAN CPU:', text, '| crossOriginIsolated:', isolated)
-  if (isolated) expect(text).toMatch(/[2-9] thread|1[0-9] thread/)
-  const t0 = Date.now()
-  await page.getByTestId('mq-start').click()
-  await expect(page.getByText(/^Completato: 2 pagine in cache\./)).toBeVisible({ timeout: 16 * 60_000 })
-  console.log(`CPU batch of 2 tiny pages: ${((Date.now() - t0) / 1000).toFixed(1)} s`)
-  await page.getByRole('button', { name: 'Chiudi impostazioni' }).click()
-  await expect(page.locator('[data-testid=page][data-page="1"]')).toHaveAttribute('data-sr', 'GAN', { timeout: 30_000 })
+  await page.getByTestId('mq-budget-3').click()
+  if (estimated > 3) {
+    await expect(page.getByTestId('mq-status')).toContainText('oltre l’attesa massima di 3 s')
+    await expect(p1).toHaveAttribute('data-sr', /^(M|VL|UL)$/, { timeout: 90_000 })
+    await expect(badge(page)).toHaveAttribute('aria-label', /SR ×(2|4) (M|VL|UL)$/)
+  } else {
+    await expect(p1).toHaveAttribute('data-sr', 'GAN')
+  }
 })
 
 test('factor x4 / x2 / auto, "Linee nitide", "Pulizia scansione"', async ({ page }) => {
