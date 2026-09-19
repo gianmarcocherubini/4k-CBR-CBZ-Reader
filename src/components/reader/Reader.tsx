@@ -560,8 +560,12 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
         else if (pages.some((i) => heavy.factorFor(sizes[i]!) === null)) skip = 'too-big'
         else {
           const est = heavy.estimateMs(pages.map((i) => sizes[i]!))
-          if (heavyBudgetMs > 0 && est !== undefined && est > heavyBudgetMs) skip = 'slow'
-          else useHeavy = true
+          if (heavyBudgetMs > 0 && est !== undefined && est > heavyBudgetMs) {
+            skip = 'slow'
+            // The estimate may have been taken while Anime4K kept the GPU busy: measure again so the
+            // next spread decides on fresh numbers.
+            heavy.reprobe()
+          } else useHeavy = true
         }
         heavyDecision.current = { key: decisionKey, use: useHeavy, skip }
       }

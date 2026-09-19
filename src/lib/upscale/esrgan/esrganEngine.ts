@@ -9,6 +9,22 @@ export { EsrganAborted } from './esrganUpscaler'
 
 /** Time not covered by the per-pixel cost: readback, bitmap creation, scheduling (ms per page). */
 const FIXED_MS_PER_PAGE = 80
+/** Probe image: one band of a typical page, enough work for a meaningful timing. */
+const PROBE = { w: 256, h: 160 }
+const REPROBE_INTERVAL_MS = 8000
+
+function synthetic(w: number, h: number): ImageBitmap {
+  const canvas = new OffscreenCanvas(w, h)
+  const ctx = canvas.getContext('2d')!
+  const g = ctx.createLinearGradient(0, 0, w, h)
+  g.addColorStop(0, '#ffffff')
+  g.addColorStop(1, '#202020')
+  ctx.fillStyle = g
+  ctx.fillRect(0, 0, w, h)
+  ctx.fillStyle = '#000'
+  for (let i = 0; i < 12; i++) ctx.fillRect((i * 37) % w, (i * 53) % h, 3, h / 3)
+  return canvas.transferToImageBitmap()
+}
 
 interface Task {
   key: string
@@ -83,33 +99,50 @@ export class EsrganEngine {
    * one band-sized image so the first real page already has an estimate.
    */
   private async benchmark(): Promise<void> {
-    const synthetic = (w: number, h: number) => {
-      const canvas = new OffscreenCanvas(w, h)
-      const ctx = canvas.getContext('2d')!
-      const g = ctx.createLinearGradient(0, 0, w, h)
-      g.addColorStop(0, '#ffffff')
-      g.addColorStop(1, '#202020')
-      ctx.fillStyle = g
-      ctx.fillRect(0, 0, w, h)
-      ctx.fillStyle = '#000'
-      for (let i = 0; i < 12; i++) ctx.fillRect((i * 37) % w, (i * 53) % h, 3, h / 3)
-      return canvas.transferToImageBitmap()
-    }
     const warm = synthetic(64, 64)
     try {
       await this.upscaler.upscale(warm, 4)
     } finally {
       warm.close()
     }
-    const probe = synthetic(256, 160)
+    await this.probe()
+  }
+
+  /** Times the probe image and folds the sample into the throughput estimate. */
+  private async probe(): Promise<void> {
+    const probe = synthetic(PROBE.w, PROBE.h)
     try {
       const t0 = performance.now()
       await this.upscaler.upscale(probe, 4)
       const ms = performance.now() - t0
-      this.msPerWorkMegapixel = Math.max(0.01, ms - FIXED_MS_PER_PAGE / 4) / (workPixels({ w: 256, h: 160 }, this.upscaler.bytesPerPixel) / 1e6)
+      const sample = Math.max(0.01, ms - FIXED_MS_PER_PAGE / 4) / (workPixels(PROBE, this.upscaler.bytesPerPixel) / 1e6)
+      this.msPerWorkMegapixel = this.msPerWorkMegapixel === undefined ? sample : this.msPerWorkMegapixel * 0.5 + sample * 0.5
+      this.lastProbeAt = performance.now()
     } finally {
       probe.close()
     }
+  }
+
+  private lastProbeAt = 0
+  private reprobing = false
+
+  /**
+   * Measures the GPU again (at most every few seconds, after any page in flight). Called when a
+   * spread is skipped for time: a probe taken while another engine was busy must not lock the
+   * whole session out of the model.
+   */
+  reprobe(): void {
+    if (!this.available || this.reprobing || performance.now() - this.lastProbeAt < REPROBE_INTERVAL_MS) return
+    this.reprobing = true
+    const run = async () => {
+      if (!this.available) return
+      await this.probe()
+      this.onChange?.()
+    }
+    const promise = this.chain.then(run, run).finally(() => {
+      this.reprobing = false
+    })
+    this.chain = promise.catch(() => undefined)
   }
 
   get available(): boolean {
