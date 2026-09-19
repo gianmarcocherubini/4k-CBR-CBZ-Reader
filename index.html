@@ -15,7 +15,11 @@
     <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#000000" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <!--
+      Opaque status bar (follows light/dark). With black-translucent, iPadOS shifts the web view of an
+      installed app down by the status bar height and leaves an unused black band at the bottom.
+    -->
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="apple-mobile-web-app-title" content="Reader" />
     <meta name="description" content="Lettore di fumetti e manga (CBZ/CBR) ad alta risoluzione per iPad" />
     <link rel="icon" type="image/svg+xml" href="/icons/icon.svg" />

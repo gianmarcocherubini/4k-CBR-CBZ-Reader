@@ -136,13 +136,10 @@ body {
 }
 
 /* The reader must cover the visual viewport, including the landscape home-indicator strip. */
+/* Spans the whole layout viewport, whatever iPadOS makes of it (status bar, safe areas). */
 .reader-shell {
   position: fixed;
   inset: 0;
-  width: 100vw;
-  height: 100vh;
-  height: 100dvh;
-  min-height: -webkit-fill-available;
 }
 
 /* Safe areas for the home-screen app (notch / home indicator). */
@@ -155,24 +152,6 @@ body {
 .px-safe {
   padding-left: env(safe-area-inset-left, 0px);
   padding-right: env(safe-area-inset-right, 0px);
-}
-
-/*
- * Installed PWA: with apple-mobile-web-app-status-bar-style=black-translucent the content uses the
- * full screen height (the reader gains the ~50 px the status bar used to reserve). iOS then draws
- * the clock/battery in white over the very top; a faint scrim in that strip keeps them legible on
- * light pages. iOS cannot hide the status bar in an installed app — only Safari's Fullscreen can.
- */
-@media (display-mode: standalone), (display-mode: fullscreen) {
-  body::before {
-    content: '';
-    position: fixed;
-    inset: 0 0 auto 0;
-    height: env(safe-area-inset-top, 0px);
-    background: linear-gradient(to bottom, rgb(0 0 0 / 0.28), transparent);
-    pointer-events: none;
-    z-index: 60;
-  }
 }
 
 /* ---- typography (iOS text styles) ------------------------------------------------------- */

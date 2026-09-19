@@ -87,8 +87,9 @@ scuro); in **Impostazioni → Aspetto** si può forzare, e lo **sfondo di lettur
 - **Transizione** tra le pagine: scorrimento (default), dissolvenza o nessuna (cambio istantaneo).
 - **Schermo intero durante la lettura** (attivo di default): in Safari l'app va davvero a schermo intero e la barra di
   stato dell'iPad (ora, Wi-Fi, batteria) e l'indicatore Home scompaiono. Nell'app **installata sulla Home** iOS non
-  permette di nascondere la barra di stato, ma l'app usa comunque tutta l'altezza dello schermo (guadagna lo spazio che
-  la barra riservava), inclusa la fascia dell'indicatore Home in orizzontale; l'impostazione lo segnala.
+  permette di nascondere la barra di stato: la barra resta opaca (chiara o scura come il sistema) e l'app usa tutto
+  ciò che sta sotto, fino al bordo inferiore, indicatore Home compreso. Lo stile traslucido della barra non viene
+  usato: su iPad sposta la web view verso il basso e lascia una fascia nera inutilizzata in fondo allo schermo.
 - **Indicatore HD**: una piccola icona “HD” in alto a destra (nascosta quando le barre sono visibili, disattivabile):
   accesa (arancione) quando la super risoluzione o Qualità massima sono applicate a tutte le pagine sullo schermo,
   attenuata mentre elaborano, barrata (“non HD”) quando non sono disponibili. Il testo completo è nell'etichetta.
