@@ -27,6 +27,8 @@ export type EsrganFactor = 2 | 4
 export interface EsrganInfo {
   adapter: string
   precision: 'f16' | 'f32'
+  /** Why the f16 kernels were rejected when the f32 fallback is in use on a device that has shader-f16. */
+  f16Error?: string
 }
 
 /**
@@ -219,7 +221,7 @@ async function compileProgram<T>(
   device: GPUDevice,
   f16: boolean,
   build: (options: KernelOptions, pipeline: PipelineFn, conv: ConvFn) => Promise<T>,
-): Promise<{ options: KernelOptions; pipelines: T }> {
+): Promise<{ options: KernelOptions; pipelines: T; f16Error?: string }> {
   const pipeline: PipelineFn = (label, code) =>
     device.createComputePipelineAsync({
       label,
@@ -248,9 +250,10 @@ async function compileProgram<T>(
     return { options, pipelines: await build(options, pipeline, convFor(options)) }
   } catch (e) {
     if (!f16) throw e
+    const message = e instanceof Error ? e.message : String(e)
     console.warn('Real-ESRGAN: kernel f16 rifiutati, uso f32.', e)
     options = { f16: false }
-    return { options, pipelines: await build(options, pipeline, convFor(options)) }
+    return { options, pipelines: await build(options, pipeline, convFor(options)), f16Error: message.slice(0, 300) }
   }
 }
 
@@ -288,9 +291,9 @@ abstract class GpuUpscaler implements Upscaler {
   private lost = false
   onLost: (() => void) | null = null
 
-  protected constructor(dev: DeviceInfo, weights: ModelWeights, options: KernelOptions, maxActBytes: number) {
+  protected constructor(dev: DeviceInfo, weights: ModelWeights, options: KernelOptions, maxActBytes: number, f16Error?: string) {
     this.device = dev.device
-    this.info = { adapter: dev.name, precision: options.f16 ? 'f16' : 'f32' }
+    this.info = { adapter: dev.name, precision: options.f16 ? 'f16' : 'f32', ...(f16Error ? { f16Error } : {}) }
     this.weights = weights
     this.options = options
     this.maxActBytes = maxActBytes
@@ -533,8 +536,8 @@ class SrvggUpscaler extends GpuUpscaler {
   private acc: { bytes: number; buffer: GPUBuffer } | null = null
   private run: { shuffleGroups: GPUBindGroup[]; finalizeGroup: GPUBindGroup | null; accW: number } | null = null
 
-  private constructor(dev: DeviceInfo, weights: ModelWeights, options: KernelOptions, pipelines: SrvggPipelines) {
-    super(dev, weights, options, SRVGG_MAX_ACT_BYTES)
+  private constructor(dev: DeviceInfo, weights: ModelWeights, options: KernelOptions, pipelines: SrvggPipelines, f16Error?: string) {
+    super(dev, weights, options, SRVGG_MAX_ACT_BYTES, f16Error)
     this.pipelines = pipelines
     this.bytesPerPixel = 16 * quadBytes(options)
     this.lpFirst = this.layerUniform('lp-first', { cin: 3 })
@@ -543,7 +546,7 @@ class SrvggUpscaler extends GpuUpscaler {
   }
 
   static async create(dev: DeviceInfo, weights: ModelWeights): Promise<SrvggUpscaler> {
-    const { options, pipelines } = await compileProgram(dev.device, dev.f16, async (o, pipeline, conv) => {
+    const { options, pipelines, f16Error } = await compileProgram(dev.device, dev.f16, async (o, pipeline, conv) => {
       const [first, body, last, shuffle, shuffleAccumulate, finalize] = await Promise.all([
         pipeline('srvgg-conv-first', convFirstWgsl(o, 'prelu')),
         conv('srvgg-conv-body', { cout: 64, activation: 'prelu', residual: 0, split: false }),
@@ -554,7 +557,7 @@ class SrvggUpscaler extends GpuUpscaler {
       ])
       return { first, body, last, shuffle, shuffleAccumulate, finalize }
     })
-    return new SrvggUpscaler(dev, weights, options, pipelines)
+    return new SrvggUpscaler(dev, weights, options, pipelines, f16Error)
   }
 
   protected onBandGeometry(bw: number, paddedRows: number): void {
@@ -763,8 +766,8 @@ class RrdbUpscaler extends GpuUpscaler {
   } | null = null
   private run: { rgbGroups: GPUBindGroup[] } | null = null
 
-  private constructor(dev: DeviceInfo, weights: ModelWeights, options: KernelOptions, pipelines: RrdbPipelines) {
-    super(dev, weights, options, RRDB_MAX_ACT_BYTES)
+  private constructor(dev: DeviceInfo, weights: ModelWeights, options: KernelOptions, pipelines: RrdbPipelines, f16Error?: string) {
+    super(dev, weights, options, RRDB_MAX_ACT_BYTES, f16Error)
     this.pipelines = pipelines
     this.bytesPerPixel = RRDB_PLANES * quadBytes(options)
     this.lp = {
@@ -783,7 +786,7 @@ class RrdbUpscaler extends GpuUpscaler {
   }
 
   static async create(dev: DeviceInfo, weights: ModelWeights): Promise<RrdbUpscaler> {
-    const { options, pipelines } = await compileProgram(dev.device, dev.f16, async (o, pipeline, conv) => {
+    const { options, pipelines, f16Error } = await compileProgram(dev.device, dev.f16, async (o, pipeline, conv) => {
       const [first, conv1, convDense, conv5, conv5Last, body, up, rgb] = await Promise.all([
         pipeline('rrdb-conv-first', convFirstWgsl(o, 'none')),
         conv('rrdb-conv1', { cout: 32, activation: 'lrelu', residual: 0, split: false }),
@@ -796,7 +799,7 @@ class RrdbUpscaler extends GpuUpscaler {
       ])
       return { first, conv1, convDense, conv5, conv5Last, body, up, rgb }
     })
-    return new RrdbUpscaler(dev, weights, options, pipelines)
+    return new RrdbUpscaler(dev, weights, options, pipelines, f16Error)
   }
 
   protected onBandGeometry(bw: number, rows: number): void {
