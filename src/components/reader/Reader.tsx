@@ -38,6 +38,13 @@ const BARS_HIDE_MS = 2500
 const PRELOAD_AHEAD = 2
 const PRELOAD_BEHIND = 1
 
+/** Same keys mapped to the same (identical) values: lets state setters keep the previous reference. */
+function sameMap<K, V>(a: ReadonlyMap<K, V>, b: ReadonlyMap<K, V>): boolean {
+  if (a.size !== b.size) return false
+  for (const [k, v] of a) if (b.get(k) !== v) return false
+  return true
+}
+
 function toArchiveError(e: unknown): ArchiveError {
   if (isArchiveError(e)) return e
   return new ArchiveError('read', e instanceof Error ? e.message : String(e))
@@ -570,8 +577,8 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
       const hits = pages.map((i) => heavy.peek(heavyKey(i)))
       if (hits.every((h) => h)) {
         pages.forEach((i, k) => initial.set(i, hits[k]!))
-        setEnhanced(initial)
-        setSrPending(new Set())
+        setEnhanced((m) => (sameMap(m, initial) ? m : initial))
+        setSrPending((s) => (s.size ? new Set() : s))
       } else {
         // Both pages of a spread turn to HD together: nothing is shown until all are done.
         setEnhanced((m) => (m.size ? new Map() : m))
@@ -627,11 +634,9 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
         const r = initial.get(index) ?? m.get(index)
         if (r) next.set(index, r)
       }
-      let same = next.size === m.size
-      if (same) for (const [k, v] of next) if (m.get(k) !== v) same = false
-      return same ? m : next
+      return sameMap(m, next) ? m : next
     })
-    setSrPending(pendingNow)
+    setSrPending((s) => (s.size === pendingNow.size && [...pendingNow].every((i) => s.has(i)) ? s : pendingNow))
     for (const index of pendingNow) {
       light
         .enhance(index, plans.get(index)!, () => bitmapOf(index))
@@ -679,7 +684,8 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
     return () => el.removeEventListener('pointerdown', onFirst)
   }, [settings.fullscreenReading, status])
 
-  const anyTierOn = settings.superResolution || settings.maxQuality
+  const lightOn = settings.superResolution && sr.status !== 'off'
+  const anyTierOn = lightOn || settings.maxQuality
   const srBadge = (() => {
     if (!anyTierOn) return undefined
     const onScreen = spreadPages.filter((i) => pageStates.get(i)?.status === 'ready')
@@ -694,7 +700,7 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
       return `SR ×${last.factor} ${last.level}${settings.srRestore ? '+' : ''}`
     }
     if (sr.status === 'init' || mq.status === 'init') return 'SR…'
-    const lightUsable = settings.superResolution && !!sr.engine
+    const lightUsable = lightOn && !!sr.engine
     const heavyUsable = settings.maxQuality && !!mq.engine && heavySkip === null
     if (!lightUsable && !heavyUsable) return 'SR n/d'
     if (onScreen.length === 0) return 'SR…'

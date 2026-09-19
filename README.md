@@ -9,13 +9,13 @@ doppia pagina intelligente e super risoluzione AI sulla GPU.
 ## Requisiti
 
 - Node.js 20+ (sviluppato con Node 24) e npm.
-- Per leggere: Safari su iPadOS 17+ (super risoluzione su WebGL2; da iPadOS 26 su WebGPU), oppure Chrome/Edge desktop.
+- Per leggere: l'app installata sulla schermata Home di un iPad con iPadOS 26+ (WebGPU: Super risoluzione e Qualità
+  massima), iPadOS 17/18 (Super risoluzione su WebGL2), oppure Chrome/Edge desktop.
 
 ## Avvio in locale
 
 ```bash
 npm install
-npm run setup        # scarica Real-ESRGAN (FP16 9 MB + fallback FP32 17 MB) e onnxruntime in public/ (una sola volta)
 npm run dev          # http://127.0.0.1:4877
 ```
 
@@ -23,8 +23,8 @@ Apri l'indirizzo nel browser, tocca **Importa** e scegli uno o più `.cbz` / `.c
 **Apri senza importare** legge il file scelto direttamente, senza copiarlo nell'archiviazione dell'app: utile se lo
 spazio è poco (il segnalibro resta comunque salvato).
 
-`npm run setup` serve solo per il livello "Qualità massima": senza, l'app funziona lo stesso e le impostazioni lo
-dicono. Se lo esegui mentre `npm run dev` è attivo, riavvia il server (i file in `public/ort` vengono letti all'avvio).
+Non serve alcun passo di setup: i pesi del modello "Qualità massima" (1,2 MB) sono nel repository e vengono
+distribuiti con l'app.
 
 Altri comandi:
 
@@ -38,8 +38,8 @@ npm run check        # lint + typecheck + test + build
 ```
 
 I test end-to-end del progetto `webgpu` (`e2e/sr.spec.ts`) usano il browser completo in modalità headless nuova, così la
-super risoluzione gira sulla GPU reale; con `E2E_PREVIEW=1 npm run test:e2e` girano contro la build di produzione e
-verificano anche il funzionamento offline.
+super risoluzione gira sulla GPU reale (o su SwiftShader in CI); con `E2E_PREVIEW=1 npm run test:e2e` girano contro la
+build di produzione e verificano anche il funzionamento offline.
 
 ## Interfaccia
 
@@ -96,6 +96,12 @@ scuro); in **Impostazioni → Aspetto** si può forzare, e lo **sfondo di lettur
 
 ## Super risoluzione
 
+Entrambi i livelli lavorano **solo sulle pagine sullo schermo** (una, o due in doppia pagina): nessuna
+pre-elaborazione delle pagine seguenti, nessun lavoro in coda, nessuna cache su disco. Voltando pagina, ciò che era
+in corso per la pagina precedente viene annullato e la GPU si occupa esclusivamente della nuova. I risultati recenti
+restano in una piccola cache in memoria (limitata in byte), così tornare indietro di una pagina è immediato. Tutto
+gira nel processo della pagina: nessun worker WebAssembly, nessun runtime da scaricare.
+
 ### "Super risoluzione" (Anime4K, attiva di default)
 
 Ogni pagina viene ingrandita con la rete **Anime4K Upscale_CNN_x2** sulla GPU, a strisce di 288 righe per usare poca
@@ -103,54 +109,49 @@ memoria, **a un fattore fisso rispetto all'originale (×2 o ×4)**, indipendente
 **adattato al riquadro** con un ricampionamento Lanczos di alta qualità (mai la sfocatura bilineare del browser). È
 il modello "prima la super risoluzione, poi l'adattamento": un solo risultato per pagina serve ogni zoom,
 orientamento e impaginazione (lo zoom non ricalcola nulla), e ridurre un ×4 ai pixel dello schermo è ciò che rende
-le linee pulite. Funziona con la doppia pagina; le pagine seguenti vengono elaborate in anticipo, ma solo finché
-stanno nel budget di memoria della cache (a ×4 una pagina pesa ~60 MB): così la cache non va in thrashing e le pagine
-non “lampeggiano”. Quando **Qualità massima** è attiva, la Super risoluzione standard è disattivata (i due sistemi
-sono alternativi): i relativi controlli — fattore, livello, linee nitide — non hanno effetto e vengono mostrati in
-grigio.
+le linee pulite. Obiettivo: la coppia di pagine pronta in **meno di due secondi**.
 
 - **Livello**: `Auto` parte da VL, misura il tempo della prima pagina e sceglie il livello più forte che sta sotto
-  100 ms per pagina (UL solo se la GPU lo consente; con 2–4 GB di RAM si ferma a M/VL). Si può forzare M, VL o UL.
+  800 ms per pagina (UL solo se la GPU lo consente; con 2–4 GB di RAM si ferma a M/VL). Si può forzare M, VL o UL.
 - **Fattore**: `Auto` usa **×4** (due passaggi, il secondo al livello M) quando il risultato sta nel limite di 16 MP
   dei canvas di Safari e nel bilancio di memoria (pagine fino a ~1 MP, cioè i tipici 800×1200), altrimenti ×2; si
-  può fissare ×2 o ×4. La cache dei risultati è limitata in byte
-  (96–512 MB a seconda della RAM del dispositivo).
+  può fissare ×2 o ×4.
 - **Linee nitide**: passaggio *Restore_CNN_Soft* di Anime4K prima dell'ingrandimento, tratti e testi più marcati
   (raddoppia il costo). **Pulizia scansione**: bianco della carta e neri più netti, leggera riduzione del rumore JPEG.
 - **Backend automatico**: WebGPU (iPadOS 26+); su iPadOS 17/18 gli stessi shader ufficiali girano su **WebGL2**
   (risultato verificato equivalente: 54,6 dB tra i due backend); senza GPU utilizzabile, ridimensionamento del browser.
-  Le impostazioni dicono sempre backend, livello, fattore, dimensione di uscita e tempo stimato.
+  Se il sistema toglie il dispositivo GPU all'app (ad esempio dopo una sospensione in background) l'app lo ricrea da
+  sola. Le impostazioni dicono sempre backend, livello, fattore, dimensione di uscita e tempo stimato.
 - **Indicatore HD** (barra in alto e angolo): l'etichetta riporta `SR ×2 VL` / `SR ×4 UL` (fattore e livello in uso,
   `+` con Linee nitide), `SR ×4 GAN` (Qualità massima), `SR…` (in elaborazione), `SR n/d` (nessuna GPU utilizzabile o
   pagina troppo grande).
 
-### "Qualità massima (lenta)" (sperimentale, spenta di default)
+### "Qualità massima" (Real-ESRGAN, spenta di default)
 
-Unico interruttore del tier pesante: **Real-ESRGAN anime 6B a ×4** tramite onnxruntime-web, aspetto "stampato", molto
-nitido; **decine di secondi per pagina** anche su GPU, minuti sulla CPU. È **alternativo** alla Super risoluzione
-standard: quando è attivo, Anime4K non gira e la pagina resta com'è finché il risultato del modello non è pronto (un
-solo cambio, niente lampeggio). I risultati sono salvati per sempre nell'archiviazione dell'app
-(`sr-cache/<volume>.esrgan6b.x4/<pagina>.webp`); eliminando il volume si cancellano. Attivandola vengono scaricati una
-volta sola il motore (14–27 MB) e i modelli (FP16 9 MB + fallback FP32 17 MB), poi restano in cache. Il risultato è un fattore fisso della
-pagina (×4; ×2 solo se il ×4 supererebbe i 16 MP), poi adattato allo schermo.
+Il livello forte è **Real-ESRGAN "anime video v3"** (`realesr-animevideov3`, rete SRVGGNetCompact: 3→64, 16
+convoluzioni 64→64 con PReLU, 64→48, pixel shuffle ×4; 621k parametri, BSD-3), implementato **direttamente in WGSL**
+su WebGPU: niente ONNX Runtime, niente WebAssembly. È il modello Real-ESRGAN più forte che una GPU da iPad può
+eseguire in pochi secondi per pagina; il 6B a ×4 costa nove volte tanto e non sta in nessun budget ragionevole in un
+browser (le app native che ci riescono usano il Neural Engine, inaccessibile a una web app).
 
-- Con WebGPU le pagine seguenti vengono pre-elaborate in background mentre leggi, **dando sempre la precedenza alla
-  pagina visibile** (coda a priorità): il tempo di calcolo, che è tanto, non viene sprecato su una pagina successiva
-  mentre quella davanti aspetta. Con la sola CPU (WebAssembly, fino a 4 thread) si usa **Pre-elabora questo volume**,
-  che elabora tutto il volume con barra di avanzamento, tempo stimato e Annulla (lo schermo resta acceso).
-- In doppia pagina i due file restano separati nella cache (fonderli raddoppierebbe l'area e supererebbe spesso il
-  limite di 16 MP), ma lo **spread è atomico**: entrambe le pagine visibili vengono elaborate prima del preload e
-  passano a HD insieme. Una pagina bianca non richiede elaborazione. I lavori tolti dalla coda vengono realmente
-  annullati/reinseriti e i bitmap dello spread visibile non possono essere sfrattati dalla cache.
-- Su GPU con `shader-f16` usa il grafo mixed-precision (input/output FP32, pesi e convoluzioni FP16), buffer GPU
-  riutilizzati e graph capture ONNX Runtime. I tile vengono assemblati sulla GPU e letti una volta sola a pagina:
-  benchmark 800×1200 locale, **49,5 → 13,5 s** (3,7×). Rispetto al percorso FP32: PSNR 48,2 dB, SSIM 0,99991,
-  differenza massima 11/255 e bordi +0,94%; visivamente indistinguibile. Se FP16, graph capture o buffer esterni non
-  sono supportati, il fallback è automatico: prima WebGPU FP32, poi CPU FP32.
+- **Attesa massima** (3 s, 5 s, 10 s, Sempre; default 5 s): all'attivazione l'app compila gli shader e **misura la
+  GPU** su un'immagine di prova; per ogni coppia di pagine prevede il tempo e, se supera il limite, quella coppia usa
+  la Super risoluzione (Anime4K) e la riga di stato dice perché. La stima si aggiorna con ogni pagina elaborata.
+- La pagina resta com'è finché il risultato non è pronto, poi cambia una volta sola; in doppia pagina le due pagine
+  passano a HD insieme. Risultato a fattore fisso (×4; ×2 come media 2×2 del ×4 solo se il ×4 supererebbe i 16 MP),
+  poi adattato allo schermo come per Anime4K.
+- **Implementazione**: pesi FP16 (1,2 MB) nel bundle, quindi disponibili anche offline; kernel `conv3x3` con
+  register blocking (un thread calcola 4 pixel × 16 canali, i 32 thread di un wavefront leggono gli stessi pesi),
+  attivazioni e aritmetica in `f16` dove la GPU espone `shader-f16` (altrimenti `f32`, con fallback automatico se i
+  kernel f16 vengono rifiutati). La pagina è elaborata a fasce orizzontali con 24 px di contesto (campo recettivo
+  18 px), quindi le giunzioni sono esatte; il pixel shuffle, il residuo e la conversione RGBA8 avvengono sulla GPU e
+  la pagina viene letta una sola volta. Se il modello fallisce a runtime, il volume prosegue con Anime4K.
+- **Verifica**: un'implementazione di riferimento in float32 (`reference.ts`) riproduce l'output di PyTorch dagli
+  stessi pesi (fixture nel repository, differenza massima 2/255); i kernel WebGPU vengono confrontati con il
+  riferimento nei test end-to-end (`window.__reader.esrganSelfTest`, anche con fasce forzate a 8 righe): 95 dB in
+  f32, ×2 identico al bit.
 
-Il modello non è nel repository: `npm run setup` lo scarica dalla
-[release `models-v1`](https://github.com/gianmarcocherubini/4k-CBR-CBZ-Reader/releases/tag/models-v1) di questo
-repository (export ONNX a dimensioni dinamiche del `.pth` ufficiale, licenza BSD-3).
+I pesi si rigenerano dal checkpoint ufficiale con `scripts/convert-realesr-weights.py` (solo numpy, nessun PyTorch).
 
 ## Formati e limiti
 
@@ -169,8 +170,8 @@ Le pagine sono ordinate in modo naturale (`2.jpg` prima di `10.jpg`), ignorando 
 
 **Password e riservatezza**: la password resta soltanto nella memoria della pagina e viene dimenticata al reload o
 alla chiusura dell'app; non finisce in IndexedDB, OPFS, log o copertina. Per questo gli ZIP protetti non hanno
-miniatura persistente e le pagine di Qualità massima restano solo in RAM (la pre-elaborazione permanente è
-disabilitata). Alla riapertura l'app chiede nuovamente la password.
+miniatura persistente; le pagine migliorate dalla super risoluzione restano comunque solo in RAM, per ogni volume.
+Alla riapertura l'app chiede nuovamente la password.
 
 **Spazio e file multi-GB**: l'import copia il file nell'Origin Private File System (OPFS) da un worker con letture
 `Blob.slice()` seriali da 4 MB e `flush()` ogni 64 MB. Non usa `File.stream()`, che su WebKit può ignorare la
@@ -198,14 +199,13 @@ massimo due decodifiche contemporanee e un budget di 256 MB, proteggendo solo lo
 
 ## Pubblicazione su GitHub Pages
 
-Il workflow `.github/workflows/deploy.yml` esegue lint, typecheck, test, `npm run setup`, build e test end-to-end
-sulla build, poi pubblica `dist/` su GitHub Pages a ogni push su `main`. Nel repository: **Settings → Pages →
+Il workflow `.github/workflows/deploy.yml` esegue lint, typecheck, test, build e test end-to-end sulla build, poi
+pubblica `dist/` su GitHub Pages a ogni push su `main`. Nel repository: **Settings → Pages →
 Source: GitHub Actions**. Il percorso base è ricavato dal nome del repository (`/4k-CBR-CBZ-Reader/`); per un dominio
 proprio impostare `VITE_BASE=/` nella build.
 
-Il service worker aggiunge le intestazioni COOP/COEP (isolamento cross-origin) a tutte le risposte: GitHub Pages non
-può impostarle, e servono ai thread WebAssembly di "Qualità massima". Diventano attive dal secondo caricamento. Il
-motore ONNX e il modello non vengono precaricati: finiscono in cache alla prima attivazione.
+Il service worker precarica l'intera app, compresi gli shader Anime4K e i pesi di Real-ESRGAN: dopo la prima
+apertura tutto funziona offline. Non servono intestazioni COOP/COEP: non c'è più WebAssembly multi-thread.
 
 **Aggiornamenti**: l'app installata si aggiorna da sola. A ogni avvio il service worker controlla se su Pages c'è una
 versione nuova, la scarica in background e la attiva subito; la libreria mostra il banner "Nuova versione dell'app
@@ -216,9 +216,8 @@ l'app alla schermata Home; libri, segnalibri e cache restano al loro posto.
 
 - `?storage=idb` forza l'import in IndexedDB invece che in OPFS.
 - `?sr=off` disattiva la super risoluzione; `?sr=webgl2` / `?sr=webgpu` forzano il backend Anime4K.
-- `?cunet=wasm` forza la CPU per "Qualità massima".
-- `?test` espone `window.__reader.importFiles(files)` e `window.__reader.openSession(file)` (sempre attivi in
-  sviluppo).
+- `?test` espone `window.__reader.importFiles(files)`, `window.__reader.openSession(file)` e
+  `window.__reader.esrganSelfTest(opts)` (sempre attivi in sviluppo).
 
 ## Struttura
 
@@ -229,11 +228,12 @@ src/
   lib/reader/      layout delle tavole (con spazio centrale), cache LRU delle pagine
   lib/spread.ts    accoppiamento intelligente delle pagine e pagine bianche inserite
   lib/upscale/     Anime4K su WebGPU (anime4k.ts) e WebGL2 (glslHooks.ts + webgl2Backend.ts, shader ufficiali in
-                   shaders/), motore con coda e livello automatico (srEngine.ts), Real-ESRGAN (cunet/: worker
-                   onnxruntime-web generico per modelli pesanti, cache OPFS, batch)
+                   shaders/), motore per le pagine visibili con livello automatico (srEngine.ts), Real-ESRGAN in
+                   WGSL (esrgan/: pesi f16, generatore dei kernel, runner a fasce, motore con stima dei tempi,
+                   riferimento float32 e self-test)
   components/      libreria, lettore (gesti, barre, impostazioni raggruppate)
-  sw.ts            service worker (precache, offline, COOP/COEP, cache del motore e del modello)
-scripts/           make-fixtures.mjs (CBZ e CBR di prova), fetch-models.mjs (npm run setup)
+  sw.ts            service worker (precache dell'app, shader e pesi; offline)
+scripts/           make-fixtures.mjs (CBZ e CBR di prova), convert-realesr-weights.py (checkpoint → pesi f16)
 e2e/               test Playwright (progetti chromium e webgpu)
 docs/, internal/   contesto di progetto, studio di fattibilità della super risoluzione, report
 ```

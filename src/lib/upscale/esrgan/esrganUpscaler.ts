@@ -13,8 +13,12 @@ export interface EsrganInfo {
 
 /** Largest activation buffer (one of the two ping-pong buffers) we are willing to allocate. */
 const MAX_ACT_BYTES = 48 * 1024 * 1024
-/** Core rows of a band: pages are processed in horizontal bands of at most this many source rows. */
-const MAX_BAND_ROWS = 256
+/**
+ * Core rows of a band: pages are processed in horizontal bands of at most this many source rows.
+ * Kept small so no single command buffer runs for long (iOS kills GPU work that exceeds its
+ * watchdog); the context overhead is (rows + 2·CONTEXT) / rows ≈ 1.3.
+ */
+const MAX_BAND_ROWS = 160
 const MIN_BAND_ROWS = 8
 
 export class EsrganAborted extends Error {
@@ -306,21 +310,33 @@ export class EsrganUpscaler {
         device.queue.copyExternalImageToTexture({ source: padded, origin: { x: 0, y: y0 } }, { texture: buffers.input }, [plan.bw, bh])
         device.queue.writeBuffer(this.bandParams, 0, new Uint32Array([plan.bw, bh, 0, 0]))
         device.queue.writeBuffer(this.shuffleParams, 0, new Uint32Array([plan.bw, bh, CONTEXT, W, y0, rows, outW, outH, factor, 0, 0, 0]))
-        const encoder = device.createCommandEncoder({ label: `esrgan-band-${k}` })
-        const pass = encoder.beginComputePass()
-        for (let i = 0; i < buffers.layers.length; i++) {
-          const layer = buffers.layers[i]!
-          pass.setPipeline(layer.pipeline)
-          pass.setBindGroup(0, layer.bindGroup)
-          if (i === 0) pass.dispatchWorkgroups(Math.ceil(plan.bw / 8), Math.ceil(bh / 8))
-          else pass.dispatchWorkgroups(Math.ceil(plan.bw / BODY_BLOCK_W), Math.ceil(bh / BODY_BLOCK_H))
+        // Two command buffers per band (first half of the layers, second half + shuffle): each
+        // stays well under the GPU watchdog even on a slow device.
+        const half = Math.ceil(buffers.layers.length / 2)
+        const encoders: GPUCommandBuffer[] = []
+        for (const [from, to] of [
+          [0, half],
+          [half, buffers.layers.length],
+        ] as const) {
+          const encoder = device.createCommandEncoder({ label: `esrgan-band-${k}-${from}` })
+          const pass = encoder.beginComputePass()
+          for (let i = from; i < to; i++) {
+            const layer = buffers.layers[i]!
+            pass.setPipeline(layer.pipeline)
+            pass.setBindGroup(0, layer.bindGroup)
+            if (i === 0) pass.dispatchWorkgroups(Math.ceil(plan.bw / 8), Math.ceil(bh / 8))
+            else pass.dispatchWorkgroups(Math.ceil(plan.bw / BODY_BLOCK_W), Math.ceil(bh / BODY_BLOCK_H))
+          }
+          if (to === buffers.layers.length) {
+            pass.setPipeline(this.pipelines.shuffle)
+            pass.setBindGroup(0, shuffleBindGroup)
+            pass.dispatchWorkgroups(Math.ceil(W / 8), Math.ceil(rows / 8))
+          }
+          pass.end()
+          if (to === buffers.layers.length && k === plan.bands - 1) encoder.copyBufferToBuffer(page, 0, readback, 0, outBytes)
+          encoders.push(encoder.finish())
         }
-        pass.setPipeline(this.pipelines.shuffle)
-        pass.setBindGroup(0, shuffleBindGroup)
-        pass.dispatchWorkgroups(Math.ceil(W / 8), Math.ceil(rows / 8))
-        pass.end()
-        if (k === plan.bands - 1) encoder.copyBufferToBuffer(page, 0, readback, 0, outBytes)
-        device.queue.submit([encoder.finish()])
+        device.queue.submit(encoders)
         // One sync per band: a cancellation point, and no pile-up of GPU work for a page nobody looks at.
         await device.queue.onSubmittedWorkDone()
         opts.onProgress?.(k + 1, plan.bands)
