@@ -27,9 +27,6 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm test
-      - name: Fetch AI assets (waifu2x CUNet model + onnxruntime binaries, not committed)
-        run: npm run setup
-        continue-on-error: true
       - name: Build (base path = /<repo>/)
         run: npm run build
         env:

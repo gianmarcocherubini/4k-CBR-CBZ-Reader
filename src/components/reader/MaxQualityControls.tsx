@@ -1,82 +1,42 @@
-import { Group, Row, Switch } from './SettingsPanel'
-import type { BatchState } from './useMaxQuality'
+import type { MaxQualityBudget } from '../../types'
+import { Group, Row, Segmented, Switch } from './SettingsPanel'
 
 interface MaxQualityControlsProps {
   enabled: boolean
+  budget: MaxQualityBudget
   statusLine: string
-  ready: boolean
-  batch: BatchState
-  pageCount: number
-  persistentCache: boolean
   onToggle: (v: boolean) => void
-  onStart: () => void
-  onCancel: () => void
+  onBudget: (v: MaxQualityBudget) => void
 }
 
-function formatEta(secondsPerPage: number | undefined, remaining: number): string {
-  if (!secondsPerPage || remaining <= 0) return ''
-  const s = Math.round(secondsPerPage * remaining)
-  if (s < 90) return `≈ ${s} s`
-  const m = Math.round(s / 60)
-  return m < 90 ? `≈ ${m} min` : `≈ ${Math.round(m / 60)} h`
-}
-
-/** Settings block for the experimental heavy tier (Real-ESRGAN anime 6B at x4) and its batch job. */
-export function MaxQualityControls({ enabled, statusLine, ready, batch, pageCount, persistentCache, onToggle, onStart, onCancel }: MaxQualityControlsProps) {
-  const p = batch.progress
-  const pct = p && p.total > 0 ? Math.round(((p.done + (p.tilesTotal ? p.tilesDone / p.tilesTotal : 0)) / p.total) * 100) : 0
+/** Settings block of the Real-ESRGAN tier: one switch, the time budget, and a status line. */
+export function MaxQualityControls({ enabled, budget, statusLine, onToggle, onBudget }: MaxQualityControlsProps) {
   return (
-    <Group title="Qualità massima (lenta)" testId="mq-section" footer={<span data-testid="mq-status">{statusLine}</span>}>
+    <Group title="Qualità massima" testId="mq-section" footer={<span data-testid="mq-status">{statusLine}</span>}>
       <Row
         title="Qualità massima"
-        hint={
-          persistentCache
-            ? 'Sperimentale. Real-ESRGAN anime 6B a ×4 sulla GPU: aspetto “stampato”, molto nitido; decine di secondi per pagina. I risultati restano in cache per sempre.'
-            : 'Real-ESRGAN anime 6B a ×4. Per questo volume protetto o di sessione il risultato resta solo in memoria e non viene salvato.'
-        }
+        hint="Real-ESRGAN (anime) ×4 sulla GPU, solo per le pagine sullo schermo: nessuna pre-elaborazione, nessuna coda. Sostituisce la Super risoluzione quando sta nel tempo massimo."
       >
         <Switch checked={enabled} onChange={onToggle} label="Qualità massima" />
       </Row>
-      {enabled &&
-        (batch.running ? (
-          <div className="row flex-col items-stretch gap-2">
-            <div className="flex items-center justify-between text-subhead">
-              <span>
-                Pre-elaborazione: pagina {(p?.done ?? 0) + 1} di {p?.total ?? pageCount}
-              </span>
-              <span className="text-footnote text-label-2 tabular-nums">{formatEta(p?.secondsPerPage, (p?.total ?? pageCount) - (p?.done ?? 0))}</span>
-            </div>
-            <div className="h-[4px] overflow-hidden rounded-full bg-fill">
-              <div className="h-full rounded-full bg-tint transition-[width]" style={{ width: `${pct}%` }} data-testid="mq-progress" />
-            </div>
-            {p && p.tilesTotal > 0 && (
-              <p className="text-footnote text-label-2 tabular-nums">
-                Tile {p.tilesDone} / {p.tilesTotal}
-                {p.secondsPerPage ? ` · ${p.secondsPerPage.toFixed(1)} s per pagina` : ''}
-              </p>
-            )}
-            <button type="button" className="btn-ghost w-full" onClick={onCancel} data-testid="mq-cancel">
-              Annulla
-            </button>
-          </div>
-        ) : (
-          <div className="row flex-col items-stretch gap-2">
-            <button type="button" className="btn-primary w-full" onClick={onStart} disabled={!ready || !persistentCache} data-testid="mq-start">
-              Pre-elabora questo volume
-            </button>
-            <p className="text-footnote text-label-2">
-              {!persistentCache
-                ? 'Per archivi protetti o aperti senza importare, le pagine decifrate non vengono salvate: Qualità massima funziona durante la lettura, ma la pre-elaborazione permanente è disabilitata.'
-                : batch.finished
-                ? `Completato: ${p?.done ?? pageCount} pagine in cache.`
-                : batch.error
-                  ? `Errore: ${batch.error}`
-                  : p && p.done > 0
-                    ? `Interrotto: ${p.done} di ${p.total} pagine in cache. Riprendi quando vuoi.`
-                    : 'Elabora tutte le pagine del volume, anche in background; lo schermo resta acceso. Puoi interrompere e riprendere.'}
-            </p>
-          </div>
-        ))}
+      <Row
+        title="Attesa massima"
+        hint="Se la GPU prevede di impiegare di più per le pagine sullo schermo, quelle pagine usano la Super risoluzione (Anime4K)."
+        stacked
+      >
+        <Segmented<`${MaxQualityBudget}`>
+          label="Attesa massima"
+          idPrefix="mq-budget"
+          value={`${budget}`}
+          onChange={(v) => onBudget(Number(v) as MaxQualityBudget)}
+          options={[
+            { value: '3', label: '3 s' },
+            { value: '5', label: '5 s' },
+            { value: '10', label: '10 s' },
+            { value: '0', label: 'Sempre' },
+          ]}
+        />
+      </Row>
     </Group>
   )
 }

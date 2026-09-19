@@ -314,6 +314,4 @@ export async function deleteBook(book: Book): Promise<void> {
   if (book.storage === 'session') sessionFiles.delete(book.id)
   archivePasswords.delete(book.id)
   await deleteBookRecord(book.id)
-  const { deleteCunetCache } = await import('../upscale/cunet/cunetEngine')
-  await deleteCunetCache(book.id)
 }
