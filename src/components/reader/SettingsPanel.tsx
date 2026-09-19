@@ -158,7 +158,7 @@ export function SettingsPanel({
               title="Schermo intero durante la lettura"
               hint={
                 isStandalone()
-                  ? 'Nell’app installata iOS non consente di nascondere la barra di stato, ma l’app usa comunque tutta l’altezza dello schermo. In Safari va davvero a schermo intero.'
+                  ? 'Nell’app installata iOS non consente di nascondere la barra di stato: l’app usa tutto lo schermo sotto di essa, fino al bordo inferiore. In Safari va davvero a schermo intero.'
                   : fullscreenSupported()
                     ? 'A schermo intero nasconde la barra di stato (ora, Wi-Fi, batteria) e l’indicatore Home mentre leggi.'
                     : 'Non disponibile in questo browser.'
