@@ -91,6 +91,9 @@ export function EnhancedCanvas({ bitmap, width, height, alt }: EnhancedCanvasPro
   useEffect(() => {
     const canvas = ref.current
     if (!canvas) return
+    // A closed ImageBitmap reports 0x0: it cannot be drawn, and resizing the canvas for it would
+    // wipe what is on screen. Keep the last painted pixels until a live bitmap arrives.
+    if (bitmap.width === 0 || bitmap.height === 0) return
     let cancelled = false
     const paint = async () => {
       const ctx = canvas.getContext('2d')

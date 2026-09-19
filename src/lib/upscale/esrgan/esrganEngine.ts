@@ -12,6 +12,8 @@ const FIXED_MS_PER_PAGE = 80
 /** Probe image: one band of a typical page, enough work for a meaningful timing. */
 const PROBE = { w: 256, h: 160 }
 const REPROBE_INTERVAL_MS = 8000
+/** Evicted bitmaps are closed a little later: React may still be painting them. */
+const CLOSE_DELAY_MS = 1200
 
 function synthetic(w: number, h: number): ImageBitmap {
   const canvas = new OffscreenCanvas(w, h)
@@ -68,6 +70,7 @@ export class EsrganEngine {
   private readonly tasks = new Map<string, Task>()
   private wanted = new Set<string>()
   private chain: Promise<unknown> = Promise.resolve()
+  private readonly pendingCloses = new Set<ReturnType<typeof setTimeout>>()
   private disposed = false
 
   private constructor(upscaler: EsrganUpscaler) {
@@ -219,15 +222,24 @@ export class EsrganEngine {
     return promise
   }
 
-  /** LRU eviction by bytes; results still wanted are spared unless the cache is far over budget. */
+  /** LRU eviction by bytes; results of the pages on screen are never evicted. */
   private evict(): void {
     for (const [key, r] of this.cache) {
       if (this.cacheBytes <= this.budget) break
-      if (this.wanted.has(key) && this.cacheBytes <= this.budget * 1.5) continue
+      if (this.wanted.has(key)) continue
       this.cache.delete(key)
       this.cacheBytes -= r.bitmap.width * r.bitmap.height * 4
-      r.bitmap.close()
+      this.closeLater(r.bitmap)
     }
+  }
+
+  /** The view (or the ghost of a page turn) may still paint an evicted bitmap for a moment. */
+  private closeLater(bitmap: ImageBitmap): void {
+    const timer = setTimeout(() => {
+      this.pendingCloses.delete(timer)
+      bitmap.close()
+    }, CLOSE_DELAY_MS)
+    this.pendingCloses.add(timer)
   }
 
   get cacheSizeBytes(): number {
@@ -237,7 +249,12 @@ export class EsrganEngine {
   dispose(): void {
     this.disposed = true
     for (const task of this.tasks.values()) task.controller.abort()
-    for (const r of this.cache.values()) r.bitmap.close()
+    for (const timer of this.pendingCloses) clearTimeout(timer)
+    this.pendingCloses.clear()
+    const bitmaps = [...this.cache.values()].map((r) => r.bitmap)
+    setTimeout(() => {
+      for (const b of bitmaps) b.close()
+    }, CLOSE_DELAY_MS)
     this.cache.clear()
     this.cacheBytes = 0
     this.upscaler.dispose()
