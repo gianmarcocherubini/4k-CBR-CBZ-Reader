@@ -137,8 +137,8 @@ WebAssembly), selezionabili in **Modello**:
   self-ensemble (sotto).
 - **Anime 6B** (opzionale): `RealESRGAN_x4plus_anime_6B`, RRDBNet con 6 blocchi residual-in-residual dense (3 blocchi
   densi da 5 convoluzioni ciascuno, 64 feature, 32 canali di crescita, scala residua 0,2, coda con due upsample
-  nearest + convoluzioni; 4,47 M parametri, BSD-3). Nove volte il lavoro di v3: **~10 s per pagina** sullo stesso iPad,
-  quindi va usato con «Attesa massima» a 10 s o «Sempre». I pesi (8,9 MB in FP16) non sono precaricati: vengono
+  nearest + convoluzioni; 4,47 M parametri, BSD-3). Nove volte il lavoro di v3: misurati **~30 s per pagina** su un
+  iPad M (la GPU si scalda e rallenta su carichi così lunghi), quindi va usato con «Sempre» o un'attesa adeguata. I pesi (8,9 MB in FP16) non sono precaricati: vengono
   scaricati e messi in cache dal service worker la prima volta che il modello viene scelto. Niente self-ensemble.
   Implementazione: quattro buffer di feature a rotazione, buffer di crescita a 128 canali riempito per copia dopo
   ogni convoluzione densa (una dispatch WebGPU non può leggere e scrivere lo stesso buffer), residui ripiegati
@@ -149,11 +149,18 @@ WebAssembly), selezionabili in **Modello**:
 - **Attesa massima** (3 s, 5 s, 10 s, Sempre; default 5 s): all'attivazione l'app compila gli shader e **misura la
   GPU** su un'immagine di prova; per ogni coppia di pagine prevede il tempo e, se supera il limite, quella coppia usa
   la Super risoluzione (Anime4K) e la riga di stato dice perché. La stima si aggiorna con ogni pagina elaborata.
-- **Self-ensemble**: il tempo che avanza sotto il limite va in qualità. La rete viene eseguita su copie della pagina
-  riflesse e ruotate (le 8 simmetrie del rettangolo) e i risultati, riportati nell'orientamento originale, vengono
-  mediati sulla GPU: gli artefatti direzionali della rete si cancellano e i bordi restano più puliti. Il numero di
-  passaggi (1, 2, 4 o 8) è il massimo che sta nel limite (5 s con «Sempre»): su un iPad M-series una pagina a ×4
-  costa circa 1 s, quindi con il limite di 5 s si arriva a 4 passaggi. La riga di stato riporta i passaggi usati.
+- **Self-ensemble** (interruttore, attivo di default, solo v3): il tempo che avanza sotto il limite va in qualità. La
+  rete viene eseguita su copie della pagina riflesse e ruotate (le 8 simmetrie del rettangolo) e i risultati,
+  riportati nell'orientamento originale, vengono mediati sulla GPU: gli artefatti direzionali della rete si cancellano
+  e i bordi restano più puliti. Il numero di passaggi (1, 2, 4 o 8) è il massimo che sta nel limite (5 s con
+  «Sempre»): su un iPad M-series una pagina a ×4 costa circa 1 s, quindi con il limite di 5 s si arriva a 4 passaggi
+  (3–4 s). Spegnendolo si torna al passaggio singolo. La riga di stato riporta i passaggi usati.
+- **Sfocatura anti-spoiler** (interruttore, attivo di default): mentre la versione HD viene calcolata la pagina
+  resta sfocata (sfocatura che "respira") e si rivela nitida solo quando è pronta.
+- **Kernel scelto sul dispositivo**: le convoluzioni esistono in due varianti a risultato identico, un thread per
+  4 pixel di una riga (16 accumulatori) o per 4 pixel di due righe (32 accumulatori: metà dei caricamenti di pesi
+  per moltiplicazione e righe d'ingresso condivise). All'attivazione entrambe vengono cronometrate sull'immagine di
+  prova e resta la più veloce; la riga di stato mostra «kernel 4×1» o «kernel 4×2».
 - La pagina resta com'è finché il risultato non è pronto, poi cambia una volta sola; in doppia pagina le due pagine
   passano a HD insieme. Risultato a fattore fisso (×4; ×2 come media 2×2 del ×4 solo se il ×4 supererebbe i 16 MP),
   poi adattato allo schermo come per Anime4K.

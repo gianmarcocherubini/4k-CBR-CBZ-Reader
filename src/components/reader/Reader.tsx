@@ -567,6 +567,17 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
   /** The tier decision is taken once per spread (and per budget), never revised by a later timing sample. */
   const heavyDecision = useRef<{ key: string; use: boolean; skip: 'slow' | 'too-big' | 'error' | null; ensemble: EnsembleSize } | null>(null)
   const [heavyEnsemble, setHeavyEnsemble] = useState<EnsembleSize>(1)
+  /** Pages whose HD version Real-ESRGAN is computing right now (anti-spoiler blur). */
+  const [heavyPending, setHeavyPending] = useState<Set<number>>(() => new Set())
+  /** Pages whose HD version just landed: the canvas sharpens in. */
+  const [revealing, setRevealing] = useState<Set<number>>(() => new Set())
+  const revealTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(
+    () => () => {
+      if (revealTimer.current) clearTimeout(revealTimer.current)
+    },
+    [],
+  )
   useEffect(() => {
     heavyDecision.current = null
     setHeavyError(null)
@@ -578,6 +589,7 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
     if (status !== 'ready' || !book || !cache || (!light && !heavy)) {
       setEnhanced((m) => (m.size ? new Map() : m))
       setSrPending((s) => (s.size ? new Set() : s))
+      setHeavyPending((s) => (s.size ? new Set() : s))
       setHeavySkip(null)
       return
     }
@@ -591,7 +603,7 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
     let skip: 'slow' | 'too-big' | 'error' | null = null
     let ensemble: EnsembleSize = 1
     if (settings.maxQuality && heavy && pages.length > 0) {
-      const decisionKey = `${visibleKey}|${heavyBudgetMs}|${heavyError ?? ''}`
+      const decisionKey = `${visibleKey}|${heavyBudgetMs}|${settings.maxQualityEnsemble ? 'e' : '-'}|${heavyError ?? ''}`
       const prev = heavyDecision.current
       if (prev && prev.key === decisionKey) {
         useHeavy = prev.use
@@ -611,7 +623,7 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
           } else {
             useHeavy = true
             // Spare time goes into quality: more passes over flipped/rotated copies, averaged.
-            ensemble = heavy.ensembleFor(visible, ensembleTargetMs)
+            ensemble = settings.maxQualityEnsemble ? heavy.ensembleFor(visible, ensembleTargetMs) : 1
           }
         }
         heavyDecision.current = { key: decisionKey, use: useHeavy, skip, ensemble }
@@ -631,10 +643,12 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
         pages.forEach((i, k) => initial.set(i, hits[k]!))
         setEnhanced((m) => (sameMap(m, initial) ? m : initial))
         setSrPending((s) => (s.size ? new Set() : s))
+        setHeavyPending((s) => (s.size ? new Set() : s))
       } else {
         // Both pages of a spread turn to HD together: nothing is shown until all are done.
         setEnhanced((m) => (m.size ? new Map() : m))
         setSrPending(new Set(pages))
+        setHeavyPending(new Set(pages))
         Promise.all(pages.map((i, k) => hits[k] ?? heavy.enhance(heavyKey(i), sizes[i]!, () => bitmapOf(i), ensemble)))
           .then((results) => {
             if (cancelled) return
@@ -642,6 +656,11 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
             pages.forEach((i, k) => next.set(i, results[k]!))
             setEnhanced(next)
             setSrPending(new Set())
+            setHeavyPending(new Set())
+            // The HD canvas sharpens in from the blur it replaces.
+            setRevealing(new Set(pages))
+            if (revealTimer.current) clearTimeout(revealTimer.current)
+            revealTimer.current = setTimeout(() => setRevealing(new Set()), 700)
           })
           .catch((e: unknown) => {
             if (cancelled || e instanceof EsrganAborted) return
@@ -649,6 +668,7 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
             // Give the spread to Anime4K for the rest of the session and say why.
             setHeavyError(e instanceof Error ? e.message : String(e))
             setSrPending(new Set())
+            setHeavyPending(new Set())
           })
       }
       return () => {
@@ -656,6 +676,7 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
       }
     }
 
+    setHeavyPending((s) => (s.size ? new Set() : s))
     heavy?.setWanted([])
     if (!light || !settings.superResolution) {
       setEnhanced((m) => (m.size ? new Map() : m))
@@ -713,7 +734,7 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
       cancelled = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sr.engine, sr.tick, mq.engine, status, book, visibleKey, srOptions, settings.superResolution, settings.maxQuality, heavyBudgetMs, ensembleTargetMs, heavyError])
+  }, [sr.engine, sr.tick, mq.engine, status, book, visibleKey, srOptions, settings.superResolution, settings.maxQuality, settings.maxQualityEnsemble, heavyBudgetMs, ensembleTargetMs, heavyError])
 
   const heavyLabel = 'GAN'
   const displayed = enhanced
@@ -773,7 +794,7 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
       case 'ready': {
         const engine = mq.engine
         if (!engine) return 'Pronta.'
-        const parts = [`${modelName} ×4 · WebGPU ${engine.info.precision.toUpperCase()} · ${engine.info.adapter}`]
+        const parts = [`${modelName} ×4 · WebGPU ${engine.info.precision.toUpperCase()} · kernel 4×${engine.kernelVariant} · ${engine.info.adapter}`]
         const shown = spreadPages.map((i) => displayed.get(i)).find((r) => r?.level === heavyLabel)
         const passes = shown?.ensemble ?? heavyEnsemble
         if (heavySkip === null && passes > 1) parts.push(`self-ensemble ×${passes} (${passes} passaggi mediati, più pulito)`)
@@ -860,6 +881,8 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
         enterClass={enterClass}
         ghost={ghost}
         onRetry={retryPage}
+        blurred={settings.maxQuality && settings.maxQualityBlur ? heavyPending : undefined}
+        revealing={settings.maxQuality && settings.maxQualityBlur ? revealing : undefined}
       />
       {settings.srIndicator && hdState && !barsVisible && (
         <div className="pointer-events-none absolute right-2 z-10" style={{ top: 'calc(env(safe-area-inset-top, 0px) + 6px)' }}>
@@ -909,10 +932,14 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
               enabled={settings.maxQuality}
               budget={settings.maxQualityBudget}
               model={settings.maxQualityModel}
+              ensemble={settings.maxQualityEnsemble}
+              blur={settings.maxQualityBlur}
               statusLine={mqStatusLine}
               onToggle={(v) => updateSettings({ maxQuality: v })}
               onBudget={(v) => updateSettings({ maxQualityBudget: v })}
               onModel={(v) => updateSettings({ maxQualityModel: v })}
+              onEnsemble={(v) => updateSettings({ maxQualityEnsemble: v })}
+              onBlur={(v) => updateSettings({ maxQualityBlur: v })}
             />
           }
         />

@@ -306,12 +306,16 @@ test('Qualità massima: Real-ESRGAN x4 on the visible page only, time budget fal
   await expect(status).not.toContainText('Inizializzazione', { timeout: 5 * 60_000 })
   const text = (await status.textContent()) ?? ''
   console.log('Qualità massima:', text)
-  expect(text).toMatch(/Real-ESRGAN anime v3 ×4 · WebGPU F(16|32)/)
+  expect(text).toMatch(/Real-ESRGAN anime v3 ×4 · WebGPU F(16|32) · kernel 4×[12]/)
   expect(text).toMatch(/stimati [\d.]+ s per la pagina/)
   await page.getByRole('button', { name: 'Chiudi impostazioni' }).click()
 
   const p1 = page.locator('[data-testid=page][data-page="1"]')
+  // Anti-spoiler: the plain page is blurred while its HD version is being computed.
+  await expect(p1).toHaveAttribute('data-blurred', 'true', { timeout: 60_000 })
+  await expect(p1.locator('img')).toHaveClass(/antispoiler/)
   await expect(p1).toHaveAttribute('data-sr', 'GAN', { timeout: 8 * 60_000 })
+  await expect(p1).not.toHaveAttribute('data-blurred', 'true')
   // Native x4 output (300 px pages -> 1200), fitted to the box.
   await expect(p1.locator('canvas[data-testid=enhanced]')).toHaveAttribute('data-sr-width', '1200')
   await page.mouse.move(600, 420)

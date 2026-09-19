@@ -100,6 +100,10 @@ export interface ReaderSettings {
    */
   maxQualityBudget: MaxQualityBudget
   maxQualityModel: MaxQualityModel
+  /** Spend the time left under the budget on averaged passes over flipped/rotated copies (v3 only). */
+  maxQualityEnsemble: boolean
+  /** Blur the plain page while its HD version is being computed (anti-spoiler), then unblur. */
+  maxQualityBlur: boolean
   theme: Theme
   stageBackground: StageBackground
   /** Centre margin between the two pages in double-page mode. */
@@ -125,6 +129,8 @@ export const DEFAULT_SETTINGS: ReaderSettings = {
   maxQuality: false,
   maxQualityBudget: 5,
   maxQualityModel: 'v3',
+  maxQualityEnsemble: true,
+  maxQualityBlur: true,
   theme: 'system',
   stageBackground: 'default',
   gutter: 'm',
