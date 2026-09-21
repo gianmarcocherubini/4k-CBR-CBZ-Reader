@@ -1,0 +1,11 @@
+[
+  { "name": "iPad Pro 13\" (M4/M5)", "width": 1032, "height": 1376, "scale": 2 },
+  { "name": "iPad Pro 12.9\", iPad Air 13\"", "width": 1024, "height": 1366, "scale": 2 },
+  { "name": "iPad Pro 11\" (M4/M5)", "width": 834, "height": 1210, "scale": 2 },
+  { "name": "iPad Pro 11\" (1st–4th gen)", "width": 834, "height": 1194, "scale": 2 },
+  { "name": "iPad Air 10.9\"/11\", iPad 10th/11th gen", "width": 820, "height": 1180, "scale": 2 },
+  { "name": "iPad 10.2\" (7th–9th gen)", "width": 810, "height": 1080, "scale": 2 },
+  { "name": "iPad Pro 10.5\", iPad Air 3", "width": 834, "height": 1112, "scale": 2 },
+  { "name": "iPad mini 8.3\" (6th/7th gen)", "width": 744, "height": 1133, "scale": 2 },
+  { "name": "iPad 9.7\", iPad mini 5, iPad Air 2", "width": 768, "height": 1024, "scale": 2 }
+]

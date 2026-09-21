@@ -1,11 +1,23 @@
+<p align="center">
+  <a href="https://www.manga-dana.com">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/gianmarcocherubini/4k-CBR-CBZ-Reader/main/public/brand/wordmark-dark.png">
+      <img src="https://raw.githubusercontent.com/gianmarcocherubini/4k-CBR-CBZ-Reader/main/public/brand/wordmark-light.png" width="360" alt="Mangadana">
+    </picture>
+  </a>
+</p>
+
+<p align="center"><a href="https://www.manga-dana.com">www.manga-dana.com</a></p>
+
 # Mangadana
 
 Lettore di fumetti e manga per iPad, come **web app installabile (PWA)**: tutto gira nel browser, nessun server.
 Il nome viene da 漫画 (manga) e 棚 (*dana*, da 本棚 *hondana*, lo scaffale dei libri): lo scaffale dei manga. Il
 marchio è la corona del set «Extras» del carattere Sprite Graffiti di Fontfabric (licenza gratuita per uso
 commerciale: loghi e immagini statiche sono permessi; il font non viene incorporato nell'app, il marchio è un
-tracciato SVG in `src/components/Brand.tsx` e `public/icons/`). Importa file **CBZ/ZIP** (anche protetti da password) e **CBR** (RAR)
-fino a 10 GB ciascuno, li
+tracciato SVG in `src/components/crown.json`, disegnato da `Brand.tsx` e da `scripts/make-brand-assets.mjs`, che
+genera le immagini di avvio iOS, l'anteprima social e il wordmark di questo README; le icone sono in
+`public/icons/`). Importa file **CBZ/ZIP** (anche protetti da password) e **CBR** (RAR) fino a 10 GB ciascuno, li
 tiene nell'archiviazione dell'app anche offline e li mostra a piena risoluzione con lettura da destra a sinistra,
 doppia pagina intelligente e super risoluzione AI sulla GPU.
 
@@ -260,8 +272,45 @@ massimo due decodifiche contemporanee e un budget di 256 MB, proteggendo solo lo
 
 Il workflow `.github/workflows/deploy.yml` esegue lint, typecheck, test, build e test end-to-end sulla build, poi
 pubblica `dist/` su GitHub Pages a ogni push su `main`. Nel repository: **Settings → Pages →
-Source: GitHub Actions**. Il percorso base è ricavato dal nome del repository (`/4k-CBR-CBZ-Reader/`); per un dominio
-proprio impostare `VITE_BASE=/` nella build.
+Source: GitHub Actions**. Il percorso base viene letto dalla configurazione di Pages (`actions/configure-pages`):
+`/4k-CBR-CBZ-Reader/` finché l'app è servita da `gianmarcocherubini.github.io`, `/` con il dominio proprio. In
+locale vale il nome del repository, oppure `VITE_BASE=/`.
+
+### Dominio www.manga-dana.com
+
+Il dominio è registrato su IONOS (name server `ui-dns.*`). Per collegarlo a GitHub Pages, nell'ordine:
+
+1. **DNS (IONOS → Domini → manga-dana.com → DNS)**. Sostituire il record A del dominio nudo che punta al parcheggio
+   (`217.160.0.37`) e aggiungere:
+
+   | Nome | Tipo | Valore |
+   | --- | --- | --- |
+   | `www` | CNAME | `gianmarcocherubini.github.io.` |
+   | `@` | A | `185.199.108.153` |
+   | `@` | A | `185.199.109.153` |
+   | `@` | A | `185.199.110.153` |
+   | `@` | A | `185.199.111.153` |
+   | `@` | AAAA | `2606:50c0:8000::153` |
+   | `@` | AAAA | `2606:50c0:8001::153` |
+   | `@` | AAAA | `2606:50c0:8002::153` |
+   | `@` | AAAA | `2606:50c0:8003::153` |
+
+   Verifica: `dig +short www.manga-dana.com CNAME` deve rispondere `gianmarcocherubini.github.io.`.
+2. **GitHub → Settings → Pages → Custom domain**: `www.manga-dana.com`, **Save**, attendere il controllo DNS, poi
+   spuntare **Enforce HTTPS** (il certificato arriva in pochi minuti). Con i record A sul dominio nudo, GitHub
+   reindirizza da solo `manga-dana.com` → `www.manga-dana.com`. Consigliato anche **Settings (profilo) → Pages →
+   Add a domain** per verificare il dominio e impedire che altri repository lo reclamino.
+3. **Actions → Build and deploy to GitHub Pages → Run workflow**: la build precedente ha il percorso base
+   `/4k-CBR-CBZ-Reader/` e sul nuovo dominio non caricherebbe gli asset; il workflow rilegge la configurazione e
+   ricostruisce con base `/`. Da qui `gianmarcocherubini.github.io/4k-CBR-CBZ-Reader/` reindirizza al dominio.
+4. **Settings → General → Social preview**: caricare `public/brand/social-preview.png` (1280×640), la stessa immagine
+   usata dai tag Open Graph per le anteprime dei link (iMessage, WhatsApp, X).
+
+**L'app già installata dall'indirizzo github.io** ha il suo spazio di archiviazione legato a quell'origine: non
+può seguire il dominio. Continua a funzionare dalla cache del service worker (libreria compresa) ma non riceve più
+aggiornamenti; quando rileva che il nuovo indirizzo risponde, mostra nella libreria il banner **Nuovo indirizzo**
+con il percorso da seguire: esportare un backup, installare l'app da www.manga-dana.com, ripristinare il backup e
+importare di nuovo i file (vedi *Backup della libreria*).
 
 Il service worker precarica l'intera app, compresi gli shader Anime4K e i pesi di Real-ESRGAN: dopo la prima
 apertura tutto funziona offline. Non servono intestazioni COOP/COEP: non c'è più WebAssembly multi-thread.

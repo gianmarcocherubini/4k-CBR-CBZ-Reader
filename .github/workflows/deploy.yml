@@ -27,10 +27,15 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm test
-      - name: Build (base path = /<repo>/)
+      # Reads the Pages configuration: base_path is "/<repo>" for the github.io project site and
+      # empty once the custom domain (www.manga-dana.com) is set in Settings → Pages, so the same
+      # workflow builds for either address. After changing the domain, run the workflow once.
+      - id: pages
+        uses: actions/configure-pages@v5
+      - name: Build (base path from the Pages configuration)
         run: npm run build
         env:
-          GITHUB_REPOSITORY: ${{ github.repository }}
+          VITE_BASE: ${{ steps.pages.outputs.base_path }}/
       - name: End-to-end tests against the production build
         run: |
           npx playwright install --with-deps chromium
