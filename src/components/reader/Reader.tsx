@@ -797,11 +797,11 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
         if (engine.info.f16Error) parts.push(`kernel f16 rifiutati dalla GPU (${engine.info.f16Error})`)
         const wino = engine.winogradCheck
         if (wino) {
-          parts.push(
-            engine.kernelVariant === 'w'
-              ? `Winograd vs diretto ${wino.psnr.toFixed(0)} dB, differenza max ${wino.maxDiff}/255`
-              : `Winograd provato e scartato (${wino.psnr.toFixed(0)} dB, max ${wino.maxDiff}/255, ${(wino.ms / 1000).toFixed(2)} s sulla prova)`,
-          )
+          const precision = `${wino.psnr.toFixed(0)} dB, differenza max ${wino.maxDiff}/255 rispetto al kernel diretto`
+          const times = `${(wino.ms / 1000).toFixed(2)} s contro ${(wino.directMs / 1000).toFixed(2)} s del 4×1 sulla prova`
+          if (engine.kernelVariant === 'w') parts.push(`Winograd tenuto: ${precision}, ${times}`)
+          else if (!wino.passed) parts.push(`Winograd scartato per precisione (${precision}; ${times})`)
+          else parts.push(`Winograd scartato perché più lento del kernel scelto (${times}; ${precision})`)
         }
         const shown = spreadPages.map((i) => displayed.get(i)).find((r) => r?.level === heavyLabel)
         const passes = shown?.ensemble ?? heavyEnsemble

@@ -49,8 +49,12 @@ export interface EsrganInfo {
  */
 const MAX_BAND_ROWS = 160
 const MIN_BAND_ROWS = 8
-/** Source rows per strip of the RRDB tail (the x4 stage is too large to hold for a whole band). */
-const TAIL_ROWS = 8
+/**
+ * Source rows per strip of the RRDB tail (the x4 stage is too large to hold for a whole band).
+ * 16 rows plus 2 of context each side: 25% overhead instead of 50% with 8, for ~30 MB more of
+ * tail buffers on a typical page. The context is exact, so the strip height never changes a pixel.
+ */
+const TAIL_ROWS = 16
 const TAIL_CONTEXT = 2
 
 export class EsrganAborted extends Error {
@@ -148,7 +152,10 @@ export interface Upscaler {
    */
   variant: ConvVariant
   readonly variants: readonly ConvVariant[]
-  /** Frees the Winograd buffers (transformed tiles, transformed weights) when that kernel is not kept. */
+  /**
+   * Frees the Winograd buffers (transformed tiles, parameter slots, transformed weights) and pins
+   * the direct kernels for the rest of this runner's life (`variant = 'w'` has no effect afterwards).
+   */
   releaseWinograd(): void
   /** Activation-memory cap used to cut bands (tests lower it to exercise multi-band seams on tiny images). */
   maxActBytes: number
@@ -339,12 +346,27 @@ export interface ConvGeometry {
   srcH: number
 }
 
-/** One convolution of a program with everything bound: the direct bind group and the Winograd pair. */
+/** Buffers a convolution reads and writes (the Winograd bind groups are built from these on demand). */
+export interface ConvIo {
+  name: string
+  src: GPUBuffer
+  src1?: GPUBuffer
+  dst: GPUBuffer
+  res1?: GPUBuffer
+  res2?: GPUBuffer
+}
+
+/**
+ * One convolution of a program: the direct bind group, and the Winograd transform/multiply pair
+ * built the first time that kernel runs (so a device that keeps the direct kernels never pays for
+ * the transformed weights or the tile buffer).
+ */
 export interface ConvInstance {
   pipelines: ConvPipelines
   direct: GPUBindGroup
-  wino: { transform: GPUBindGroup; transformPipeline: GPUComputePipeline; gemm: GPUBindGroup }
   layer: ConvLayerParams
+  io: ConvIo
+  winoGroups?: { transform: GPUBindGroup; transformPipeline: GPUComputePipeline; gemm: GPUBindGroup }
 }
 
 /** Memory for the transformed tiles of one Winograd chunk (16 quads per tile and input quad). */
@@ -385,14 +407,13 @@ abstract class GpuUpscaler implements Upscaler {
   private scratch: { w: number; h: number; canvas: OffscreenCanvas }[] = []
   private lost = false
   onLost: (() => void) | null = null
-  // ---- Winograd state: transformed tiles, per-dispatch parameter slots, transformed weights ----
+  // ---- Winograd state (allocated on first use, released when the kernel is not kept) ----
   protected readonly winoTransforms: WinoTransforms
-  private readonly winoV: GPUBuffer
-  private readonly winoSlots: GPUBuffer
+  private wino: { tiles: GPUBuffer; slots: GPUBuffer; weights: Map<string, GPUBuffer> } | null = null
+  private winoReleased = false
   private readonly slotData = new Uint8Array(WINO_MAX_SLOTS * WINO_SLOT_BYTES)
   private slotCount = 0
   private slotsExhausted = false
-  private readonly winoU = new Map<string, GPUBuffer>()
 
   protected constructor(dev: DeviceInfo, weights: ModelWeights, options: KernelOptions, maxActBytes: number, wino: WinoTransforms, f16Error?: string) {
     this.device = dev.device
@@ -409,47 +430,59 @@ abstract class GpuUpscaler implements Upscaler {
       })
     }
     this.bandParams = this.uniform('band', BAND_PARAMS_BYTES)
-    this.winoV = this.storage('winograd-tiles', WINO_V_BUDGET_BYTES)
-    this.winoSlots = this.device.createBuffer({ label: 'winograd-slots', size: WINO_MAX_SLOTS * WINO_SLOT_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST })
     void this.device.lost.then(() => {
       this.lost = true
       this.onLost?.()
     })
   }
 
+  /** Transformed-tile buffer, parameter slots and transformed weights, created the first time Winograd runs. */
+  private winoState(): { tiles: GPUBuffer; slots: GPUBuffer; weights: Map<string, GPUBuffer> } {
+    if (!this.wino) {
+      this.wino = {
+        tiles: this.storage('winograd-tiles', WINO_V_BUDGET_BYTES),
+        slots: this.device.createBuffer({ label: 'winograd-slots', size: WINO_MAX_SLOTS * WINO_SLOT_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }),
+        weights: new Map(),
+      }
+    }
+    return this.wino
+  }
+
   /** Transformed (G g Gᵀ) weights of a layer, computed and uploaded on first use, in the kernels' precision. */
   private winoWeights(name: string): GPUBuffer {
-    let buffer = this.winoU.get(name)
+    const state = this.winoState()
+    let buffer = state.weights.get(name)
     if (!buffer) {
       const u = winogradWeights(this.layer(name))
       const data = this.options.f16 ? Uint16Array.from(u, f32ToF16) : u
       buffer = this.device.createBuffer({ label: `${name}-winograd`, size: data.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST })
       this.device.queue.writeBuffer(buffer, 0, data.buffer, data.byteOffset, data.byteLength)
-      this.winoU.set(name, buffer)
+      state.weights.set(name, buffer)
     }
     return buffer
   }
 
   releaseWinograd(): void {
-    for (const buffer of this.winoU.values()) buffer.destroy()
-    this.winoU.clear()
+    if (this.wino) {
+      for (const buffer of this.wino.weights.values()) buffer.destroy()
+      this.wino.tiles.destroy()
+      this.wino.slots.destroy()
+      this.wino = null
+    }
+    this.winoReleased = true
     if (this.variant === 'w') this.variant = 1
   }
 
-  /**
-   * Binds one convolution: the direct bind group (Band uniform `band`, layer uniform `lp`) and the
-   * Winograd transform/multiply pair sharing the transformed-tile buffer and the parameter slots.
-   */
+  /** Binds one convolution's direct kernel (Band uniform `band`, layer uniform `lp`); the Winograd pair follows on demand. */
   protected makeConv(
     pipelines: ConvPipelines,
     name: string,
     io: { src: GPUBuffer; src1?: GPUBuffer; dst: GPUBuffer; res1?: GPUBuffer; res2?: GPUBuffer; band: GPUBuffer; lp: GPUBuffer },
     layer: ConvLayerParams,
   ): ConvInstance {
-    const device = this.device
     const w = this.weightsOf(name)
     const spec = pipelines.spec
-    const directEntries: Array<[number, GPUBindingResource]> = [
+    const entries: Array<[number, GPUBindingResource]> = [
       [0, { buffer: io.src }],
       [1, { buffer: w.weight }],
       [2, { buffer: w.bias }],
@@ -457,17 +490,32 @@ abstract class GpuUpscaler implements Upscaler {
       [5, { buffer: io.band }],
       [6, { buffer: io.lp }],
     ]
-    if (w.prelu) directEntries.push([3, { buffer: w.prelu }])
-    if (spec.split) directEntries.push([7, { buffer: io.src1! }])
-    if (spec.residual >= 1) directEntries.push([8, { buffer: io.res1! }])
-    if (spec.residual === 2) directEntries.push([9, { buffer: io.res2! }])
-    const slot: GPUBindingResource = { buffer: this.winoSlots, offset: 0, size: WINO_PARAMS_BYTES }
+    if (w.prelu) entries.push([3, { buffer: w.prelu }])
+    if (spec.split) entries.push([7, { buffer: io.src1! }])
+    if (spec.residual >= 1) entries.push([8, { buffer: io.res1! }])
+    if (spec.residual === 2) entries.push([9, { buffer: io.res2! }])
+    return {
+      pipelines,
+      direct: bindGroup(this.device, name, pipelines.layout, entries),
+      layer,
+      io: { name, src: io.src, src1: io.src1, dst: io.dst, res1: io.res1, res2: io.res2 },
+    }
+  }
+
+  /** Winograd bind groups of a convolution (transform and multiply share the tile buffer and the slots). */
+  private winoGroupsOf(inst: ConvInstance): NonNullable<ConvInstance['winoGroups']> {
+    if (inst.winoGroups) return inst.winoGroups
+    const state = this.winoState()
+    const { io } = inst
+    const w = this.weightsOf(io.name)
+    const spec = inst.pipelines.spec
+    const slot: GPUBindingResource = { buffer: state.slots, offset: 0, size: WINO_PARAMS_BYTES }
     const transform = spec.split ? this.winoTransforms.split : this.winoTransforms.plain
-    const transformEntries: Array<[number, GPUBindingResource]> = [[0, { buffer: io.src }], [1, { buffer: this.winoV }], [5, slot]]
+    const transformEntries: Array<[number, GPUBindingResource]> = [[0, { buffer: io.src }], [1, { buffer: state.tiles }], [5, slot]]
     if (spec.split) transformEntries.push([7, { buffer: io.src1! }])
     const gemmEntries: Array<[number, GPUBindingResource]> = [
-      [0, { buffer: this.winoV }],
-      [1, { buffer: this.winoWeights(name) }],
+      [0, { buffer: state.tiles }],
+      [1, { buffer: this.winoWeights(io.name) }],
       [2, { buffer: w.bias }],
       [4, { buffer: io.dst }],
       [5, slot],
@@ -475,16 +523,12 @@ abstract class GpuUpscaler implements Upscaler {
     if (w.prelu) gemmEntries.push([3, { buffer: w.prelu }])
     if (spec.residual >= 1) gemmEntries.push([8, { buffer: io.res1! }])
     if (spec.residual === 2) gemmEntries.push([9, { buffer: io.res2! }])
-    return {
-      pipelines,
-      direct: bindGroup(device, `${name}`, pipelines.layout, directEntries),
-      wino: {
-        transform: bindGroup(device, `${name}-wt`, transform.layout, transformEntries),
-        transformPipeline: transform.pipeline,
-        gemm: bindGroup(device, `${name}-wg`, pipelines.gemmLayout, gemmEntries),
-      },
-      layer,
+    inst.winoGroups = {
+      transform: bindGroup(this.device, `${io.name}-wt`, transform.layout, transformEntries),
+      transformPipeline: transform.pipeline,
+      gemm: bindGroup(this.device, `${io.name}-wg`, inst.pipelines.gemmLayout, gemmEntries),
     }
+    return inst.winoGroups
   }
 
   /** Called before a band pass is encoded: the parameter slots are refilled from the start. */
@@ -495,7 +539,7 @@ abstract class GpuUpscaler implements Upscaler {
 
   /** Uploads the slots a band pass allocated (before its command buffers are submitted). */
   protected flushSlots(): void {
-    if (this.slotCount > 0) this.device.queue.writeBuffer(this.winoSlots, 0, this.slotData, 0, this.slotCount * WINO_SLOT_BYTES)
+    if (this.slotCount > 0 && this.wino) this.device.queue.writeBuffer(this.wino.slots, 0, this.slotData, 0, this.slotCount * WINO_SLOT_BYTES)
   }
 
   /**
@@ -510,7 +554,8 @@ abstract class GpuUpscaler implements Upscaler {
       pass.setBindGroup(0, inst.direct)
       pass.dispatchWorkgroups(Math.ceil(geom.bw / BODY_BLOCK_W), Math.ceil(geom.bh / bodyBlockH(rows)))
     }
-    if (this.variant !== 'w') return direct()
+    if (this.variant !== 'w' || this.winoReleased) return direct()
+    const groups = this.winoGroupsOf(inst)
     const cin4 = inst.layer.cin / 4
     const tilesW = Math.ceil(geom.bw / 2)
     const tilesH = Math.ceil(geom.bh / 2)
@@ -547,11 +592,11 @@ abstract class GpuUpscaler implements Upscaler {
       const offset = this.slotCount * WINO_SLOT_BYTES
       this.slotData.set(new Uint8Array(params), offset)
       this.slotCount++
-      pass.setPipeline(inst.wino.transformPipeline)
-      pass.setBindGroup(0, inst.wino.transform, [offset])
+      pass.setPipeline(groups.transformPipeline)
+      pass.setBindGroup(0, groups.transform, [offset])
       pass.dispatchWorkgroups(Math.ceil(tilesChunk / WINO_TRANSFORM_WG), cin4)
       pass.setPipeline(inst.pipelines.gemm)
-      pass.setBindGroup(0, inst.wino.gemm, [offset])
+      pass.setBindGroup(0, groups.gemm, [offset])
       pass.dispatchWorkgroups(Math.ceil(tilesChunk / WINO_TILES_PER_GROUP))
     }
   }
@@ -736,10 +781,12 @@ abstract class GpuUpscaler implements Upscaler {
       l.bias.destroy()
       l.prelu?.destroy()
     }
-    for (const buffer of this.winoU.values()) buffer.destroy()
-    this.winoU.clear()
-    this.winoV.destroy()
-    this.winoSlots.destroy()
+    if (this.wino) {
+      for (const buffer of this.wino.weights.values()) buffer.destroy()
+      this.wino.tiles.destroy()
+      this.wino.slots.destroy()
+      this.wino = null
+    }
     this.bandParams.destroy()
     this.device.destroy()
   }

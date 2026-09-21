@@ -171,9 +171,16 @@ WebAssembly), selezionabili in **Modello**:
   trasformata d'uscita (Aᵀ M A) nei registri, con gli stessi epiloghi (bias, attivazione, residui). In f32 è
   identico al bit al kernel diretto sul 6B; in f16 le trasformate arrotondano diversamente, quindi all'attivazione
   l'app cronometra le tre versioni sull'immagine di prova, confronta l'uscita Winograd con quella diretta e la
-  tiene solo se è la più veloce **e** coincide (≥ 44 dB, differenza massima 4/255); altrimenti libera i suoi buffer.
-  La riga di stato mostra il kernel scelto e, per Winograd, il confronto («Winograd vs diretto 5x dB, differenza
-  max n/255» oppure «provato e scartato»).
+  tiene solo se è la più veloce **e** coincide (≥ 44 dB, differenza massima 4/255); altrimenti libera i suoi buffer
+  (che vengono allocati solo quando Winograd gira davvero: pesi trasformati, tessere, parametri). L'esito è
+  ricordato per dispositivo, modello, precisione e versione dell'app: le attivazioni successive misurano solo il
+  kernel scelto. La riga di stato mostra il kernel e l'esito di Winograd («tenuto», «scartato per precisione» o
+  «scartato perché più lento del kernel scelto», con decibel, differenza massima e tempi sulla prova). Su un iPad M in f16 Winograd è risultato
+  più lento del kernel diretto (0,42 s contro ~0,35 s sulla prova) e meno preciso (51 dB, max 9/255): l'ingresso
+  trasformato è 4× le attivazioni e passa due volte dalla memoria, ~260 GB per pagina sul 6B, mentre il kernel
+  diretto in f16 lavora già a ~2 TFLOPS effettivi. Winograd conviene dove il limite è il calcolo, non la banda.
+- **Coda ×4 del 6B a strisce di 16 righe** (+2 di contesto per lato, esatte): 25% di contesto ricalcolato invece
+  del 50% delle strisce da 8, a risultato identico.
 - La pagina resta com'è finché il risultato non è pronto, poi cambia una volta sola; in doppia pagina le due pagine
   passano a HD insieme. Risultato a fattore fisso (×4; ×2 come media 2×2 del ×4 solo se il ×4 supererebbe i 16 MP),
   poi adattato allo schermo come per Anime4K.
