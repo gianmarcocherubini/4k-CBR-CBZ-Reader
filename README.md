@@ -309,10 +309,15 @@ locale vale il nome del repository, oppure `VITE_BASE=/`.
 
 ### Dominio www.manga-dana.com
 
-Il dominio è registrato su IONOS (name server `ui-dns.*`). Per collegarlo a GitHub Pages, nell'ordine:
+Il dominio è registrato su IONOS (name server `ui-dns.*`). Il certificato **SSL Starter** incluso da IONOS non va
+configurato (né «con il mio sito web IONOS», che lo installerebbe sui loro server, né «con il mio server»): GitHub
+Pages non accetta certificati esterni ed emette il proprio, gratuito (Let's Encrypt), quando si spunta *Enforce
+HTTPS*. Per collegare il dominio a GitHub Pages, nell'ordine:
 
-1. **DNS (IONOS → Domini → manga-dana.com → DNS)**. Sostituire il record A del dominio nudo che punta al parcheggio
-   (`217.160.0.37`) e aggiungere:
+1. **DNS (IONOS → Domini & SSL → manga-dana.com → DNS)**. Il dominio nudo (`@`) nasce con i record del parcheggio
+   IONOS, `A 217.160.0.37` e `AAAA 2001:8d8:100f:f000::200`: vanno **sostituiti** con quelli di GitHub (un AAAA che
+   non punta a GitHub fa fallire il controllo DNS). MX, TXT (SPF), `autodiscover` e `_domainconnect` restano.
+   Record finali:
 
    | Nome | Tipo | Valore |
    | --- | --- | --- |

@@ -32,10 +32,13 @@ jobs:
       # workflow builds for either address. After changing the domain, run the workflow once.
       - id: pages
         uses: actions/configure-pages@v5
-      - name: Build (base path from the Pages configuration)
-        run: npm run build
-        env:
-          VITE_BASE: ${{ steps.pages.outputs.base_path }}/
+      # Shared by the build and by `vite preview` under the end-to-end tests: both must agree on it.
+      - name: Base path from the Pages configuration
+        run: |
+          base='${{ steps.pages.outputs.base_path }}'
+          echo "VITE_BASE=${base%/}/" >> "$GITHUB_ENV"
+          echo "Base path: ${base%/}/"
+      - run: npm run build
       - name: End-to-end tests against the production build
         run: |
           npx playwright install --with-deps chromium
