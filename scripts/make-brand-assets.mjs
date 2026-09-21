@@ -4,12 +4,15 @@
 //   public/splash/<w>x<h>-{light,dark}.png   iOS startup images, one per iPad size and orientation
 //   public/brand/social-preview.png          1280×640 card for Open Graph and the GitHub social preview
 //   public/brand/wordmark-{light,dark}.png   README header, transparent, 2×
+//   public/favicon.ico                       16, 32 and 48 px tiles for the browsers that do not take an
+//                                            SVG favicon (Safari) and for everything that asks for /favicon.ico
+//   public/icons/mask-icon.svg               Safari pinned-tab mask (monochrome, 16×16 viewBox)
 //
 // The crown is read from src/components/crown.json (the same path the app draws); text is set in
 // Inter, the typeface in the app's font stack after the system fonts, fetched once from the
 // fontsource package on jsDelivr and cached under node_modules/.cache.
 //
-//   node scripts/make-brand-assets.mjs [splash] [social] [wordmark]     (default: everything; Node 22+)
+//   node scripts/make-brand-assets.mjs [splash] [social] [wordmark] [favicon]     (default: everything; Node 22+)
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
@@ -250,6 +253,73 @@ async function wordmark(page, fonts) {
   console.log('wordmark: public/brand/wordmark-{light,dark}.png (720×160, transparent)')
 }
 
+/**
+ * Ink tile with the bone crown, the design of public/icons/icon.svg, drawn at a given pixel size.
+ * `stroke` (in the crown's 100-unit box) thickens the glyph's outline on both sides.
+ */
+function tileSvg(px, { crownFraction, radiusFraction, stroke = 0 }) {
+  const box = 512
+  const scale = (box * crownFraction) / 100
+  const tx = (box - 100 * scale) / 2
+  // The crown sits a touch low in its box; the same nudge as the app icon.
+  const ty = (box - 100 * scale) / 2 + box * 0.01
+  const outline = stroke ? ` stroke="#f7f7f4" stroke-width="${stroke}" stroke-linejoin="round"` : ''
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${box} ${box}" width="${px}" height="${px}" style="display:block">
+    <rect width="${box}" height="${box}" rx="${Math.round(box * radiusFraction)}" fill="#26251e"/>
+    <path transform="translate(${tx.toFixed(2)} ${ty.toFixed(2)}) scale(${scale.toFixed(4)})" d="${crown.d}" fill="#f7f7f4"${outline}/>
+  </svg>`
+}
+
+/**
+ * ICO container: a 6-byte header, one 16-byte directory entry per image, then the images. PNG
+ * payloads are accepted by every current browser and keep the file small.
+ */
+function ico(images) {
+  const header = Buffer.alloc(6)
+  header.writeUInt16LE(0, 0)
+  header.writeUInt16LE(1, 2)
+  header.writeUInt16LE(images.length, 4)
+  const entries = []
+  let offset = 6 + 16 * images.length
+  for (const { size, png } of images) {
+    const entry = Buffer.alloc(16)
+    entry[0] = size === 256 ? 0 : size
+    entry[1] = size === 256 ? 0 : size
+    entry[2] = 0
+    entry[3] = 0
+    entry.writeUInt16LE(1, 4)
+    entry.writeUInt16LE(32, 6)
+    entry.writeUInt32LE(png.length, 8)
+    entry.writeUInt32LE(offset, 12)
+    entries.push(entry)
+    offset += png.length
+  }
+  return Buffer.concat([header, ...entries, ...images.map((image) => image.png)])
+}
+
+async function favicon(page) {
+  // Larger than on the app icon: in a tab the crown needs most of the tile to stay a crown. At
+  // 16 px the glyph's outline is under a pixel wide and smears to grey: a slightly thicker outline
+  // keeps it a crown (a solid silhouette loses the three points and reads as a blob).
+  const tiles = {
+    16: { crownFraction: 0.88, radiusFraction: 0.19, stroke: 4 },
+    32: { crownFraction: 0.8, radiusFraction: 0.19 },
+    48: { crownFraction: 0.8, radiusFraction: 0.19 },
+  }
+  const images = []
+  for (const [size, tile] of Object.entries(tiles).map(([k, v]) => [Number(k), v])) {
+    const html = page_(tileSvg(size, tile), 'body{background:transparent;display:block}')
+    images.push({ size, png: await render(page, { width: size, height: size, html, omitBackground: true }) })
+  }
+  await writeFile(join(publicDir, 'favicon.ico'), ico(images))
+  const mask = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+  <path transform="scale(0.16)" d="${crown.d}"/>
+</svg>
+`
+  await writeFile(join(publicDir, 'icons', 'mask-icon.svg'), mask)
+  console.log(`favicon: public/favicon.ico (16, 32, 48 px; ${ico(images).length} bytes), public/icons/mask-icon.svg`)
+}
+
 const wanted = new Set(process.argv.slice(2))
 const all = wanted.size === 0
 const browser = await chromium.launch()
@@ -259,6 +329,7 @@ try {
   if (all || wanted.has('splash')) await splash(page)
   if (all || wanted.has('social')) await social(page, fonts)
   if (all || wanted.has('wordmark')) await wordmark(page, fonts)
+  if (all || wanted.has('favicon')) await favicon(page)
 } finally {
   await browser.close()
 }

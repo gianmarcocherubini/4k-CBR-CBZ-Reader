@@ -16,7 +16,7 @@ Il nome viene da 漫画 (manga) e 棚 (*dana*, da 本棚 *hondana*, lo scaffale 
 marchio è la corona del set «Extras» del carattere Sprite Graffiti di Fontfabric (licenza gratuita per uso
 commerciale: loghi e immagini statiche sono permessi; il font non viene incorporato nell'app, il marchio è un
 tracciato SVG in `src/components/crown.json`, disegnato da `Brand.tsx` e da `scripts/make-brand-assets.mjs`, che
-genera le immagini di avvio iOS, l'anteprima social e il wordmark di questo README; le icone sono in
+genera le immagini di avvio iOS, l'anteprima social, il wordmark di questo README e la favicon; le icone sono in
 `public/icons/`). Importa file **CBZ/ZIP** (anche protetti da password) e **CBR** (RAR) fino a 10 GB ciascuno, li
 tiene nell'archiviazione dell'app anche offline e li mostra a piena risoluzione con lettura da destra a sinistra,
 doppia pagina intelligente e super risoluzione AI sulla GPU.
