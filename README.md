@@ -161,10 +161,19 @@ WebAssembly), selezionabili in **Modello**:
   quel modello: a secondi per passaggio significherebbe un minuto per pagina.
 - **Sfocatura anti-spoiler** (interruttore, attivo di default): mentre la versione HD viene calcolata la pagina
   resta sfocata (sfocatura che "respira") e si rivela nitida solo quando è pronta.
-- **Kernel scelto sul dispositivo**: le convoluzioni esistono in due varianti a risultato identico, un thread per
-  4 pixel di una riga (16 accumulatori) o per 4 pixel di due righe (32 accumulatori: metà dei caricamenti di pesi
-  per moltiplicazione e righe d'ingresso condivise). All'attivazione entrambe vengono cronometrate sull'immagine di
-  prova e resta la più veloce; la riga di stato mostra «kernel 4×1» o «kernel 4×2».
+- **Kernel scelto sul dispositivo**: le convoluzioni esistono in tre versioni. Due dirette a risultato identico,
+  un thread per 4 pixel di una riga (16 accumulatori) o per 4 pixel di due righe (32 accumulatori: metà dei
+  caricamenti di pesi per moltiplicazione e righe d'ingresso condivise). La terza è **Winograd F(2×2, 3×3)**: la
+  convoluzione 3×3 su una tessera 4×4 d'ingresso produce 2×2 uscite con 16 moltiplicazioni per coppia di canali
+  invece di 36 (2,25× in meno); i pesi vengono trasformati una volta sulla CPU (G g Gᵀ), un kernel trasforma le
+  tessere d'ingresso (Bᵀ d B, 16 quad per tessera, a blocchi di righe entro 32 MB), un secondo kernel esegue le 16
+  moltiplicazioni di matrici per posizione con le tessere condivise nella memoria del workgroup e accumula la
+  trasformata d'uscita (Aᵀ M A) nei registri, con gli stessi epiloghi (bias, attivazione, residui). In f32 è
+  identico al bit al kernel diretto sul 6B; in f16 le trasformate arrotondano diversamente, quindi all'attivazione
+  l'app cronometra le tre versioni sull'immagine di prova, confronta l'uscita Winograd con quella diretta e la
+  tiene solo se è la più veloce **e** coincide (≥ 44 dB, differenza massima 4/255); altrimenti libera i suoi buffer.
+  La riga di stato mostra il kernel scelto e, per Winograd, il confronto («Winograd vs diretto 5x dB, differenza
+  max n/255» oppure «provato e scartato»).
 - La pagina resta com'è finché il risultato non è pronto, poi cambia una volta sola; in doppia pagina le due pagine
   passano a HD insieme. Risultato a fattore fisso (×4; ×2 come media 2×2 del ×4 solo se il ×4 supererebbe i 16 MP),
   poi adattato allo schermo come per Anime4K.

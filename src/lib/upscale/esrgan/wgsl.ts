@@ -42,6 +42,9 @@ export const bodyBlockH = (rows: ConvRows): number => 4 * rows
  */
 export type ConvRows = 1 | 2
 export const CONV_VARIANTS: readonly ConvRows[] = [1, 2]
+/** Convolution kernel in use: direct with 1 or 2 output rows per thread, or Winograd F(2x2, 3x3). */
+export type ConvVariant = ConvRows | 'w'
+export const KERNEL_VARIANTS: readonly ConvVariant[] = [1, 2, 'w']
 
 const types = (o: KernelOptions) => ({
   enable: o.f16 ? 'enable f16;\n' : '',
@@ -481,6 +484,246 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let u = (X4 - rp.coreX04) / sub;
   let v = (Y4 - rp.coreY04) / sub;
 ${store}
+}
+`
+}
+
+// ---- Winograd F(2x2, 3x3) ---------------------------------------------------------------------
+
+/**
+ * Per-dispatch parameters of the Winograd kernels (one 256-byte slot each, selected with a
+ * dynamic offset): the tile chunk, the output and source geometry, and the layer's constants.
+ */
+export const WINO_STRUCT = `struct Wino {
+  tilesW: u32, tilesChunk: u32, tileRow0: u32, bw: u32,
+  bh: u32, srcW: u32, srcH: u32, cin4: u32,
+  cout4: u32, inScale: u32, srcX0: u32, srcY0: u32,
+  splitPlane: u32, dstPlane: u32, res1Scale: f32, res2Scale: f32,
+}`
+export const WINO_PARAMS_BYTES = 64
+export const WINO_SLOT_BYTES = 256
+/** Tiles per workgroup of the multiply kernel (32 lanes × 4 tiles), and input quads per shared-memory step. */
+export const WINO_TILES_PER_GROUP = 128
+export const WINO_CIN4_PER_STEP = 8
+export const WINO_TRANSFORM_WG = 64
+
+export function winoParams(p: {
+  tilesW: number
+  tilesChunk: number
+  tileRow0: number
+  bw: number
+  bh: number
+  srcW: number
+  srcH: number
+  cin: number
+  cout: number
+  inScale?: 1 | 2
+  srcX0?: number
+  srcY0?: number
+  splitPlane?: number
+  dstPlane?: number
+  res1Scale?: number
+  res2Scale?: number
+}): ArrayBuffer {
+  const buffer = new ArrayBuffer(WINO_PARAMS_BYTES)
+  const u = new Uint32Array(buffer)
+  const f = new Float32Array(buffer)
+  u[0] = p.tilesW
+  u[1] = p.tilesChunk
+  u[2] = p.tileRow0
+  u[3] = p.bw
+  u[4] = p.bh
+  u[5] = p.srcW
+  u[6] = p.srcH
+  u[7] = p.cin / 4
+  u[8] = p.cout / 4
+  u[9] = p.inScale ?? 1
+  u[10] = p.srcX0 ?? 0
+  u[11] = p.srcY0 ?? 0
+  u[12] = p.splitPlane ?? 0xffff
+  u[13] = p.dstPlane ?? 0
+  f[14] = p.res1Scale ?? 0
+  f[15] = p.res2Scale ?? 0
+  return buffer
+}
+
+/**
+ * Input transform: one thread per (2x2 output tile, input quad) reads the 4x4 input window
+ * (nearest-upsampled, offset and clamped exactly like the direct kernel) and writes
+ * V = Bᵀ d B as 16 quads into the transformed buffer, laid out [p][cin4][tile].
+ */
+export function winogradTransformWgsl(o: KernelOptions, split: boolean): string {
+  const { enable, F4 } = types(o)
+  const loads = (buf: string) => {
+    const lines: string[] = []
+    for (let r = 0; r < 4; r++) for (let c = 0; c < 4; c++) lines.push(`    d${r}${c} = ${buf}[pb + ys[${r}] + xs[${c}]];`)
+    return lines.join('\n')
+  }
+  const decls = Array.from({ length: 16 }, (_, i) => `  var d${i >> 2}${i & 3}: ${F4};`).join('\n')
+  const bt: string[] = []
+  for (let c = 0; c < 4; c++) {
+    bt.push(`  let t0${c} = d0${c} - d2${c};`)
+    bt.push(`  let t1${c} = d1${c} + d2${c};`)
+    bt.push(`  let t2${c} = d2${c} - d1${c};`)
+    bt.push(`  let t3${c} = d1${c} - d3${c};`)
+  }
+  const stores: string[] = []
+  for (let r = 0; r < 4; r++) {
+    const v = [`t${r}0 - t${r}2`, `t${r}1 + t${r}2`, `t${r}2 - t${r}1`, `t${r}1 - t${r}3`]
+    for (let c = 0; c < 4; c++) stores.push(`  V[(${r * 4 + c}u * wp.cin4 + c4) * wp.tilesChunk + t] = ${v[c]};`)
+  }
+  return `${enable}${WINO_STRUCT}
+@group(0) @binding(0) var<storage, read> src: array<${F4}>;
+@group(0) @binding(1) var<storage, read_write> V: array<${F4}>;
+@group(0) @binding(5) var<uniform> wp: Wino;
+${split ? `@group(0) @binding(7) var<storage, read> src1: array<${F4}>;` : ''}
+
+fn fdiv(a: i32, b: i32) -> i32 { return (a - ((a % b + b) % b)) / b; }
+
+@compute @workgroup_size(${WINO_TRANSFORM_WG})
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+  let t = gid.x;
+  if (t >= wp.tilesChunk) { return; }
+  let c4 = gid.y;
+  let tx = i32(t % wp.tilesW);
+  let ty = i32(wp.tileRow0 + t / wp.tilesW);
+  let sc = i32(wp.inScale);
+  let sw = i32(wp.srcW);
+  let sh = i32(wp.srcH);
+  let splane = wp.srcW * wp.srcH;
+  var xs: array<u32, 4>;
+  var ys: array<u32, 4>;
+  for (var i = 0; i < 4; i++) {
+    xs[i] = u32(clamp(fdiv(2 * tx - 1 + i, sc) + i32(wp.srcX0), 0, sw - 1));
+    ys[i] = u32(clamp(fdiv(2 * ty - 1 + i, sc) + i32(wp.srcY0), 0, sh - 1)) * wp.srcW;
+  }
+${decls}
+${
+  split
+    ? `  if (c4 < wp.splitPlane) {
+    let pb = c4 * splane;
+${loads('src')}
+  } else {
+    let pb = (c4 - wp.splitPlane) * splane;
+${loads('src1')}
+  }`
+    : `  {
+    let pb = c4 * splane;
+${loads('src')}
+  }`
+}
+${bt.join('\n')}
+${stores.join('\n')}
+}
+`
+}
+
+/**
+ * Element-wise products summed over the input channels, one 4x4 position at a time, with the
+ * output transform Y = Aᵀ M A accumulated in registers (Aᵀ has only 0 and ±1 entries): a thread
+ * owns 4 tiles × 8 output channels, a wave shares its output-channel group (uniform weight
+ * loads), and the workgroup shares the transformed tiles through workgroup memory so each is
+ * read from the buffer once. The epilogue (bias, activation, residuals) is the direct kernel's.
+ */
+export function winogradGemmWgsl(o: KernelOptions, spec: ConvSpec): string {
+  const { enable, F, F4 } = types(o)
+  const groups = spec.cout / 8
+  const cout4 = spec.cout / 4
+  const wg = 32 * groups
+  const yDecl: string[] = []
+  for (let oIdx = 0; oIdx < 4; oIdx++) for (let i = 0; i < 4; i++) for (let j = 0; j < 2; j++) yDecl.push(`  var y${oIdx}_${i}${j} = ${F4}(${F}(0.0));`)
+  const a0 = [1, 1, 1, 0]
+  const a1 = [0, 1, -1, -1]
+  const positions: string[] = []
+  for (let p = 0; p < 16; p++) {
+    const r = p >> 2
+    const c = p & 3
+    const block: string[] = []
+    for (let i = 0; i < 4; i++) for (let j = 0; j < 2; j++) block.push(`  var m_${i}${j} = ${F4}(${F}(0.0));`)
+    block.push(`  for (var c0 = 0u; c0 < wp.cin4; c0 += ${WINO_CIN4_PER_STEP}u) {`)
+    block.push(`    let cn = min(${WINO_CIN4_PER_STEP}u, wp.cin4 - c0);`)
+    block.push(`    workgroupBarrier();`)
+    block.push(`    for (var i = lid; i < cn * ${WINO_TILES_PER_GROUP}u; i += ${wg}u) {`)
+    block.push(`      let k = i / ${WINO_TILES_PER_GROUP}u;`)
+    block.push(`      let tt = tile0 + (i % ${WINO_TILES_PER_GROUP}u);`)
+    block.push(`      if (tt < wp.tilesChunk) { sh[i] = V[(${p}u * wp.cin4 + c0 + k) * wp.tilesChunk + tt]; } else { sh[i] = ${F4}(${F}(0.0)); }`)
+    block.push(`    }`)
+    block.push(`    workgroupBarrier();`)
+    block.push(`    for (var k = 0u; k < cn; k++) {`)
+    for (let i = 0; i < 4; i++) block.push(`      let v${i} = sh[k * ${WINO_TILES_PER_GROUP}u + lane + ${32 * i}u];`)
+    block.push(`      let ub = (${p}u * cin + (c0 + k) * 4u) * ${cout4}u + q4;`)
+    for (let ci = 0; ci < 4; ci++) for (let j = 0; j < 2; j++) block.push(`      let w${ci}${j} = U[ub + ${ci * cout4 + j}u];`)
+    const comp = ['x', 'y', 'z', 'w']
+    for (let i = 0; i < 4; i++) {
+      for (let j = 0; j < 2; j++) {
+        block.push(`      m_${i}${j} += v${i}.x * w0${j} + v${i}.y * w1${j} + v${i}.z * w2${j} + v${i}.w * w3${j};`)
+      }
+    }
+    void comp
+    block.push(`    }`)
+    block.push(`  }`)
+    // Scatter M(r, c) into the four outputs with the Aᵀ coefficients.
+    const coeff = [a0[r]! * a0[c]!, a0[r]! * a1[c]!, a1[r]! * a0[c]!, a1[r]! * a1[c]!]
+    for (let oIdx = 0; oIdx < 4; oIdx++) {
+      if (coeff[oIdx] === 0) continue
+      const op = coeff[oIdx] === 1 ? '+=' : '-='
+      for (let i = 0; i < 4; i++) for (let j = 0; j < 2; j++) block.push(`  y${oIdx}_${i}${j} ${op} m_${i}${j};`)
+    }
+    positions.push(`  {\n${block.join('\n')}\n  }`)
+  }
+  const epilogue = (value: string, j: number): string => {
+    const a = activate(F, F4, spec.activation, value, `q4 + ${j}u`)
+    if (spec.residual === 0) return a
+    const r1 = `res1[(q4 + ${j}u) * plane + idx]`
+    if (spec.residual === 1) return `${r1} + s1 * (${a})`
+    const r2 = `res2[(q4 + ${j}u) * plane + idx]`
+    return `${r1} + s1 * (${r2} + s2 * (${a}))`
+  }
+  const stores: string[] = []
+  for (let i = 0; i < 4; i++) {
+    stores.push(`  {`)
+    stores.push(`    let tt = tile0 + lane + ${32 * i}u;`)
+    stores.push(`    if (tt < wp.tilesChunk) {`)
+    stores.push(`      let x = (tt % wp.tilesW) * 2u;`)
+    stores.push(`      let y = (wp.tileRow0 + tt / wp.tilesW) * 2u;`)
+    for (let oIdx = 0; oIdx < 4; oIdx++) {
+      const dx = oIdx & 1
+      const dy = oIdx >> 1
+      stores.push(`      if (x + ${dx}u < wp.bw && y + ${dy}u < wp.bh) {`)
+      stores.push(`        let idx = (y + ${dy}u) * wp.bw + x + ${dx}u;`)
+      for (let j = 0; j < 2; j++) {
+        stores.push(`        dst[(wp.dstPlane + q4 + ${j}u) * plane + idx] = ${epilogue(`(y${oIdx}_${i}${j} + bias[q4 + ${j}u])`, j)};`)
+      }
+      stores.push(`      }`)
+    }
+    stores.push(`    }`)
+    stores.push(`  }`)
+  }
+  return `${enable}${WINO_STRUCT}
+@group(0) @binding(0) var<storage, read> V: array<${F4}>;
+@group(0) @binding(1) var<storage, read> U: array<${F4}>;
+@group(0) @binding(2) var<storage, read> bias: array<${F4}>;
+${spec.activation === 'prelu' ? `@group(0) @binding(3) var<storage, read> prelu: array<${F4}>;` : ''}
+@group(0) @binding(4) var<storage, read_write> dst: array<${F4}>;
+@group(0) @binding(5) var<uniform> wp: Wino;
+${spec.residual >= 1 ? `@group(0) @binding(8) var<storage, read> res1: array<${F4}>;` : ''}
+${spec.residual === 2 ? `@group(0) @binding(9) var<storage, read> res2: array<${F4}>;` : ''}
+
+var<workgroup> sh: array<${F4}, ${WINO_TILES_PER_GROUP * WINO_CIN4_PER_STEP}>;
+
+@compute @workgroup_size(${wg})
+fn main(@builtin(local_invocation_index) lid: u32, @builtin(workgroup_id) wid: vec3u) {
+  let wave = lid / 32u;
+  let lane = lid % 32u;
+  let q4 = wave * 2u;
+  let tile0 = wid.x * ${WINO_TILES_PER_GROUP}u;
+  let cin = wp.cin4 * 4u;
+  let plane = wp.bw * wp.bh;
+${spec.residual >= 1 ? `  let s1 = ${F}(wp.res1Scale);` : ''}
+${spec.residual === 2 ? `  let s2 = ${F}(wp.res2Scale);` : ''}
+${yDecl.join('\n')}
+${positions.join('\n')}
+${stores.join('\n')}
 }
 `
 }

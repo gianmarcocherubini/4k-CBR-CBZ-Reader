@@ -2,7 +2,7 @@ import type { MaxQualityModel, PageSize } from '../../../types'
 import { cacheBudgetBytes } from '../backend'
 import type { SrResult } from '../srEngine'
 import { createUpscaler, EsrganAborted, type EsrganFactor, type EsrganInfo, type Upscaler } from './esrganUpscaler'
-import type { ConvRows } from './wgsl'
+import type { ConvVariant } from './wgsl'
 import weightsUrl6b from './realesrgan-x4plus-anime-6b.f16.bin?url'
 import weightsUrlV3 from './realesr-animevideov3.f16.bin?url'
 import type { EnsembleSize } from './transforms'
@@ -21,6 +21,25 @@ const PROBE = { w: 256, h: 160 }
 const REPROBE_INTERVAL_MS = 8000
 /** Evicted bitmaps are closed a little later: React may still be painting them. */
 const CLOSE_DELAY_MS = 1200
+/** Winograd is kept only when its probe output matches the direct kernel this closely (8-bit). */
+const WINOGRAD_MIN_PSNR = 44
+const WINOGRAD_MAX_DIFF = 4
+
+function compareRgba(a: Uint8ClampedArray, b: Uint8ClampedArray): { psnr: number; maxDiff: number } {
+  let se = 0
+  let maxDiff = 0
+  let n = 0
+  for (let i = 0; i < a.length; i += 4) {
+    for (let c = 0; c < 3; c++) {
+      const d = Math.abs(a[i + c]! - b[i + c]!)
+      se += d * d
+      if (d > maxDiff) maxDiff = d
+      n++
+    }
+  }
+  const mse = se / Math.max(1, n)
+  return { psnr: mse === 0 ? 99 : 10 * Math.log10((255 * 255) / mse), maxDiff }
+}
 
 export interface ModelInfo {
   id: MaxQualityModel
@@ -140,18 +159,26 @@ export class EsrganEngine {
     return this.upscaler.supportsEnsemble && this.model.ensemble
   }
 
-  /** Convolution kernel variant the benchmark selected (output rows per thread). */
-  get kernelVariant(): ConvRows {
+  /** Convolution kernel the benchmark selected. */
+  get kernelVariant(): ConvVariant {
     return this.upscaler.variant
   }
 
+  /** Short name of the selected kernel for the status line. */
+  get kernelLabel(): string {
+    return this.upscaler.variant === 'w' ? 'Winograd' : `4×${this.upscaler.variant}`
+  }
+
   /**
-   * Picks the convolution kernel variant for this GPU and seeds the throughput estimate: each
-   * variant is warmed up on a tiny image (first-use compilation must not be measured) and timed on
-   * one band-sized image; the fastest stays. All variants compute the same numbers.
+   * Picks the convolution kernel for this GPU and seeds the throughput estimate: each kernel is
+   * warmed up on a tiny image (first-use compilation must not be measured) and timed on one
+   * band-sized image; the fastest stays. The direct variants compute identical numbers; Winograd
+   * goes through transforms whose f16 rounding differs, so it is kept only when its probe output
+   * matches the direct one within a visually irrelevant margin.
    */
   private async benchmark(): Promise<void> {
-    let best: { variant: ConvRows; ms: number } | undefined
+    let best: { variant: ConvVariant; ms: number } | undefined
+    let direct: Uint8ClampedArray | undefined
     for (const variant of this.upscaler.variants) {
       this.upscaler.variant = variant
       const warm = synthetic(64, 64)
@@ -160,22 +187,32 @@ export class EsrganEngine {
       } finally {
         warm.close()
       }
-      const ms = await this.timeProbe()
+      const { ms, data } = await this.timeProbe()
+      if (variant === 1) direct = data
+      if (variant === 'w' && direct) {
+        const { psnr, maxDiff } = compareRgba(direct, data)
+        this.winogradCheck = { psnr, maxDiff, ms }
+        if (psnr < WINOGRAD_MIN_PSNR || maxDiff > WINOGRAD_MAX_DIFF) continue
+      }
       if (!best || ms < best.ms) best = { variant, ms }
     }
     if (best) {
       this.upscaler.variant = best.variant
       this.observeProbe(best.ms)
     }
+    if (this.upscaler.variant !== 'w') this.upscaler.releaseWinograd()
   }
 
-  /** Wall time of the probe image, ms. */
-  private async timeProbe(): Promise<number> {
+  /** Winograd probe against the direct kernel (PSNR, largest 8-bit difference) and its time; undefined when not tried. */
+  winogradCheck: { psnr: number; maxDiff: number; ms: number } | undefined
+
+  /** Wall time of the probe image, ms, and its pixels. */
+  private async timeProbe(): Promise<{ ms: number; data: Uint8ClampedArray }> {
     const probe = synthetic(PROBE.w, PROBE.h)
     try {
       const t0 = performance.now()
-      await this.upscaler.upscale(probe, 4)
-      return performance.now() - t0
+      const out = await this.upscaler.upscale(probe, 4)
+      return { ms: performance.now() - t0, data: out.data }
     } finally {
       probe.close()
     }
@@ -189,7 +226,7 @@ export class EsrganEngine {
 
   /** Times the probe image and folds the sample into the throughput estimate. */
   private async probe(): Promise<void> {
-    this.observeProbe(await this.timeProbe())
+    this.observeProbe((await this.timeProbe()).ms)
   }
 
   /**

@@ -11,8 +11,10 @@ import {
   convFirstWgsl,
   type ConvRows,
   type ConvSpec,
+  type ConvVariant,
   convWgsl,
   finalizeWgsl,
+  KERNEL_VARIANTS,
   type KernelOptions,
   LAYER_PARAMS_BYTES,
   layerParams,
@@ -21,7 +23,15 @@ import {
   SHUFFLE_PARAMS_BYTES,
   shuffleWgsl,
   untransformWgsl,
+  WINO_PARAMS_BYTES,
+  WINO_SLOT_BYTES,
+  WINO_TILES_PER_GROUP,
+  WINO_TRANSFORM_WG,
+  winogradGemmWgsl,
+  winogradTransformWgsl,
+  winoParams,
 } from './wgsl'
+import { f32ToF16, winogradWeights } from './winograd'
 
 export type EsrganFactor = 2 | 4
 
@@ -132,11 +142,14 @@ export interface Upscaler {
   /** Whether `upscale` honours `ensemble` (the RRDB tail is not transform-aware). */
   readonly supportsEnsemble: boolean
   /**
-   * Convolution kernel variant in use (output rows per thread). All variants compute the same
-   * numbers; the engine times them on the device and keeps the fastest.
+   * Convolution kernel in use: direct with 1 or 2 output rows per thread, or Winograd. The direct
+   * variants compute identical numbers; Winograd the same maths through transforms (in f16 with
+   * its own rounding). The engine times them on the device and keeps the fastest that matches.
    */
-  variant: ConvRows
-  readonly variants: readonly ConvRows[]
+  variant: ConvVariant
+  readonly variants: readonly ConvVariant[]
+  /** Frees the Winograd buffers (transformed tiles, transformed weights) when that kernel is not kept. */
+  releaseWinograd(): void
   /** Activation-memory cap used to cut bands (tests lower it to exercise multi-band seams on tiny images). */
   maxActBytes: number
   /** Activation bytes per band pixel that the cap applies to. */
@@ -189,24 +202,59 @@ async function requestDevice(): Promise<DeviceInfo | null> {
   return { device, f16, name: name || 'WebGPU' }
 }
 
-/** A convolution compiled in every variant; bind groups made with `layout` fit all of them. */
+/**
+ * A convolution compiled in every kernel: the direct variants (bind groups made with `layout` fit
+ * both) and the Winograd multiply for this spec (`gemm`, bind groups with `gemmLayout`).
+ */
 export interface ConvPipelines {
+  spec: ConvSpec
   layout: GPUBindGroupLayout
   byRows: Record<ConvRows, GPUComputePipeline>
+  gemm: GPUComputePipeline
+  gemmLayout: GPUBindGroupLayout
 }
 
-/** Explicit layout of the conv kernel bindings (shared by the variants, which 'auto' layouts would not guarantee). */
+/** Winograd input transform, shared by every convolution of a program (one per input arrangement). */
+interface WinoTransforms {
+  plain: { pipeline: GPUComputePipeline; layout: GPUBindGroupLayout }
+  split: { pipeline: GPUComputePipeline; layout: GPUBindGroupLayout }
+}
+
+// GPUShaderStage.COMPUTE; spelled out so the module also loads where WebGPU globals are absent (unit tests).
+const VISIBILITY = 4
+const ro = (binding: number): GPUBindGroupLayoutEntry => ({ binding, visibility: VISIBILITY, buffer: { type: 'read-only-storage' } })
+const rw = (binding: number): GPUBindGroupLayoutEntry => ({ binding, visibility: VISIBILITY, buffer: { type: 'storage' } })
+const uniformEntry = (binding: number, dynamic = false): GPUBindGroupLayoutEntry => ({
+  binding,
+  visibility: VISIBILITY,
+  buffer: { type: 'uniform', hasDynamicOffset: dynamic },
+})
+
+/** Explicit layout of the direct conv kernel bindings (shared by the variants, which 'auto' layouts would not guarantee). */
 function convLayout(device: GPUDevice, spec: ConvSpec): GPUBindGroupLayout {
-  const visibility = GPUShaderStage.COMPUTE
-  const ro = (binding: number): GPUBindGroupLayoutEntry => ({ binding, visibility, buffer: { type: 'read-only-storage' } })
   const entries: GPUBindGroupLayoutEntry[] = [ro(0), ro(1), ro(2)]
   if (spec.activation === 'prelu') entries.push(ro(3))
-  entries.push({ binding: 4, visibility, buffer: { type: 'storage' } })
-  entries.push({ binding: 5, visibility, buffer: { type: 'uniform' } })
-  entries.push({ binding: 6, visibility, buffer: { type: 'uniform' } })
+  entries.push(rw(4), uniformEntry(5), uniformEntry(6))
   if (spec.split) entries.push(ro(7))
   if (spec.residual >= 1) entries.push(ro(8))
   if (spec.residual === 2) entries.push(ro(9))
+  return device.createBindGroupLayout({ entries })
+}
+
+/** Winograd multiply bindings: transformed tiles, transformed weights, bias, [prelu], dst, slot, [res1], [res2]. */
+function winoGemmLayout(device: GPUDevice, spec: ConvSpec): GPUBindGroupLayout {
+  const entries: GPUBindGroupLayoutEntry[] = [ro(0), ro(1), ro(2)]
+  if (spec.activation === 'prelu') entries.push(ro(3))
+  entries.push(rw(4), uniformEntry(5, true))
+  if (spec.residual >= 1) entries.push(ro(8))
+  if (spec.residual === 2) entries.push(ro(9))
+  return device.createBindGroupLayout({ entries })
+}
+
+/** Winograd transform bindings: source, transformed tiles, slot, [second source]. */
+function winoTransformLayout(device: GPUDevice, split: boolean): GPUBindGroupLayout {
+  const entries: GPUBindGroupLayoutEntry[] = [ro(0), rw(1), uniformEntry(5, true)]
+  if (split) entries.push(ro(7))
   return device.createBindGroupLayout({ entries })
 }
 
@@ -216,47 +264,93 @@ type ConvFn = (label: string, spec: ConvSpec) => Promise<ConvPipelines>
 /**
  * Compiles the kernels of a program, preferring f16 and falling back to f32 when a driver that
  * advertises shader-f16 still rejects the half-precision kernels. Convolutions are compiled in
- * every row variant.
+ * every kernel variant (direct rows and Winograd).
  */
 async function compileProgram<T>(
   device: GPUDevice,
   f16: boolean,
   build: (options: KernelOptions, pipeline: PipelineFn, conv: ConvFn) => Promise<T>,
-): Promise<{ options: KernelOptions; pipelines: T; f16Error?: string }> {
+): Promise<{ options: KernelOptions; pipelines: T; wino: WinoTransforms; f16Error?: string }> {
   const pipeline: PipelineFn = (label, code) =>
     device.createComputePipelineAsync({
       label,
       layout: 'auto',
       compute: { module: device.createShaderModule({ label, code }), entryPoint: 'main' },
     })
+  const withLayout = (label: string, code: string, layout: GPUBindGroupLayout) =>
+    device.createComputePipelineAsync({
+      label,
+      layout: device.createPipelineLayout({ bindGroupLayouts: [layout] }),
+      compute: { module: device.createShaderModule({ label, code }), entryPoint: 'main' },
+    })
   const convFor =
     (options: KernelOptions): ConvFn =>
     async (label, spec) => {
       const layout = convLayout(device, spec)
-      const pipelineLayout = device.createPipelineLayout({ bindGroupLayouts: [layout] })
-      const built = await Promise.all(
-        CONV_VARIANTS.map((rows) =>
-          device.createComputePipelineAsync({
-            label: `${label}-x${rows}`,
-            layout: pipelineLayout,
-            compute: { module: device.createShaderModule({ label: `${label}-x${rows}`, code: convWgsl(options, spec, rows) }), entryPoint: 'main' },
-          }),
-        ),
-      )
+      const gemmLayout = winoGemmLayout(device, spec)
+      const [gemm, ...built] = await Promise.all([
+        withLayout(`${label}-winograd`, winogradGemmWgsl(options, spec), gemmLayout),
+        ...CONV_VARIANTS.map((rows) => withLayout(`${label}-x${rows}`, convWgsl(options, spec, rows), layout)),
+      ])
       const byRows = Object.fromEntries(CONV_VARIANTS.map((rows, i) => [rows, built[i]!])) as Record<ConvRows, GPUComputePipeline>
-      return { layout, byRows }
+      return { spec, layout, byRows, gemm, gemmLayout }
     }
+  const transformsFor = async (options: KernelOptions): Promise<WinoTransforms> => {
+    const plainLayout = winoTransformLayout(device, false)
+    const splitLayout = winoTransformLayout(device, true)
+    const [plain, split] = await Promise.all([
+      withLayout('winograd-transform', winogradTransformWgsl(options, false), plainLayout),
+      withLayout('winograd-transform-split', winogradTransformWgsl(options, true), splitLayout),
+    ])
+    return { plain: { pipeline: plain, layout: plainLayout }, split: { pipeline: split, layout: splitLayout } }
+  }
   let options: KernelOptions = { f16 }
   try {
-    return { options, pipelines: await build(options, pipeline, convFor(options)) }
+    const [pipelines, wino] = await Promise.all([build(options, pipeline, convFor(options)), transformsFor(options)])
+    return { options, pipelines, wino }
   } catch (e) {
     if (!f16) throw e
     const message = e instanceof Error ? e.message : String(e)
     console.warn('Real-ESRGAN: kernel f16 rifiutati, uso f32.', e)
     options = { f16: false }
-    return { options, pipelines: await build(options, pipeline, convFor(options)), f16Error: message.slice(0, 300) }
+    const [pipelines, wino] = await Promise.all([build(options, pipeline, convFor(options)), transformsFor(options)])
+    return { options, pipelines, wino, f16Error: message.slice(0, 300) }
   }
 }
+
+/** Layer constants a convolution instance needs for its per-dispatch Winograd parameters. */
+export interface ConvLayerParams {
+  cin: number
+  cout: number
+  inScale?: 1 | 2
+  srcX0?: number
+  srcY0?: number
+  splitPlane?: number
+  dstPlane?: number
+  res1Scale?: number
+  res2Scale?: number
+}
+
+/** Output and source geometry of one convolution dispatch (the direct kernels read it from a Band uniform). */
+export interface ConvGeometry {
+  bw: number
+  bh: number
+  srcW: number
+  srcH: number
+}
+
+/** One convolution of a program with everything bound: the direct bind group and the Winograd pair. */
+export interface ConvInstance {
+  pipelines: ConvPipelines
+  direct: GPUBindGroup
+  wino: { transform: GPUBindGroup; transformPipeline: GPUComputePipeline; gemm: GPUBindGroup }
+  layer: ConvLayerParams
+}
+
+/** Memory for the transformed tiles of one Winograd chunk (16 quads per tile and input quad). */
+const WINO_V_BUDGET_BYTES = 32 * 1024 * 1024
+/** Parameter slots per band pass (trunk chunks plus tail strips × their chunks). */
+const WINO_MAX_SLOTS = 4096
 
 /** Creates the runner matching the architecture of `weights`; null without WebGPU. */
 export async function createUpscaler(weights: ModelWeights): Promise<Upscaler | null> {
@@ -278,8 +372,8 @@ abstract class GpuUpscaler implements Upscaler {
   readonly device: GPUDevice
   readonly info: EsrganInfo
   abstract readonly supportsEnsemble: boolean
-  variant: ConvRows = 1
-  readonly variants = CONV_VARIANTS
+  variant: ConvVariant = 1
+  readonly variants = KERNEL_VARIANTS
   /** Bytes of activation memory per band pixel that the band planner must keep under `maxActBytes`. */
   abstract readonly bytesPerPixel: number
   maxActBytes: number
@@ -291,13 +385,22 @@ abstract class GpuUpscaler implements Upscaler {
   private scratch: { w: number; h: number; canvas: OffscreenCanvas }[] = []
   private lost = false
   onLost: (() => void) | null = null
+  // ---- Winograd state: transformed tiles, per-dispatch parameter slots, transformed weights ----
+  protected readonly winoTransforms: WinoTransforms
+  private readonly winoV: GPUBuffer
+  private readonly winoSlots: GPUBuffer
+  private readonly slotData = new Uint8Array(WINO_MAX_SLOTS * WINO_SLOT_BYTES)
+  private slotCount = 0
+  private slotsExhausted = false
+  private readonly winoU = new Map<string, GPUBuffer>()
 
-  protected constructor(dev: DeviceInfo, weights: ModelWeights, options: KernelOptions, maxActBytes: number, f16Error?: string) {
+  protected constructor(dev: DeviceInfo, weights: ModelWeights, options: KernelOptions, maxActBytes: number, wino: WinoTransforms, f16Error?: string) {
     this.device = dev.device
     this.info = { adapter: dev.name, precision: options.f16 ? 'f16' : 'f32', ...(f16Error ? { f16Error } : {}) }
     this.weights = weights
     this.options = options
     this.maxActBytes = maxActBytes
+    this.winoTransforms = wino
     for (const layer of weights.layers) {
       this.layerBuffers.set(layer.name, {
         weight: this.upload(layer.weight, `${layer.name}-w`),
@@ -306,10 +409,151 @@ abstract class GpuUpscaler implements Upscaler {
       })
     }
     this.bandParams = this.uniform('band', BAND_PARAMS_BYTES)
+    this.winoV = this.storage('winograd-tiles', WINO_V_BUDGET_BYTES)
+    this.winoSlots = this.device.createBuffer({ label: 'winograd-slots', size: WINO_MAX_SLOTS * WINO_SLOT_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST })
     void this.device.lost.then(() => {
       this.lost = true
       this.onLost?.()
     })
+  }
+
+  /** Transformed (G g Gᵀ) weights of a layer, computed and uploaded on first use, in the kernels' precision. */
+  private winoWeights(name: string): GPUBuffer {
+    let buffer = this.winoU.get(name)
+    if (!buffer) {
+      const u = winogradWeights(this.layer(name))
+      const data = this.options.f16 ? Uint16Array.from(u, f32ToF16) : u
+      buffer = this.device.createBuffer({ label: `${name}-winograd`, size: data.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST })
+      this.device.queue.writeBuffer(buffer, 0, data.buffer, data.byteOffset, data.byteLength)
+      this.winoU.set(name, buffer)
+    }
+    return buffer
+  }
+
+  releaseWinograd(): void {
+    for (const buffer of this.winoU.values()) buffer.destroy()
+    this.winoU.clear()
+    if (this.variant === 'w') this.variant = 1
+  }
+
+  /**
+   * Binds one convolution: the direct bind group (Band uniform `band`, layer uniform `lp`) and the
+   * Winograd transform/multiply pair sharing the transformed-tile buffer and the parameter slots.
+   */
+  protected makeConv(
+    pipelines: ConvPipelines,
+    name: string,
+    io: { src: GPUBuffer; src1?: GPUBuffer; dst: GPUBuffer; res1?: GPUBuffer; res2?: GPUBuffer; band: GPUBuffer; lp: GPUBuffer },
+    layer: ConvLayerParams,
+  ): ConvInstance {
+    const device = this.device
+    const w = this.weightsOf(name)
+    const spec = pipelines.spec
+    const directEntries: Array<[number, GPUBindingResource]> = [
+      [0, { buffer: io.src }],
+      [1, { buffer: w.weight }],
+      [2, { buffer: w.bias }],
+      [4, { buffer: io.dst }],
+      [5, { buffer: io.band }],
+      [6, { buffer: io.lp }],
+    ]
+    if (w.prelu) directEntries.push([3, { buffer: w.prelu }])
+    if (spec.split) directEntries.push([7, { buffer: io.src1! }])
+    if (spec.residual >= 1) directEntries.push([8, { buffer: io.res1! }])
+    if (spec.residual === 2) directEntries.push([9, { buffer: io.res2! }])
+    const slot: GPUBindingResource = { buffer: this.winoSlots, offset: 0, size: WINO_PARAMS_BYTES }
+    const transform = spec.split ? this.winoTransforms.split : this.winoTransforms.plain
+    const transformEntries: Array<[number, GPUBindingResource]> = [[0, { buffer: io.src }], [1, { buffer: this.winoV }], [5, slot]]
+    if (spec.split) transformEntries.push([7, { buffer: io.src1! }])
+    const gemmEntries: Array<[number, GPUBindingResource]> = [
+      [0, { buffer: this.winoV }],
+      [1, { buffer: this.winoWeights(name) }],
+      [2, { buffer: w.bias }],
+      [4, { buffer: io.dst }],
+      [5, slot],
+    ]
+    if (w.prelu) gemmEntries.push([3, { buffer: w.prelu }])
+    if (spec.residual >= 1) gemmEntries.push([8, { buffer: io.res1! }])
+    if (spec.residual === 2) gemmEntries.push([9, { buffer: io.res2! }])
+    return {
+      pipelines,
+      direct: bindGroup(device, `${name}`, pipelines.layout, directEntries),
+      wino: {
+        transform: bindGroup(device, `${name}-wt`, transform.layout, transformEntries),
+        transformPipeline: transform.pipeline,
+        gemm: bindGroup(device, `${name}-wg`, pipelines.gemmLayout, gemmEntries),
+      },
+      layer,
+    }
+  }
+
+  /** Called before a band pass is encoded: the parameter slots are refilled from the start. */
+  protected beginSlots(): void {
+    this.slotCount = 0
+    this.slotsExhausted = false
+  }
+
+  /** Uploads the slots a band pass allocated (before its command buffers are submitted). */
+  protected flushSlots(): void {
+    if (this.slotCount > 0) this.device.queue.writeBuffer(this.winoSlots, 0, this.slotData, 0, this.slotCount * WINO_SLOT_BYTES)
+  }
+
+  /**
+   * Records one convolution on the compute pass: the direct kernel of the current variant, or the
+   * Winograd transform + multiply over chunks of tile rows that fit the transformed-tile budget.
+   * `over` adjusts the layer's source offset for this dispatch (tail strips).
+   */
+  protected dispatchConv(pass: GPUComputePassEncoder, inst: ConvInstance, geom: ConvGeometry, over?: { srcY0?: number }): void {
+    const direct = () => {
+      const rows: ConvRows = this.variant === 2 ? 2 : 1
+      pass.setPipeline(inst.pipelines.byRows[rows])
+      pass.setBindGroup(0, inst.direct)
+      pass.dispatchWorkgroups(Math.ceil(geom.bw / BODY_BLOCK_W), Math.ceil(geom.bh / bodyBlockH(rows)))
+    }
+    if (this.variant !== 'w') return direct()
+    const cin4 = inst.layer.cin / 4
+    const tilesW = Math.ceil(geom.bw / 2)
+    const tilesH = Math.ceil(geom.bh / 2)
+    const maxTiles = Math.floor(WINO_V_BUDGET_BYTES / (16 * cin4 * quadBytes(this.options)))
+    const rowsPerChunk = Math.floor(maxTiles / tilesW)
+    const chunks = rowsPerChunk >= 1 ? Math.ceil(tilesH / rowsPerChunk) : 0
+    if (chunks === 0 || this.slotCount + chunks > WINO_MAX_SLOTS) {
+      // Too wide for the tile budget, or out of parameter slots: this convolution runs direct.
+      if (!this.slotsExhausted && chunks > 0) console.warn('Winograd: slot dei parametri esauriti, convoluzione diretta')
+      this.slotsExhausted = true
+      return direct()
+    }
+    for (let r0 = 0; r0 < tilesH; r0 += rowsPerChunk) {
+      const rows = Math.min(rowsPerChunk, tilesH - r0)
+      const tilesChunk = rows * tilesW
+      const params = winoParams({
+        tilesW,
+        tilesChunk,
+        tileRow0: r0,
+        bw: geom.bw,
+        bh: geom.bh,
+        srcW: geom.srcW,
+        srcH: geom.srcH,
+        cin: inst.layer.cin,
+        cout: inst.layer.cout,
+        inScale: inst.layer.inScale,
+        srcX0: inst.layer.srcX0,
+        srcY0: over?.srcY0 ?? inst.layer.srcY0,
+        splitPlane: inst.layer.splitPlane,
+        dstPlane: inst.layer.dstPlane,
+        res1Scale: inst.layer.res1Scale,
+        res2Scale: inst.layer.res2Scale,
+      })
+      const offset = this.slotCount * WINO_SLOT_BYTES
+      this.slotData.set(new Uint8Array(params), offset)
+      this.slotCount++
+      pass.setPipeline(inst.wino.transformPipeline)
+      pass.setBindGroup(0, inst.wino.transform, [offset])
+      pass.dispatchWorkgroups(Math.ceil(tilesChunk / WINO_TRANSFORM_WG), cin4)
+      pass.setPipeline(inst.pipelines.gemm)
+      pass.setBindGroup(0, inst.wino.gemm, [offset])
+      pass.dispatchWorkgroups(Math.ceil(tilesChunk / WINO_TILES_PER_GROUP))
+    }
   }
 
   get isLost(): boolean {
@@ -453,7 +697,9 @@ abstract class GpuUpscaler implements Upscaler {
           } else {
             device.queue.copyExternalImageToTexture({ source: padded, origin: { x: 0, y: y0 } }, { texture }, [tw, th])
           }
+          this.beginSlots()
           const commands = this.encodeBand({ tw, th, y0, rows, W, factor, outW, outH, transform: t, pass, passes, swap: t.swap, page })
+          this.flushSlots()
           if (pass === passes - 1 && k === plan.bands - 1) {
             const encoder = device.createCommandEncoder({ label: 'esrgan-readback' })
             encoder.copyBufferToBuffer(page, 0, readback, 0, outBytes)
@@ -490,6 +736,10 @@ abstract class GpuUpscaler implements Upscaler {
       l.bias.destroy()
       l.prelu?.destroy()
     }
+    for (const buffer of this.winoU.values()) buffer.destroy()
+    this.winoU.clear()
+    this.winoV.destroy()
+    this.winoSlots.destroy()
     this.bandParams.destroy()
     this.device.destroy()
   }
@@ -533,12 +783,20 @@ class SrvggUpscaler extends GpuUpscaler {
   private readonly lpFirst: GPUBuffer
   private readonly lp64: GPUBuffer
   private readonly shuffleParams: GPUBuffer
-  private buffers: { a: GPUBuffer; b: GPUBuffer; layers: Array<{ conv: ConvPipelines | null; bindGroup: GPUBindGroup; bindGroupT: GPUBindGroup }>; lastAct: GPUBuffer } | null = null
+  private buffers: {
+    a: GPUBuffer
+    b: GPUBuffer
+    /** conv_first (texture input) in the two orientations, then one instance per body/last layer. */
+    first: GPUBindGroup
+    firstT: GPUBindGroup
+    layers: ConvInstance[]
+    lastAct: GPUBuffer
+  } | null = null
   private acc: { bytes: number; buffer: GPUBuffer } | null = null
   private run: { shuffleGroups: GPUBindGroup[]; finalizeGroup: GPUBindGroup | null; accW: number } | null = null
 
-  private constructor(dev: DeviceInfo, weights: ModelWeights, options: KernelOptions, pipelines: SrvggPipelines, f16Error?: string) {
-    super(dev, weights, options, SRVGG_MAX_ACT_BYTES, f16Error)
+  private constructor(dev: DeviceInfo, weights: ModelWeights, options: KernelOptions, pipelines: SrvggPipelines, wino: WinoTransforms, f16Error?: string) {
+    super(dev, weights, options, SRVGG_MAX_ACT_BYTES, wino, f16Error)
     this.pipelines = pipelines
     this.bytesPerPixel = 16 * quadBytes(options)
     this.lpFirst = this.layerUniform('lp-first', { cin: 3 })
@@ -547,7 +805,7 @@ class SrvggUpscaler extends GpuUpscaler {
   }
 
   static async create(dev: DeviceInfo, weights: ModelWeights): Promise<SrvggUpscaler> {
-    const { options, pipelines, f16Error } = await compileProgram(dev.device, dev.f16, async (o, pipeline, conv) => {
+    const { options, pipelines, wino, f16Error } = await compileProgram(dev.device, dev.f16, async (o, pipeline, conv) => {
       const [first, body, last, shuffle, shuffleAccumulate, finalize] = await Promise.all([
         pipeline('srvgg-conv-first', convFirstWgsl(o, 'prelu')),
         conv('srvgg-conv-body', { cout: 64, activation: 'prelu', residual: 0, split: false }),
@@ -558,7 +816,7 @@ class SrvggUpscaler extends GpuUpscaler {
       ])
       return { first, body, last, shuffle, shuffleAccumulate, finalize }
     })
-    return new SrvggUpscaler(dev, weights, options, pipelines, f16Error)
+    return new SrvggUpscaler(dev, weights, options, pipelines, wino, f16Error)
   }
 
   protected onBandGeometry(bw: number, paddedRows: number): void {
@@ -568,32 +826,28 @@ class SrvggUpscaler extends GpuUpscaler {
     const a = this.storage('srvgg-act-a', bytes)
     const b = this.storage('srvgg-act-b', bytes)
     const { view, viewT } = this.textures!
-    const layers = this.weights.layers.map((layer, i) => {
-      const bufs = this.weightsOf(layer.name)
-      const isFirst = i === 0
+    const wFirst = this.weightsOf(this.weights.layers[0]!.name)
+    const firstEntries = (texture: GPUTextureView): Array<[number, GPUBindingResource]> => [
+      [0, texture],
+      [1, { buffer: wFirst.weight }],
+      [2, { buffer: wFirst.bias }],
+      [3, { buffer: wFirst.prelu! }],
+      [4, { buffer: a }],
+      [5, { buffer: this.bandParams }],
+      [6, { buffer: this.lpFirst }],
+    ]
+    const first = bindGroup(device, 'srvgg-first', this.pipelines.first, firstEntries(view))
+    const firstT = bindGroup(device, 'srvgg-first-t', this.pipelines.first, firstEntries(viewT))
+    // Layer i reads a when i is odd, b when even (layer 0 reads the texture and writes a).
+    const layers = this.weights.layers.slice(1).map((layer, k) => {
+      const i = k + 1
       const isLast = i === this.weights.layers.length - 1
-      const conv = isFirst ? null : isLast ? this.pipelines.last : this.pipelines.body
-      const target = conv ? conv.layout : this.pipelines.first
-      // Layer i reads a when i is odd, b when even (layer 0 reads the texture and writes a).
       const src = i % 2 === 1 ? a : b
       const dst = i % 2 === 1 ? b : a
-      const entries = (texture: GPUTextureView): Array<[number, GPUBindingResource]> => {
-        const list: Array<[number, GPUBindingResource]> = [
-          [0, isFirst ? texture : { buffer: src }],
-          [1, { buffer: bufs.weight }],
-          [2, { buffer: bufs.bias }],
-          [4, { buffer: dst }],
-          [5, { buffer: this.bandParams }],
-          [6, { buffer: isFirst ? this.lpFirst : this.lp64 }],
-        ]
-        if (bufs.prelu) list.push([3, { buffer: bufs.prelu }])
-        return list
-      }
-      const group = bindGroup(device, `srvgg-${layer.name}`, target, entries(view))
-      return { conv, bindGroup: group, bindGroupT: isFirst ? bindGroup(device, `srvgg-${layer.name}-t`, target, entries(viewT)) : group }
+      return this.makeConv(isLast ? this.pipelines.last : this.pipelines.body, layer.name, { src, dst, band: this.bandParams, lp: this.lp64 }, { cin: 64, cout: layer.cout })
     })
     const lastAct = (this.weights.layers.length - 1) % 2 === 1 ? b : a
-    this.buffers = { a, b, layers, lastAct }
+    this.buffers = { a, b, first, firstT, layers, lastAct }
   }
 
   protected beginRun(page: GPUBuffer, factor: EsrganFactor, passes: number, W: number, H: number): void {
@@ -643,22 +897,24 @@ class SrvggUpscaler extends GpuUpscaler {
     const lastPass = pass === passes - 1
     // Two command buffers per pass (first half of the layers, second half + shuffle): each stays
     // well under the GPU watchdog even on a slow device.
-    const half = Math.ceil(buffers.layers.length / 2)
+    const total = buffers.layers.length + 1
+    const half = Math.ceil(total / 2)
+    const geom: ConvGeometry = { bw: tw, bh: th, srcW: tw, srcH: th }
     const commands: GPUCommandBuffer[] = []
     for (const [from, to] of [
       [0, half],
-      [half, buffers.layers.length],
+      [half, total],
     ] as const) {
       const encoder = device.createCommandEncoder({ label: `srvgg-band-${from}` })
       const computePass = encoder.beginComputePass()
       for (let i = from; i < to; i++) {
-        const layer = buffers.layers[i]!
-        computePass.setPipeline(layer.conv ? layer.conv.byRows[this.variant] : this.pipelines.first)
-        computePass.setBindGroup(0, t.swap ? layer.bindGroupT : layer.bindGroup)
-        if (!layer.conv) computePass.dispatchWorkgroups(Math.ceil(tw / 8), Math.ceil(th / 8))
-        else computePass.dispatchWorkgroups(Math.ceil(tw / BODY_BLOCK_W), Math.ceil(th / bodyBlockH(this.variant)))
+        if (i === 0) {
+          computePass.setPipeline(this.pipelines.first)
+          computePass.setBindGroup(0, t.swap ? buffers.firstT : buffers.first)
+          computePass.dispatchWorkgroups(Math.ceil(tw / 8), Math.ceil(th / 8))
+        } else this.dispatchConv(computePass, buffers.layers[i - 1]!, geom)
       }
-      if (to === buffers.layers.length) {
+      if (to === total) {
         computePass.setPipeline(passes > 1 ? this.pipelines.shuffleAccumulate : this.pipelines.shuffle)
         computePass.setBindGroup(0, run.shuffleGroups[t.swap ? 1 : 0]!)
         computePass.dispatchWorkgroups(Math.ceil(W / 8), Math.ceil(rows / 8))
@@ -717,9 +973,8 @@ interface RrdbPipelines {
   finalize: GPUComputePipeline
 }
 
-interface Dispatch {
-  conv: ConvPipelines
-  group: GPUBindGroup
+interface TrunkConv {
+  inst: ConvInstance
   /** Growth block (0..3) the output is copied into after the dispatch, for conv1–conv4. */
   growth?: number
 }
@@ -727,9 +982,9 @@ interface Dispatch {
 interface TailStrip {
   lpUp1: GPUBuffer
   rgbParams: GPUBuffer
-  up1: GPUBindGroup
-  up2: GPUBindGroup
-  hr: GPUBindGroup
+  up1: ConvInstance
+  up2: ConvInstance
+  hr: ConvInstance
 }
 
 /** The core of a band as the network sees it after the pass's transform (see `transformedCore`). */
@@ -792,16 +1047,16 @@ class RrdbUpscaler extends GpuUpscaler {
     u3: GPUBuffer
     first: GPUBindGroup
     firstT: GPUBindGroup
-    blocks: Dispatch[][]
-    body: Dispatch
+    blocks: TrunkConv[][]
+    body: TrunkConv
     strips: TailStrip[]
   } | null = null
   /** Transformed-core output and accumulator of the self-ensemble, grown on demand. */
   private ensembleBuffers: { bytes: number; tout: GPUBuffer; acc: GPUBuffer } | null = null
   private run: { rgbGroups: GPUBindGroup[]; untransformGroup: GPUBindGroup | null; finalizeGroup: GPUBindGroup | null } | null = null
 
-  private constructor(dev: DeviceInfo, weights: ModelWeights, options: KernelOptions, pipelines: RrdbPipelines, f16Error?: string) {
-    super(dev, weights, options, RRDB_MAX_ACT_BYTES, f16Error)
+  private constructor(dev: DeviceInfo, weights: ModelWeights, options: KernelOptions, pipelines: RrdbPipelines, wino: WinoTransforms, f16Error?: string) {
+    super(dev, weights, options, RRDB_MAX_ACT_BYTES, wino, f16Error)
     this.pipelines = pipelines
     this.bytesPerPixel = RRDB_PLANES * quadBytes(options)
     this.lp = {
@@ -821,7 +1076,7 @@ class RrdbUpscaler extends GpuUpscaler {
   }
 
   static async create(dev: DeviceInfo, weights: ModelWeights): Promise<RrdbUpscaler> {
-    const { options, pipelines, f16Error } = await compileProgram(dev.device, dev.f16, async (o, pipeline, conv) => {
+    const { options, pipelines, wino, f16Error } = await compileProgram(dev.device, dev.f16, async (o, pipeline, conv) => {
       const [first, conv1, convDense, conv5, conv5Last, body, up, rgb, rgbToBuffer, untransform, finalize] = await Promise.all([
         pipeline('rrdb-conv-first', convFirstWgsl(o, 'none')),
         conv('rrdb-conv1', { cout: 32, activation: 'lrelu', residual: 0, split: false }),
@@ -837,7 +1092,7 @@ class RrdbUpscaler extends GpuUpscaler {
       ])
       return { first, conv1, convDense, conv5, conv5Last, body, up, rgb, rgbToBuffer, untransform, finalize }
     })
-    return new RrdbUpscaler(dev, weights, options, pipelines, f16Error)
+    return new RrdbUpscaler(dev, weights, options, pipelines, wino, f16Error)
   }
 
   protected onBandGeometry(bw: number, rows: number): void {
@@ -866,54 +1121,44 @@ class RrdbUpscaler extends GpuUpscaler {
     ]
     const first = bindGroup(device, 'rrdb-first', this.pipelines.first, firstEntries(this.textures!.view))
     const firstT = bindGroup(device, 'rrdb-first-t', this.pipelines.first, firstEntries(this.textures!.viewT))
-    const conv = (pipelines: ConvPipelines, name: string, entries: Array<[number, GPUBindingResource]>, growth?: number): Dispatch => {
-      const w = this.weightsOf(name)
-      return {
-        conv: pipelines,
-        group: bindGroup(device, `rrdb-${name}`, pipelines.layout, [[1, { buffer: w.weight }], [2, { buffer: w.bias }], [5, { buffer: this.bandParams }], ...entries]),
-        growth,
-      }
-    }
-    const blocks: Dispatch[][] = []
+    const band = this.bandParams
+    const blocks: TrunkConv[][] = []
     let cur = 0
     for (let i = 0; i < (this.weights.header.numBlock ?? 0); i++) {
-      const block: Dispatch[] = []
+      const block: TrunkConv[] = []
       const input = cur
       for (let j = 1; j <= 3; j++) {
         const p = `body.${i}.rdb${j}`
         const xin = x[cur]!
         const xout = x[(cur + 1) % 4]!
-        block.push(conv(this.pipelines.conv1, `${p}.conv1`, [[0, { buffer: xin }], [4, { buffer: scratch }], [6, { buffer: this.lp.conv1 }]], 0))
+        block.push({ inst: this.makeConv(this.pipelines.conv1, `${p}.conv1`, { src: xin, dst: scratch, band, lp: this.lp.conv1 }, { cin: 64, cout: 32 }), growth: 0 })
         for (const k of [2, 3, 4]) {
-          block.push(
-            conv(
-              this.pipelines.convDense,
-              `${p}.conv${k}`,
-              [[0, { buffer: xin }], [7, { buffer: g }], [4, { buffer: scratch }], [6, { buffer: this.lpDense.get(64 + 32 * (k - 1))! }]],
-              k - 1,
-            ),
-          )
+          const cin = 64 + 32 * (k - 1)
+          block.push({
+            inst: this.makeConv(this.pipelines.convDense, `${p}.conv${k}`, { src: xin, src1: g, dst: scratch, band, lp: this.lpDense.get(cin)! }, { cin, cout: 32, splitPlane: 16 }),
+            growth: k - 1,
+          })
         }
         if (j < 3) {
-          block.push(conv(this.pipelines.conv5, `${p}.conv5`, [[0, { buffer: xin }], [7, { buffer: g }], [4, { buffer: xout }], [8, { buffer: xin }], [6, { buffer: this.lp.conv5 }]]))
+          block.push({
+            inst: this.makeConv(this.pipelines.conv5, `${p}.conv5`, { src: xin, src1: g, dst: xout, res1: xin, band, lp: this.lp.conv5 }, { cin: 192, cout: 64, splitPlane: 16, res1Scale: 0.2 }),
+          })
         } else {
-          block.push(
-            conv(this.pipelines.conv5Last, `${p}.conv5`, [
-              [0, { buffer: xin }],
-              [7, { buffer: g }],
-              [4, { buffer: xout }],
-              [8, { buffer: x[input]! }],
-              [9, { buffer: xin }],
-              [6, { buffer: this.lp.conv5Last }],
-            ]),
-          )
+          block.push({
+            inst: this.makeConv(
+              this.pipelines.conv5Last,
+              `${p}.conv5`,
+              { src: xin, src1: g, dst: xout, res1: x[input]!, res2: xin, band, lp: this.lp.conv5Last },
+              { cin: 192, cout: 64, splitPlane: 16, res1Scale: 0.2, res2Scale: 0.2 },
+            ),
+          })
         }
         cur = (cur + 1) % 4
       }
       blocks.push(block)
     }
     const feat2 = x[(cur + 1) % 4]!
-    const body = conv(this.pipelines.body, 'conv_body', [[0, { buffer: x[cur]! }], [4, { buffer: feat2 }], [8, { buffer: f }], [6, { buffer: this.lp.body }]])
+    const body: TrunkConv = { inst: this.makeConv(this.pipelines.body, 'conv_body', { src: x[cur]!, dst: feat2, res1: f, band, lp: this.lp.body }, { cin: 64, cout: 64, res1Scale: 1 }) }
     this.buffers = { bw, rows, x, g, s: scratch, f, feat2, u1, u2, u3, first, firstT, blocks, body, strips: [] }
     this.ensureStrips(Math.ceil((rows - 2 * CONTEXT) / TAIL_ROWS))
   }
@@ -921,39 +1166,15 @@ class RrdbUpscaler extends GpuUpscaler {
   /** Tail strips (uniforms and bind groups) for at least `count` strips of the transformed core. */
   private ensureStrips(count: number): void {
     const buffers = this.buffers!
-    const device = this.device
-    const wUp1 = this.weightsOf('conv_up1')
-    const wUp2 = this.weightsOf('conv_up2')
-    const wHr = this.weightsOf('conv_hr')
     for (let k = buffers.strips.length; k < count; k++) {
       const lpUp1 = this.layerUniform(`lp-up1-${k}`, { cin: 64, inScale: 2, srcY0: CONTEXT + k * TAIL_ROWS - TAIL_CONTEXT })
       buffers.strips.push({
         lpUp1,
         rgbParams: this.uniform(`rgb-${k}`, RGB_OUT_PARAMS_BYTES),
-        up1: bindGroup(device, `rrdb-up1-${k}`, this.pipelines.up.layout, [
-          [0, { buffer: buffers.feat2 }],
-          [1, { buffer: wUp1.weight }],
-          [2, { buffer: wUp1.bias }],
-          [4, { buffer: buffers.u1 }],
-          [5, { buffer: this.bandUp1 }],
-          [6, { buffer: lpUp1 }],
-        ]),
-        up2: bindGroup(device, 'rrdb-up2', this.pipelines.up.layout, [
-          [0, { buffer: buffers.u1 }],
-          [1, { buffer: wUp2.weight }],
-          [2, { buffer: wUp2.bias }],
-          [4, { buffer: buffers.u2 }],
-          [5, { buffer: this.bandUp2 }],
-          [6, { buffer: this.lp.up2 }],
-        ]),
-        hr: bindGroup(device, 'rrdb-hr', this.pipelines.up.layout, [
-          [0, { buffer: buffers.u2 }],
-          [1, { buffer: wHr.weight }],
-          [2, { buffer: wHr.bias }],
-          [4, { buffer: buffers.u3 }],
-          [5, { buffer: this.bandHr }],
-          [6, { buffer: this.lp.hr }],
-        ]),
+        // The strip's source offset is set per pass (transformed cores start at other rows).
+        up1: this.makeConv(this.pipelines.up, 'conv_up1', { src: buffers.feat2, dst: buffers.u1, band: this.bandUp1, lp: lpUp1 }, { cin: 64, cout: 64, inScale: 2 }),
+        up2: this.makeConv(this.pipelines.up, 'conv_up2', { src: buffers.u1, dst: buffers.u2, band: this.bandUp2, lp: this.lp.up2 }, { cin: 64, cout: 64, inScale: 2 }),
+        hr: this.makeConv(this.pipelines.up, 'conv_hr', { src: buffers.u2, dst: buffers.u3, band: this.bandHr, lp: this.lp.hr }, { cin: 64, cout: 64 }),
       })
     }
   }
@@ -1040,13 +1261,10 @@ class RrdbUpscaler extends GpuUpscaler {
       )
     }
     const commands: GPUCommandBuffer[] = []
-    const blockH = bodyBlockH(this.variant)
-    const up = this.pipelines.up.byRows[this.variant]
-    const trunkDispatch = (encoder: GPUCommandEncoder, d: Dispatch) => {
+    const trunkGeom: ConvGeometry = { bw: tw, bh: th, srcW: tw, srcH: th }
+    const trunkDispatch = (encoder: GPUCommandEncoder, d: TrunkConv) => {
       const pass = encoder.beginComputePass()
-      pass.setPipeline(d.conv.byRows[this.variant])
-      pass.setBindGroup(0, d.group)
-      pass.dispatchWorkgroups(Math.ceil(tw / BODY_BLOCK_W), Math.ceil(th / blockH))
+      this.dispatchConv(pass, d.inst, trunkGeom)
       pass.end()
       if (d.growth !== undefined) encoder.copyBufferToBuffer(buffers.s, 0, buffers.g, d.growth * 8 * planeBytes, 8 * planeBytes)
     }
@@ -1079,13 +1297,10 @@ class RrdbUpscaler extends GpuUpscaler {
       const pass = encoder.beginComputePass()
       for (let k = k0; k < Math.min(stripCount, k0 + 4); k++) {
         const strip = buffers.strips[k]!
-        pass.setPipeline(up)
-        pass.setBindGroup(0, strip.up1)
-        pass.dispatchWorkgroups(Math.ceil((tw * 2) / BODY_BLOCK_W), Math.ceil((tailRows * 2) / blockH))
-        pass.setBindGroup(0, strip.up2)
-        pass.dispatchWorkgroups(Math.ceil((tw * 4) / BODY_BLOCK_W), Math.ceil((tailRows * 4) / blockH))
-        pass.setBindGroup(0, strip.hr)
-        pass.dispatchWorkgroups(Math.ceil((tw * 4) / BODY_BLOCK_W), Math.ceil((tailRows * 4) / blockH))
+        const stripY0 = core.y0 + k * TAIL_ROWS
+        this.dispatchConv(pass, strip.up1, { bw: tw * 2, bh: tailRows * 2, srcW: tw, srcH: th }, { srcY0: stripY0 - TAIL_CONTEXT })
+        this.dispatchConv(pass, strip.up2, { bw: tw * 4, bh: tailRows * 4, srcW: tw * 2, srcH: tailRows * 2 })
+        this.dispatchConv(pass, strip.hr, { bw: tw * 4, bh: tailRows * 4, srcW: tw * 4, srcH: tailRows * 4 })
         pass.setPipeline(rgbPipeline)
         pass.setBindGroup(0, run.rgbGroups[k]!)
         pass.dispatchWorkgroups(Math.ceil((core.w * factor) / 8), Math.ceil((TAIL_ROWS * factor) / 8))
