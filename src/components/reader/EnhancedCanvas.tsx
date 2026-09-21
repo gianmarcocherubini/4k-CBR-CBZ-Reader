@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useLayoutEffect, useRef } from 'react'
 
 interface EnhancedCanvasProps {
   bitmap: ImageBitmap
@@ -78,7 +78,8 @@ async function fitCached(src: ImageBitmap, w: number, h: number): Promise<ImageB
  * component "fits" it: the canvas holds exactly the displayed device pixels (never more than the
  * bitmap itself), filled with a high-quality resample of the result. Downsampling a x4 result this
  * way is what gives clean, anti-aliased lines. The cached bitmap stays owned by the engine and is
- * reused at every zoom level. A quick resample is drawn at once so no frame is ever blank; the
+ * reused at every zoom level. A quick resample is drawn in a layout effect, before the browser
+ * paints the frame in which the canvas replaces the plain image, so no frame is ever blank; the
  * Lanczos version replaces it as soon as it is ready.
  */
 export function EnhancedCanvas({ bitmap, width, height, alt }: EnhancedCanvasProps) {
@@ -88,7 +89,7 @@ export function EnhancedCanvas({ bitmap, width, height, alt }: EnhancedCanvasPro
   const bw = Math.max(1, Math.min(bitmap.width, Math.round(width * dpr)))
   const bh = Math.max(1, Math.min(bitmap.height, Math.round(height * dpr)))
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const canvas = ref.current
     if (!canvas) return
     // A closed ImageBitmap reports 0x0: it cannot be drawn, and resizing the canvas for it would

@@ -439,6 +439,39 @@ test('Qualità massima: Real-ESRGAN x4 on the visible page only, time budget fal
   }
 })
 
+test('HD in double page: both pages turn enhanced in the same frame, never one before the other', async ({ page }) => {
+  test.setTimeout(6 * 60_000)
+  await page.goto('/')
+  const hasWebGPU = await page.evaluate(async () => !!(navigator as Navigator & { gpu?: GPU }).gpu && !!(await (navigator as Navigator & { gpu?: GPU }).gpu!.requestAdapter()))
+  test.skip(!hasWebGPU, 'needs WebGPU')
+  await importAndOpen(page, 'manga-vol-01.cbz', 'manga-vol-01')
+  // The cover alone first: its enhancement builds the pipeline and settles the level.
+  await expect(page.locator('[data-testid=page][data-page="1"] canvas[data-testid=enhanced]')).toBeVisible({ timeout: 90_000 })
+  await page.mouse.move(600, 420)
+  await expect(badge(page)).toHaveAttribute('data-sr-state', 'applied', { timeout: 90_000 })
+
+  // Record, for every page box, when its enhanced canvas appears (both pages of 2-3 start plain).
+  await page.evaluate(() => {
+    const seen: Record<string, number> = {}
+    ;(window as unknown as { __hdSeen: Record<string, number> }).__hdSeen = seen
+    new MutationObserver(() => {
+      for (const c of document.querySelectorAll('[data-testid=page] canvas[data-testid=enhanced]')) {
+        const n = c.closest('[data-testid=page]')?.getAttribute('data-page')
+        if (n && !(n in seen)) seen[n] = performance.now()
+      }
+    }).observe(document.body, { childList: true, subtree: true })
+  })
+  await page.keyboard.press('ArrowLeft')
+  await expect(page.getByTestId('page-label')).toHaveText('2-3')
+  await expect(page.locator('[data-testid=page][data-page="2"] canvas[data-testid=enhanced]')).toBeVisible({ timeout: 90_000 })
+  await expect(page.locator('[data-testid=page][data-page="3"] canvas[data-testid=enhanced]')).toBeVisible({ timeout: 90_000 })
+  const seen = await page.evaluate(() => (window as unknown as { __hdSeen: Record<string, number> }).__hdSeen)
+  expect(seen['2']).toBeDefined()
+  expect(seen['3']).toBeDefined()
+  // One commit for the whole spread: the two canvases enter the DOM in the same mutation batch.
+  expect(Math.abs(seen['2']! - seen['3']!)).toBeLessThan(20)
+})
+
 test('Anime4K engine options (factor, Restore, clean-up) still work when pinned through the stored settings', async ({ page }) => {
   test.setTimeout(6 * 60_000)
   await page.goto('/')

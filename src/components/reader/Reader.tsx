@@ -577,6 +577,8 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
   const [heavyEnsembleSize, setHeavyEnsembleSize] = useState<EnsembleSize>(1)
   /** Pages whose HD version Real-ESRGAN is computing right now (anti-spoiler blur). */
   const [heavyPending, setHeavyPending] = useState<Set<number>>(() => new Set())
+  /** HD tier: per spread, the pages that had to be computed; finished ones wait for the others. */
+  const spreadGate = useRef<{ key: string; waiting: Set<number> }>({ key: '', waiting: new Set() })
   /** Pages whose HD version just landed: the canvas sharpens in. */
   const [revealing, setRevealing] = useState<Set<number>>(() => new Set())
   const revealTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -707,6 +709,25 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
       if (hit) initial.set(index, hit)
       else pendingNow.add(index)
     }
+    // As in 4K, the pages of a spread turn to HD together. The engine reports every finished page
+    // (tick) and this effect runs again, finding that page in the cache: without a gate it would
+    // appear at once and its neighbour a few hundred milliseconds later, which reads as flicker.
+    // The gate remembers, per spread, the pages that had to be computed and holds the finished
+    // ones back until none is missing.
+    const gate = spreadGate.current
+    if (gate.key !== visibleKey) {
+      gate.key = visibleKey
+      gate.waiting = new Set()
+    }
+    for (const index of pendingNow) gate.waiting.add(index)
+    for (const index of gate.waiting) if (!plans.has(index)) gate.waiting.delete(index)
+    const spreadReady = () => [...gate.waiting].every((index) => light.peek(index, plans.get(index)!))
+    const held = new Set<number>()
+    if (!spreadReady()) {
+      for (const index of gate.waiting) {
+        if (initial.delete(index)) held.add(index)
+      }
+    }
     // Cached pages appear at once; results still shown from another plan (e.g. the VL probe before
     // the auto level settles) stay until their replacement is ready, so there is no flash to plain.
     setEnhanced((m) => {
@@ -717,26 +738,32 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
       }
       return sameMap(m, next) ? m : next
     })
-    setSrPending((s) => (s.size === pendingNow.size && [...pendingNow].every((i) => s.has(i)) ? s : pendingNow))
-    for (const index of pendingNow) {
-      light
-        .enhance(index, plans.get(index)!, () => bitmapOf(index))
-        .then((result) => {
-          if (cancelled) return
-          setEnhanced((m) => (m.get(index) === result ? m : new Map(m).set(index, result)))
+    const visuallyPending = new Set([...pendingNow, ...held])
+    setSrPending((s) => (s.size === visuallyPending.size && [...visuallyPending].every((i) => s.has(i)) ? s : visuallyPending))
+    if (pendingNow.size > 0) {
+      const requested = [...pendingNow]
+      void Promise.allSettled(requested.map((index) => light.enhance(index, plans.get(index)!, () => bitmapOf(index)))).then((outcomes) => {
+        // A page that failed must not keep the rest of the spread waiting.
+        outcomes.forEach((outcome, k) => {
+          if (outcome.status !== 'rejected') return
+          gate.waiting.delete(requested[k]!)
+          if (!(outcome.reason instanceof SrAborted)) console.warn('SR fallita', outcome.reason)
         })
-        .catch((e: unknown) => {
-          if (!(e instanceof SrAborted) && !cancelled) console.warn('SR fallita', e)
+        if (cancelled || gate.key !== visibleKey || !spreadReady()) return
+        const results = new Map<number, SrResult>()
+        for (const index of gate.waiting) results.set(index, light.peek(index, plans.get(index)!)!)
+        setEnhanced((m) => {
+          const next = new Map(m)
+          for (const [index, result] of results) next.set(index, result)
+          return sameMap(m, next) ? m : next
         })
-        .finally(() => {
-          if (cancelled) return
-          setSrPending((s) => {
-            if (!s.has(index)) return s
-            const n = new Set(s)
-            n.delete(index)
-            return n
-          })
+        setSrPending((s) => {
+          if (![...gate.waiting].some((i) => s.has(i))) return s
+          const n = new Set(s)
+          for (const i of gate.waiting) n.delete(i)
+          return n
         })
+      })
     }
     return () => {
       cancelled = true
