@@ -7,6 +7,7 @@ import { type ArchivePasswordRequest, deleteBook, importFile, newId, openSession
 import { cleanupOrphanedBookFiles, estimateStorage, formatBytes, ORPHAN_RETRY_MS, type StorageEstimate } from '../lib/storage/opfs'
 import type { Book, Collection, Progress } from '../types'
 import { BookCard, ContinueCard, readingState } from './BookCard'
+import { CrownMark, Wordmark } from './Brand'
 import { BookEditDialog } from './BookEditDialog'
 import { CollectionDialog } from './CollectionDialog'
 import { CollectionTabs } from './CollectionTabs'
@@ -53,13 +54,6 @@ const SearchIcon = (
   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden>
     <circle cx="11" cy="11" r="7" />
     <path d="m20 20-3.5-3.5" />
-  </svg>
-)
-/** Wordmark: a small open-book glyph, ink on bone. */
-const Mark = (
-  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-    <path d="M3 5.5A1.5 1.5 0 0 1 4.5 4H10a2 2 0 0 1 2 2v14a2 2 0 0 0-2-2H4.5A1.5 1.5 0 0 1 3 16.5z" />
-    <path d="M21 5.5A1.5 1.5 0 0 0 19.5 4H14a2 2 0 0 0-2 2v14a2 2 0 0 1 2-2h5.5a1.5 1.5 0 0 0 1.5-1.5z" />
   </svg>
 )
 /** Volumes shown on the "Continua a leggere" shelf, most recently read first. */
@@ -397,10 +391,9 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
     >
       <header className="material hairline-b sticky top-0 z-10">
         <div className="mx-auto flex h-14 w-full max-w-[1400px] items-center gap-3 px-5 sm:px-8">
-          <div className="flex items-center gap-2 text-label">
-            {Mark}
-            <h1 className="text-[15px] font-semibold tracking-tight">Libreria</h1>
-          </div>
+          <h1 className="flex items-center">
+            <Wordmark />
+          </h1>
           <div className="flex-1" />
           {allBooks.length > 0 && (
             <label className="relative hidden items-center sm:flex">
@@ -484,10 +477,7 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
             data-testid="empty-library"
           >
             <div className="tile flex h-44 w-[8.25rem] items-center justify-center">
-              <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" className="text-label-3" aria-hidden>
-                <path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5z" />
-                <path d="M4 20.5A2.5 2.5 0 0 1 6.5 18H20" />
-              </svg>
+              <CrownMark className="h-16 w-16 text-label-3" />
             </div>
             <h2 className="mt-8 text-large-title">La tua libreria è vuota</h2>
             <p className="mt-3 max-w-md text-subhead text-label-2">

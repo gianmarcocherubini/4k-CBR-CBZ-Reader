@@ -879,7 +879,7 @@ test.describe('pwa (preview build only)', () => {
     await importBooks(page, ['short-book.cbz'])
     await context.setOffline(true)
     await page.reload()
-    await expect(page.getByRole('heading', { name: 'Libreria' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Mangadana' })).toBeVisible()
     await expect(page.getByTestId('book-card')).toHaveCount(1)
     await openBook(page, 'short-book')
     await expect(label(page)).toHaveText('1')
