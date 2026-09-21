@@ -1,11 +1,23 @@
+<p align="center">
+  <a href="https://www.manga-dana.com">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/gianmarcocherubini/Mangadana/main/public/brand/wordmark-dark.png">
+      <img src="https://raw.githubusercontent.com/gianmarcocherubini/Mangadana/main/public/brand/wordmark-light.png" width="360" alt="Mangadana">
+    </picture>
+  </a>
+</p>
+
+<p align="center"><a href="https://www.manga-dana.com">www.manga-dana.com</a></p>
+
 # Mangadana
 
 Lettore di fumetti e manga per iPad, come **web app installabile (PWA)**: tutto gira nel browser, nessun server.
 Il nome viene da 漫画 (manga) e 棚 (*dana*, da 本棚 *hondana*, lo scaffale dei libri): lo scaffale dei manga. Il
 marchio è la corona del set «Extras» del carattere Sprite Graffiti di Fontfabric (licenza gratuita per uso
 commerciale: loghi e immagini statiche sono permessi; il font non viene incorporato nell'app, il marchio è un
-tracciato SVG in `src/components/Brand.tsx` e `public/icons/`). Importa file **CBZ/ZIP** (anche protetti da password) e **CBR** (RAR)
-fino a 10 GB ciascuno, li
+tracciato SVG in `src/components/crown.json`, disegnato da `Brand.tsx` e da `scripts/make-brand-assets.mjs`, che
+genera le immagini di avvio iOS, l'anteprima social e il wordmark di questo README; le icone sono in
+`public/icons/`). Importa file **CBZ/ZIP** (anche protetti da password) e **CBR** (RAR) fino a 10 GB ciascuno, li
 tiene nell'archiviazione dell'app anche offline e li mostra a piena risoluzione con lettura da destra a sinistra,
 doppia pagina intelligente e super risoluzione AI sulla GPU.
 
@@ -62,7 +74,10 @@ essere Default (grigio caldo o nero a seconda dell'aspetto), Nero o Bianco.
   e, tornando dal lettore, quella appena usata viene selezionata.
 - **Continua a leggere**: i volumi iniziati e non finiti della collezione selezionata, dal più recente, con pagina e
   avanzamento; un tocco riprende la lettura.
-- Il campo **Cerca** nella barra filtra la griglia per titolo.
+- Il campo **Cerca** nella barra filtra la griglia per titolo. Sopra la griglia, due controlli segmentati la
+  **filtrano per stato di lettura** (Tutti, Da leggere, In lettura, Finiti) e la **ordinano** (Recenti: ultima
+  apertura poi import più recente; Titolo: ordine naturale, `Vol. 2` prima di `Vol. 10`; Aggiunti: import più
+  recente). La scelta resta memorizzata; il conteggio dice «3 di 12 volumi» quando un filtro nasconde qualcosa.
 - Ogni collezione può non avere icona, usare una delle icone SVG monocromatiche integrate o un'immagine locale.
   La ricerca **Iconify** è incorporata nel dialogo (set moderni Lucide, Tabler, Phosphor e Material): non si lascia
   l'app; l'SVG scelto viene validato e copiato nel database locale. Un PNG/JPEG personale viene limitato a 2 MB /
@@ -76,6 +91,28 @@ essere Default (grigio caldo o nero a seconda dell'aspetto), Nero o Bianco.
   byte/pixel, al massimo otto anteprime (due download concorrenti), timeout e annullamento; la scelta viene
   normalizzata in JPEG e salvata localmente. Gli ZIP protetti non vengono cercati automaticamente; la ricerca manuale
   resta disponibile.
+
+### Backup della libreria
+
+Il pulsante `…` nella barra apre **Backup della libreria**; nella libreria vuota c'è anche **Ripristina da un
+backup**. Il backup è un file JSON (`Mangadana-backup-AAAA-MM-GG.json`) con tutto ciò che l'utente ha aggiunto ai
+file: titoli, collezioni con le loro icone, copertine scelte online, segnalibri (pagina, pagine bianche inserite) e
+impostazioni di lettura. **Non contiene i CBZ/CBR**: un volume è identificato da nome e dimensione del file, la stessa
+chiave con cui l'import riconosce i duplicati. Su iPad il file passa dal foglio di condivisione (Salva su File,
+AirDrop, iCloud Drive); dove il foglio non c'è viene scaricato.
+
+Il ripristino non cancella mai nulla:
+
+- una collezione del backup riusa quella locale con lo stesso id o lo stesso nome, altrimenti viene creata;
+- un volume il cui file è già in libreria prende titolo e collezione dal backup solo se qui non era mai stato
+  modificato, la copertina scelta se quella locale è la miniatura dell'archivio, e il segnalibro più recente dei due;
+- gli altri volumi restano **in attesa** (store `pendingRestores` di IndexedDB, schema 3): la libreria mostra
+  quanti sono e il loro elenco; appena si importa un file con lo stesso nome e dimensione, titolo, collezione,
+  copertina e segnalibro tornano da soli. «Ignora tutti» dimentica i dati in attesa.
+
+Il file viene validato campo per campo (formato e versione, tipi, riferimenti alle collezioni, immagini solo
+JPEG/PNG/WebP fino a 2 MB, al massimo 50.000 voci); un file che non è un backup viene rifiutato con un messaggio
+chiaro. Serve anche per cambiare iPad o per seguire l'app dal vecchio indirizzo github.io al dominio.
 
 ## Come si usa il lettore
 
@@ -250,18 +287,76 @@ massimo due decodifiche contemporanee e un budget di 256 MB, proteggendo solo lo
 
 ## Installazione su iPad
 
-1. Apri il sito in Safari (una volta pubblicato, vedi sotto; in locale serve HTTPS o un tunnel su `localhost`).
+1. Apri [www.manga-dana.com](https://www.manga-dana.com) in Safari (in locale serve HTTPS o un tunnel su `localhost`).
 2. **Condividi → Aggiungi alla schermata Home**.
 3. Apri l'app dalla Home e **importa i file da lì**: l'app installata ha uno spazio di archiviazione separato da
    Safari (fino al 60 % del disco, non soggetto alla scadenza dei 7 giorni). Il piè di pagina della libreria mostra lo
    spazio usato.
 
+All'avvio iPadOS mostra per un istante la **schermata di avvio** dell'app: la corona sullo sfondo dell'aspetto in uso
+(avorio o quasi nero), per ogni modello di iPad e orientamento. Le immagini (`public/splash/`, PNG indicizzati da
+~13 KB) e i `<link rel="apple-touch-startup-image">` con le media query vengono generati dalla tabella dei dispositivi
+`scripts/splash-devices.json` (`scripts/make-brand-assets.mjs` e `vite.config.ts`); iOS scarica solo quelle del
+dispositivo, e non fanno parte della cache offline.
+
 ## Pubblicazione su GitHub Pages
 
 Il workflow `.github/workflows/deploy.yml` esegue lint, typecheck, test, build e test end-to-end sulla build, poi
 pubblica `dist/` su GitHub Pages a ogni push su `main`. Nel repository: **Settings → Pages →
-Source: GitHub Actions**. Il percorso base è ricavato dal nome del repository (`/4k-CBR-CBZ-Reader/`); per un dominio
-proprio impostare `VITE_BASE=/` nella build.
+Source: GitHub Actions**. Il percorso base viene letto dalla configurazione di Pages (`actions/configure-pages`):
+`/Mangadana/` se l'app fosse servita da `gianmarcocherubini.github.io`, `/` con il dominio proprio. In locale vale il
+nome del repository, oppure `VITE_BASE=/`.
+
+### Dominio www.manga-dana.com
+
+Il dominio è registrato su IONOS (name server `ui-dns.*`). Il certificato **SSL Starter** incluso da IONOS non va
+configurato (né «con il mio sito web IONOS», che lo installerebbe sui loro server, né «con il mio server»): GitHub
+Pages non accetta certificati esterni ed emette il proprio, gratuito (Let's Encrypt), quando si spunta *Enforce
+HTTPS*. Per collegare il dominio a GitHub Pages, nell'ordine:
+
+1. **DNS (IONOS → Domini & SSL → manga-dana.com → DNS)**. Il dominio nudo (`@`) nasce con i record del parcheggio
+   IONOS, `A 217.160.0.37` e `AAAA 2001:8d8:100f:f000::200`: vanno **sostituiti** con quelli di GitHub (un AAAA che
+   non punta a GitHub fa fallire il controllo DNS). MX, TXT (SPF), `autodiscover` e `_domainconnect` restano.
+   Record finali:
+
+   | Nome | Tipo | Valore |
+   | --- | --- | --- |
+   | `www` | CNAME | `gianmarcocherubini.github.io.` |
+   | `@` | A | `185.199.108.153` |
+   | `@` | A | `185.199.109.153` |
+   | `@` | A | `185.199.110.153` |
+   | `@` | A | `185.199.111.153` |
+   | `@` | AAAA | `2606:50c0:8000::153` |
+   | `@` | AAAA | `2606:50c0:8001::153` |
+   | `@` | AAAA | `2606:50c0:8002::153` |
+   | `@` | AAAA | `2606:50c0:8003::153` |
+
+   Verifica: `dig +short www.manga-dana.com CNAME` deve rispondere `gianmarcocherubini.github.io.`.
+2. **GitHub → Settings → Pages → Custom domain**: `www.manga-dana.com`, **Save**, attendere il controllo DNS, poi
+   spuntare **Enforce HTTPS** (il certificato arriva in pochi minuti). Con i record A sul dominio nudo, GitHub
+   reindirizza da solo `manga-dana.com` → `www.manga-dana.com`. Consigliato anche **Settings (profilo) → Pages →
+   Add a domain** per verificare il dominio e impedire che altri repository lo reclamino.
+3. **Actions → Build and deploy to GitHub Pages → Run workflow** (se l'ultimo deploy è precedente al dominio): la
+   build precedente ha il percorso base del repository su github.io e sul dominio non caricherebbe gli asset (pagina
+   vuota); il workflow rilegge la configurazione e ricostruisce con base `/`. Da qui `gianmarcocherubini.github.io/Mangadana/`
+   reindirizza al dominio.
+4. **Settings → General → Social preview**: caricare `public/brand/social-preview.png` (1280×640), la stessa immagine
+   usata dai tag Open Graph per le anteprime dei link (iMessage, WhatsApp, X).
+
+**L'app già installata dall'indirizzo github.io** ha il suo spazio di archiviazione legato a quell'origine: non
+può seguire il dominio. Continua a funzionare dalla cache del service worker (libreria compresa), ma dal momento in
+cui github.io reindirizza al dominio il suo service worker non trova più aggiornamenti (un redirect fa fallire
+l'aggiornamento), e resta alla versione che aveva. Il repository, inoltre, è stato rinominato da `4k-CBR-CBZ-Reader`
+a `Mangadana`: il vecchio percorso `gianmarcocherubini.github.io/4k-CBR-CBZ-Reader/` non esiste più.
+
+- Se quella versione ha già il backup (0.9.0 o successiva), appena rileva che il dominio risponde mostra nella
+  libreria il banner **Nuovo indirizzo** con il percorso: esportare un backup, installare l'app da
+  www.manga-dana.com, ripristinare il backup e importare di nuovo i file (vedi *Backup della libreria*).
+- Se è precedente (0.8.0 o prima, senza backup), serve un **ponte** temporaneo: un repository con il vecchio nome
+  `4k-CBR-CBZ-Reader` che pubblichi su GitHub Pages la build corrente con base `/4k-CBR-CBZ-Reader/`. Il workflow
+  pronto è `docs/github-io-bridge.yml` (da copiare nel repository ponte come `.github/workflows/pages.yml`: prende
+  il codice da `Mangadana`, costruisce e attiva Pages da solo). Alla prima apertura la vecchia app si aggiorna da
+  lì, mostra il banner e permette l'esportazione; poi il repository ponte si elimina.
 
 Il service worker precarica l'intera app, compresi gli shader Anime4K e i pesi di Real-ESRGAN: dopo la prima
 apertura tutto funziona offline. Non servono intestazioni COOP/COEP: non c'è più WebAssembly multi-thread.
@@ -285,16 +380,21 @@ l'app alla schermata Home; libri, segnalibri e cache restano al loro posto.
 ```
 src/
   lib/archive/     rilevamento formato, lettore ZIP (zip.js), lettore RAR (worker + Extractor su Blob)
-  lib/storage/     IndexedDB (idb), OPFS, worker di copia, import, miniature
+  lib/storage/     IndexedDB (idb), OPFS, worker di copia, import, miniature, backup della libreria
+                   (backup.ts: formato, validazione e piano di ripristino; backupActions.ts: file, condivisione)
   lib/reader/      layout delle tavole (con spazio centrale), cache LRU delle pagine
+  lib/libraryView.ts  stato di lettura, filtro e ordinamento della griglia
+  lib/relocation.ts   avviso «nuovo indirizzo» per le installazioni fuori dal dominio
   lib/spread.ts    accoppiamento intelligente delle pagine e pagine bianche inserite
   lib/upscale/     Anime4K su WebGPU (anime4k.ts) e WebGL2 (glslHooks.ts + webgl2Backend.ts, shader ufficiali in
                    shaders/), motore per le pagine visibili con livello automatico (srEngine.ts), Real-ESRGAN in
                    WGSL (esrgan/: pesi f16, generatore dei kernel, runner a fasce, motore con stima dei tempi,
                    riferimento float32 e self-test)
-  components/      libreria, lettore (gesti, barre, impostazioni raggruppate)
+  components/      libreria, lettore (gesti, barre, impostazioni raggruppate), Brand.tsx + crown.json (marchio)
   sw.ts            service worker (precache dell'app, shader e pesi; offline)
-scripts/           make-fixtures.mjs (CBZ e CBR di prova), convert-realesr-weights.py (checkpoint → pesi f16)
+public/            icone, immagini di avvio iOS (splash/), anteprima social e wordmark (brand/)
+scripts/           make-fixtures.mjs (CBZ e CBR di prova), convert-realesr-weights.py (checkpoint → pesi f16),
+                   make-brand-assets.mjs + splash-devices.json (immagini di avvio, anteprima social, wordmark)
 e2e/               test Playwright (progetti chromium e webgpu)
 docs/, internal/   contesto di progetto, studio di fattibilità della super risoluzione, report
 ```

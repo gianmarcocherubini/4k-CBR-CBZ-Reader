@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { readingState } from '../lib/libraryView'
 import { formatBytes } from '../lib/storage/opfs'
 import type { Book, Progress } from '../types'
 
@@ -15,22 +16,6 @@ export function useCoverUrl(cover: Blob | undefined): string | null {
     return () => URL.revokeObjectURL(objectUrl)
   }, [cover])
   return url
-}
-
-export interface ReadingState {
-  page: number
-  started: boolean
-  finished: boolean
-  /** 0–100. */
-  pct: number
-}
-
-export function readingState(book: Book, progress: Progress | undefined): ReadingState {
-  const page = progress?.page ?? 0
-  const started = progress !== undefined && page > 0
-  const finished = started && page >= book.pageCount - 1
-  const pct = book.pageCount > 1 ? Math.min(100, Math.round(((page + 1) / book.pageCount) * 100)) : 0
-  return { page, started, finished, pct }
 }
 
 const Placeholder = (

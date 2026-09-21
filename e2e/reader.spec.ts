@@ -1,6 +1,7 @@
 import { expect, type Page, test } from '@playwright/test'
 import { execSync } from 'node:child_process'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -538,6 +539,134 @@ test.describe('library', () => {
     await expect(page.getByText('0 nella libreria')).toBeVisible()
     await page.reload()
     await expect(page.getByTestId('empty-library')).toBeVisible()
+  })
+
+  test('filters the grid by reading state and sorts it; the choice persists', async ({ page }) => {
+    await page.goto('/')
+    await importBooks(page, ['manga-vol-01.cbz', 'short-book.cbz', 'zip64-book.cbz'])
+    const titles = () => page.locator('[data-testid=book-card] .line-clamp-2').allTextContents()
+
+    await page.getByTestId('filter-finished').click()
+    await expect(page.getByTestId('grid-empty')).toContainText('Nessun volume finito in questa collezione.')
+    await page.getByRole('button', { name: 'Mostra tutti' }).click()
+    await expect(page.getByTestId('book-card')).toHaveCount(3)
+
+    await openBook(page, 'manga-vol-01')
+    await page.keyboard.press('ArrowLeft')
+    await expect(label(page)).toHaveText('2-3')
+    await page.waitForTimeout(500)
+    await page.getByTestId('back').click()
+    await openBook(page, 'short-book')
+    await page.keyboard.press('End')
+    await expect(label(page)).toHaveText('6')
+    await page.waitForTimeout(500)
+    await page.getByTestId('back').click()
+
+    await page.getByTestId('filter-reading').click()
+    expect(await titles()).toEqual(['manga-vol-01'])
+    await expect(page.getByTestId('grid-count')).toHaveText('1 di 3 volumi · 1 in lettura')
+    await page.getByTestId('filter-finished').click()
+    expect(await titles()).toEqual(['short-book'])
+    await page.getByTestId('filter-unread').click()
+    expect(await titles()).toEqual(['zip64-book'])
+
+    await page.getByTestId('filter-all').click()
+    await page.getByTestId('sort-title').click()
+    expect(await titles()).toEqual(['manga-vol-01', 'short-book', 'zip64-book'])
+    await page.getByTestId('sort-recent').click()
+    expect(await titles()).toEqual(['short-book', 'manga-vol-01', 'zip64-book'])
+    await page.getByTestId('sort-added').click()
+    await page.getByTestId('filter-reading').click()
+    await page.reload()
+    await expect(page.getByTestId('sort-added')).toHaveAttribute('aria-pressed', 'true')
+    await expect(page.getByTestId('filter-reading')).toHaveAttribute('aria-pressed', 'true')
+    expect(await titles()).toEqual(['manga-vol-01'])
+  })
+
+  test('backs up the library and restores it on a fresh install, re-attaching the data when the files come back', async ({ page, browser }) => {
+    await page.goto('/')
+    await importBooks(page, ['manga-vol-01.cbz', 'short-book.cbz'])
+    await page.getByTestId('new-collection').click()
+    await page.getByLabel('Nome collezione').fill('Seinen')
+    await page.getByRole('button', { name: 'Crea' }).click()
+    await page.getByTestId('collection-default').click()
+    await page.getByRole('button', { name: 'Modifica manga-vol-01' }).click()
+    await page.getByTestId('book-title-input').fill('Vinland Saga 1')
+    await page.getByTestId('book-collection-select').selectOption({ label: 'Seinen' })
+    await page.getByRole('button', { name: 'Salva' }).click()
+    await page.getByTestId('collection-all').click()
+    await openBook(page, 'Vinland Saga 1')
+    await page.keyboard.press('ArrowLeft')
+    await page.keyboard.press('ArrowLeft')
+    await expect(label(page)).toHaveText('4-5')
+    await page.waitForTimeout(500)
+    await page.getByTestId('back').click()
+    await expect(page.getByTestId('book-progress').first()).toHaveText(/^Pagina 4 di 19/)
+    await page.evaluate(() => {
+      const settings = JSON.parse(localStorage.getItem('reader.settings.v1') ?? '{}')
+      localStorage.setItem('reader.settings.v1', JSON.stringify({ ...settings, direction: 'ltr', theme: 'dark' }))
+    })
+
+    // Export: no share sheet in this browser, so the backup is downloaded.
+    const downloadPromise = page.waitForEvent('download')
+    await page.getByTestId('library-menu').click()
+    await page.getByTestId('export-backup').click()
+    const download = await downloadPromise
+    expect(download.suggestedFilename()).toMatch(/^Mangadana-backup-\d{4}-\d{2}-\d{2}\.json$/)
+    const backupPath = join(tmpdir(), `mangadana-e2e-${Date.now()}.json`)
+    await download.saveAs(backupPath)
+    const backup = JSON.parse(readFileSync(backupPath, 'utf8'))
+    expect(backup.format).toBe('mangadana-backup')
+    expect(backup.collections.map((c: { name: string }) => c.name)).toEqual(['Seinen'])
+    expect(backup.books.map((b: { title: string; fileName: string; progress?: { page: number } }) => [b.title, b.fileName, b.progress?.page])).toEqual([
+      ['Vinland Saga 1', 'manga-vol-01.cbz', 3],
+      ['short-book', 'short-book.cbz', undefined],
+    ])
+    expect(backup.books[0].collectionId).toBe(backup.collections[0].id)
+    expect(backup.settings).toMatchObject({ direction: 'ltr', theme: 'dark' })
+
+    // A fresh install (another browser profile): restore, then import one of the two files.
+    const fresh = await browser.newContext({ viewport: { width: 1180, height: 820 }, deviceScaleFactor: 2, hasTouch: true, baseURL: new URL(page.url()).origin })
+    const other = await fresh.newPage()
+    await other.goto('/')
+    await expect(other.getByTestId('empty-library')).toBeVisible()
+    const chooserPromise = other.waitForEvent('filechooser')
+    await other.getByTestId('restore-empty').click()
+    await (await chooserPromise).setFiles(backupPath)
+    const summary = other.getByTestId('restore-summary')
+    await expect(summary).toContainText('2 volumi da importare di nuovo')
+    await expect(summary).toContainText('1 collezione creata.')
+    await expect(summary).toContainText('Impostazioni di lettura ripristinate.')
+    await other.getByRole('button', { name: 'Più tardi' }).click()
+    expect(JSON.parse(await other.evaluate(() => localStorage.getItem('reader.settings.v1') ?? '{}'))).toMatchObject({ direction: 'ltr', theme: 'dark' })
+    await expect(other.getByTestId('pending-restores')).toContainText('2 volumi da importare di nuovo.')
+    await expect(other.getByTestId('empty-library')).toBeVisible()
+
+    await importBooks(other, ['manga-vol-01.cbz'])
+    await other.getByTestId('collection-all').click()
+    await expect(other.getByRole('button', { name: 'Apri Vinland Saga 1' })).toBeVisible()
+    await expect(other.getByTestId('book-progress')).toHaveText(/^Pagina 4 di 19/)
+    await expect(other.getByTestId('collection-tabs').getByRole('button', { name: /Seinen/ }).first()).toContainText('1')
+    await expect(other.getByTestId('pending-restores')).toContainText('1 volume da importare di nuovo.')
+    await other.getByTestId('pending-restores-list').click()
+    await expect(other.getByTestId('pending-list')).toContainText('short-book')
+    await other.getByTestId('dismiss-pending').click()
+    await expect(other.getByTestId('pending-restores')).toHaveCount(0)
+
+    // Restoring the same backup here again changes nothing: the edited volume keeps its data, nothing is pending.
+    await other.setInputFiles('[data-testid=restore-input]', backupPath)
+    await expect(other.getByTestId('restore-summary')).toContainText('1 volume già in libreria aggiornato.')
+    await expect(other.getByTestId('restore-summary')).toContainText('1 volume da importare di nuovo')
+    await other.getByRole('button', { name: 'Più tardi' }).click()
+    await expect(other.getByRole('button', { name: 'Apri Vinland Saga 1' })).toBeVisible()
+    await fresh.close()
+    rmSync(backupPath, { force: true })
+  })
+
+  test('a file that is not a backup is refused with a clear message', async ({ page }) => {
+    await page.goto('/')
+    await page.setInputFiles('[data-testid=restore-input]', { name: 'note.json', mimeType: 'application/json', buffer: Buffer.from('{"hello":1}') })
+    await expect(page.getByTestId('error-message')).toHaveText('Il file non è un backup di Mangadana.')
   })
 })
 

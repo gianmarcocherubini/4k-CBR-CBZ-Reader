@@ -1,0 +1,52 @@
+# Ponte temporaneo per l'app installata dal vecchio indirizzo github.io.
+#
+# Va in un repository chiamato esattamente `4k-CBR-CBZ-Reader` (il nome che il repository
+# Mangadana aveva quando l'app è stata installata sull'iPad), come .github/workflows/pages.yml.
+# Pubblica su GitHub Pages, all'indirizzo https://gianmarcocherubini.github.io/4k-CBR-CBZ-Reader/,
+# la build corrente di Mangadana con quel percorso base: alla prima apertura la vecchia app trova
+# l'aggiornamento, mostra il banner «Nuovo indirizzo» e permette di esportare il backup della
+# libreria. Finito il trasferimento, il repository ponte si elimina.
+name: Ponte github.io per la vecchia installazione
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: gianmarcocherubini/Mangadana
+          ref: main
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+        env:
+          VITE_BASE: /4k-CBR-CBZ-Reader/
+      # Attiva Pages (sorgente GitHub Actions) se non lo è già: nessun passaggio nelle impostazioni.
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+      - id: deployment
+        uses: actions/deploy-pages@v4
