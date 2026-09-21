@@ -74,7 +74,10 @@ essere Default (grigio caldo o nero a seconda dell'aspetto), Nero o Bianco.
   e, tornando dal lettore, quella appena usata viene selezionata.
 - **Continua a leggere**: i volumi iniziati e non finiti della collezione selezionata, dal più recente, con pagina e
   avanzamento; un tocco riprende la lettura.
-- Il campo **Cerca** nella barra filtra la griglia per titolo.
+- Il campo **Cerca** nella barra filtra la griglia per titolo. Sopra la griglia, due controlli segmentati la
+  **filtrano per stato di lettura** (Tutti, Da leggere, In lettura, Finiti) e la **ordinano** (Recenti: ultima
+  apertura poi import più recente; Titolo: ordine naturale, `Vol. 2` prima di `Vol. 10`; Aggiunti: import più
+  recente). La scelta resta memorizzata; il conteggio dice «3 di 12 volumi» quando un filtro nasconde qualcosa.
 - Ogni collezione può non avere icona, usare una delle icone SVG monocromatiche integrate o un'immagine locale.
   La ricerca **Iconify** è incorporata nel dialogo (set moderni Lucide, Tabler, Phosphor e Material): non si lascia
   l'app; l'SVG scelto viene validato e copiato nel database locale. Un PNG/JPEG personale viene limitato a 2 MB /
@@ -88,6 +91,28 @@ essere Default (grigio caldo o nero a seconda dell'aspetto), Nero o Bianco.
   byte/pixel, al massimo otto anteprime (due download concorrenti), timeout e annullamento; la scelta viene
   normalizzata in JPEG e salvata localmente. Gli ZIP protetti non vengono cercati automaticamente; la ricerca manuale
   resta disponibile.
+
+### Backup della libreria
+
+Il pulsante `…` nella barra apre **Backup della libreria**; nella libreria vuota c'è anche **Ripristina da un
+backup**. Il backup è un file JSON (`Mangadana-backup-AAAA-MM-GG.json`) con tutto ciò che l'utente ha aggiunto ai
+file: titoli, collezioni con le loro icone, copertine scelte online, segnalibri (pagina, pagine bianche inserite) e
+impostazioni di lettura. **Non contiene i CBZ/CBR**: un volume è identificato da nome e dimensione del file, la stessa
+chiave con cui l'import riconosce i duplicati. Su iPad il file passa dal foglio di condivisione (Salva su File,
+AirDrop, iCloud Drive); dove il foglio non c'è viene scaricato.
+
+Il ripristino non cancella mai nulla:
+
+- una collezione del backup riusa quella locale con lo stesso id o lo stesso nome, altrimenti viene creata;
+- un volume il cui file è già in libreria prende titolo e collezione dal backup solo se qui non era mai stato
+  modificato, la copertina scelta se quella locale è la miniatura dell'archivio, e il segnalibro più recente dei due;
+- gli altri volumi restano **in attesa** (store `pendingRestores` di IndexedDB, schema 3): la libreria mostra
+  quanti sono e il loro elenco; appena si importa un file con lo stesso nome e dimensione, titolo, collezione,
+  copertina e segnalibro tornano da soli. «Ignora tutti» dimentica i dati in attesa.
+
+Il file viene validato campo per campo (formato e versione, tipi, riferimenti alle collezioni, immagini solo
+JPEG/PNG/WebP fino a 2 MB, al massimo 50.000 voci); un file che non è un backup viene rifiutato con un messaggio
+chiaro. Serve anche per cambiare iPad o per seguire l'app dal vecchio indirizzo github.io al dominio.
 
 ## Come si usa il lettore
 
@@ -262,11 +287,17 @@ massimo due decodifiche contemporanee e un budget di 256 MB, proteggendo solo lo
 
 ## Installazione su iPad
 
-1. Apri il sito in Safari (una volta pubblicato, vedi sotto; in locale serve HTTPS o un tunnel su `localhost`).
+1. Apri [www.manga-dana.com](https://www.manga-dana.com) in Safari (in locale serve HTTPS o un tunnel su `localhost`).
 2. **Condividi → Aggiungi alla schermata Home**.
 3. Apri l'app dalla Home e **importa i file da lì**: l'app installata ha uno spazio di archiviazione separato da
    Safari (fino al 60 % del disco, non soggetto alla scadenza dei 7 giorni). Il piè di pagina della libreria mostra lo
    spazio usato.
+
+All'avvio iPadOS mostra per un istante la **schermata di avvio** dell'app: la corona sullo sfondo dell'aspetto in uso
+(avorio o quasi nero), per ogni modello di iPad e orientamento. Le immagini (`public/splash/`, PNG indicizzati da
+~13 KB) e i `<link rel="apple-touch-startup-image">` con le media query vengono generati dalla tabella dei dispositivi
+`scripts/splash-devices.json` (`scripts/make-brand-assets.mjs` e `vite.config.ts`); iOS scarica solo quelle del
+dispositivo, e non fanno parte della cache offline.
 
 ## Pubblicazione su GitHub Pages
 
@@ -334,16 +365,21 @@ l'app alla schermata Home; libri, segnalibri e cache restano al loro posto.
 ```
 src/
   lib/archive/     rilevamento formato, lettore ZIP (zip.js), lettore RAR (worker + Extractor su Blob)
-  lib/storage/     IndexedDB (idb), OPFS, worker di copia, import, miniature
+  lib/storage/     IndexedDB (idb), OPFS, worker di copia, import, miniature, backup della libreria
+                   (backup.ts: formato, validazione e piano di ripristino; backupActions.ts: file, condivisione)
   lib/reader/      layout delle tavole (con spazio centrale), cache LRU delle pagine
+  lib/libraryView.ts  stato di lettura, filtro e ordinamento della griglia
+  lib/relocation.ts   avviso «nuovo indirizzo» per le installazioni fuori dal dominio
   lib/spread.ts    accoppiamento intelligente delle pagine e pagine bianche inserite
   lib/upscale/     Anime4K su WebGPU (anime4k.ts) e WebGL2 (glslHooks.ts + webgl2Backend.ts, shader ufficiali in
                    shaders/), motore per le pagine visibili con livello automatico (srEngine.ts), Real-ESRGAN in
                    WGSL (esrgan/: pesi f16, generatore dei kernel, runner a fasce, motore con stima dei tempi,
                    riferimento float32 e self-test)
-  components/      libreria, lettore (gesti, barre, impostazioni raggruppate)
+  components/      libreria, lettore (gesti, barre, impostazioni raggruppate), Brand.tsx + crown.json (marchio)
   sw.ts            service worker (precache dell'app, shader e pesi; offline)
-scripts/           make-fixtures.mjs (CBZ e CBR di prova), convert-realesr-weights.py (checkpoint → pesi f16)
+public/            icone, immagini di avvio iOS (splash/), anteprima social e wordmark (brand/)
+scripts/           make-fixtures.mjs (CBZ e CBR di prova), convert-realesr-weights.py (checkpoint → pesi f16),
+                   make-brand-assets.mjs + splash-devices.json (immagini di avvio, anteprima social, wordmark)
 e2e/               test Playwright (progetti chromium e webgpu)
 docs/, internal/   contesto di progetto, studio di fattibilità della super risoluzione, report
 ```
