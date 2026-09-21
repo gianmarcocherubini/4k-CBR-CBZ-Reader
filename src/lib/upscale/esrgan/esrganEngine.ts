@@ -25,6 +25,61 @@ const CLOSE_DELAY_MS = 1200
 const WINOGRAD_MIN_PSNR = 44
 const WINOGRAD_MAX_DIFF = 4
 
+/** Winograd probe against the direct 4×1 kernel (PSNR, largest 8-bit difference), whether it passed the quality gate, and both probe times, ms. */
+export interface WinogradCheck {
+  psnr: number
+  maxDiff: number
+  passed: boolean
+  ms: number
+  directMs: number
+}
+
+/**
+ * The kernel benchmark's outcome, remembered per device, model, precision and app version
+ * (localStorage): later sessions probe only the chosen kernel instead of warming and timing all
+ * three (and transforming the Winograd weights) at every activation. A new app version, whose
+ * kernels may differ, benchmarks again.
+ */
+interface KernelChoice {
+  variant: ConvVariant
+  check?: WinogradCheck
+}
+const KERNEL_CACHE_KEY = 'reader.esrgan-kernel.v1'
+const KERNEL_CACHE_MAX = 12
+const appVersion = typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : 'dev'
+
+function kernelCacheId(model: MaxQualityModel, info: EsrganInfo): string {
+  return `${appVersion}|${model}|${info.adapter}|${info.precision}`
+}
+
+function readKernelCache(): Record<string, KernelChoice> {
+  try {
+    const raw = localStorage.getItem(KERNEL_CACHE_KEY)
+    const parsed: unknown = raw ? JSON.parse(raw) : null
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, KernelChoice>) : {}
+  } catch {
+    return {}
+  }
+}
+
+function loadKernelChoice(id: string): KernelChoice | undefined {
+  const choice = readKernelCache()[id]
+  if (!choice || !(choice.variant === 1 || choice.variant === 2 || choice.variant === 'w')) return undefined
+  if (choice.check && typeof choice.check.passed !== 'boolean') return undefined
+  return choice
+}
+
+function saveKernelChoice(id: string, choice: KernelChoice): void {
+  try {
+    const cache = readKernelCache()
+    delete cache[id]
+    const kept = Object.entries(cache).slice(-(KERNEL_CACHE_MAX - 1))
+    localStorage.setItem(KERNEL_CACHE_KEY, JSON.stringify(Object.fromEntries([...kept, [id, choice]])))
+  } catch {
+    // Private mode / quota: the benchmark simply runs again next time.
+  }
+}
+
 function compareRgba(a: Uint8ClampedArray, b: Uint8ClampedArray): { psnr: number; maxDiff: number } {
   let se = 0
   let maxDiff = 0
@@ -174,37 +229,55 @@ export class EsrganEngine {
    * warmed up on a tiny image (first-use compilation must not be measured) and timed on one
    * band-sized image; the fastest stays. The direct variants compute identical numbers; Winograd
    * goes through transforms whose f16 rounding differs, so it is kept only when its probe output
-   * matches the direct one within a visually irrelevant margin.
+   * matches the direct one within a visually irrelevant margin. The outcome is remembered for
+   * this device and app version; later sessions probe the chosen kernel only.
    */
   private async benchmark(): Promise<void> {
+    const id = kernelCacheId(this.model.id, this.info)
+    const remembered = loadKernelChoice(id)
+    if (remembered) {
+      this.upscaler.variant = remembered.variant
+      this.winogradCheck = remembered.check
+      if (remembered.variant !== 'w') this.upscaler.releaseWinograd()
+      await this.warm()
+      this.observeProbe((await this.timeProbe()).ms)
+      return
+    }
     let best: { variant: ConvVariant; ms: number } | undefined
-    let direct: Uint8ClampedArray | undefined
+    let direct: { ms: number; data: Uint8ClampedArray } | undefined
     for (const variant of this.upscaler.variants) {
       this.upscaler.variant = variant
-      const warm = synthetic(64, 64)
-      try {
-        await this.upscaler.upscale(warm, 4)
-      } finally {
-        warm.close()
-      }
-      const { ms, data } = await this.timeProbe()
-      if (variant === 1) direct = data
+      await this.warm()
+      const probe = await this.timeProbe()
+      if (variant === 1) direct = probe
       if (variant === 'w' && direct) {
-        const { psnr, maxDiff } = compareRgba(direct, data)
-        this.winogradCheck = { psnr, maxDiff, ms }
-        if (psnr < WINOGRAD_MIN_PSNR || maxDiff > WINOGRAD_MAX_DIFF) continue
+        const { psnr, maxDiff } = compareRgba(direct.data, probe.data)
+        const passed = psnr >= WINOGRAD_MIN_PSNR && maxDiff <= WINOGRAD_MAX_DIFF
+        this.winogradCheck = { psnr, maxDiff, passed, ms: probe.ms, directMs: direct.ms }
+        if (!passed) continue
       }
-      if (!best || ms < best.ms) best = { variant, ms }
+      if (!best || probe.ms < best.ms) best = { variant, ms: probe.ms }
     }
     if (best) {
       this.upscaler.variant = best.variant
       this.observeProbe(best.ms)
     }
     if (this.upscaler.variant !== 'w') this.upscaler.releaseWinograd()
+    saveKernelChoice(id, { variant: this.upscaler.variant, ...(this.winogradCheck ? { check: this.winogradCheck } : {}) })
   }
 
-  /** Winograd probe against the direct kernel (PSNR, largest 8-bit difference) and its time; undefined when not tried. */
-  winogradCheck: { psnr: number; maxDiff: number; ms: number } | undefined
+  /** One tiny run so first-use pipeline compilation never lands in a timing. */
+  private async warm(): Promise<void> {
+    const warm = synthetic(64, 64)
+    try {
+      await this.upscaler.upscale(warm, 4)
+    } finally {
+      warm.close()
+    }
+  }
+
+  /** Winograd probe against the direct kernel; undefined when it was never tried on this device. */
+  winogradCheck: WinogradCheck | undefined
 
   /** Wall time of the probe image, ms, and its pixels. */
   private async timeProbe(): Promise<{ ms: number; data: Uint8ClampedArray }> {

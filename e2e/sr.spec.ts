@@ -387,6 +387,12 @@ test('Qualità massima: Real-ESRGAN x4 on the visible page only, time budget fal
   await expect(page.getByTestId('page-label')).toHaveText('1')
   await expect(p1).toHaveAttribute('data-sr', 'GAN', { timeout: 5_000 })
 
+  // The kernel benchmark's outcome is remembered for this device and app version.
+  const remembered = await page.evaluate(() => JSON.parse(localStorage.getItem('reader.esrgan-kernel.v1') ?? '{}') as Record<string, { variant: unknown }>)
+  const choices = Object.values(remembered)
+  expect(choices).toHaveLength(1)
+  expect([1, 2, 'w']).toContain(choices[0]!.variant)
+
   // With a 3 s budget a GPU that predicts more (the software renderer of CI does) hands the spread to Anime4K.
   const estimated = Number(/stimati ([\d.]+) s/.exec(text)?.[1] ?? '0')
   await page.mouse.move(600, 420)
