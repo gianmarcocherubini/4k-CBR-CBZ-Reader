@@ -80,6 +80,11 @@ const MoreIcon = (
     <circle cx="19" cy="12" r="1.8" />
   </svg>
 )
+const SortIcon = (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <path d="M7 4v16m0 0-3.5-3.5M7 20l3.5-3.5M17 20V4m0 0 3.5 3.5M17 4l-3.5 3.5" />
+  </svg>
+)
 /** Volumes shown on the "Continua a leggere" shelf, most recently read first. */
 const CONTINUE_LIMIT = 8
 const EMPTY_FILTER_LABEL: Record<ReadingFilter, string> = {
@@ -97,6 +102,7 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
   const [progress, setProgress] = useState<Map<string, Progress>>(new Map())
   const [pendingRestores, setPendingRestores] = useState<PendingRestore[]>([])
   const [view, setView] = useState<LibraryView>(loadLibraryView)
+  const [viewMenu, setViewMenu] = useState(false)
   const [libraryMenu, setLibraryMenu] = useState(false)
   const [backupBusy, setBackupBusy] = useState(false)
   const [restoreResult, setRestoreResult] = useState<RestoreResult | null>(null)
@@ -448,6 +454,9 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
   const needle = query.trim().toLocaleLowerCase('it')
   const matchingQuery = needle ? inCollection.filter((book) => book.title.toLocaleLowerCase('it').includes(needle)) : inCollection
   const visibleBooks = applyLibraryView(matchingQuery, progress, view)
+  const sortLabel = LIBRARY_SORTS.find((option) => option.value === view.sort)?.label ?? ''
+  const filterLabel = READING_FILTERS.find((option) => option.value === view.filter)?.label ?? ''
+  const viewLabel = view.filter === 'all' ? sortLabel : `${filterLabel} · ${sortLabel}`
   const selectedCollectionName =
     selectedCollectionId === ALL_COLLECTION_ID
       ? 'Tutti i libri'
@@ -650,7 +659,8 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
             {continueReading.length > 0 && (
               <section className="pt-8" data-testid="continue-shelf">
                 <h2 className="eyebrow">Continua a leggere</h2>
-                <div className="shelf mt-3">
+                {/* .shelf sets its own (negative) margins, so the gap needs !important: 4 px + its 8 px of padding. */}
+                <div className="shelf !mt-1">
                   {continueReading.map((book) => (
                     <ContinueCard key={book.id} book={book} progress={progress.get(book.id)!} onOpen={() => void openLibraryBook(book)} />
                   ))}
@@ -658,7 +668,7 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
               </section>
             )}
             <section className="pt-8">
-              <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
+              <div className="flex items-end justify-between gap-4">
                 <div className="min-w-0">
                   <h2 className="text-large-title">{needle ? `Risultati per “${query.trim()}”` : selectedCollectionName}</h2>
                   <p className="mt-1 text-footnote text-label-2 tabular-nums" data-testid="grid-count">
@@ -670,10 +680,18 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
                     {!needle && reading.length > 0 ? ` · ${reading.length} in lettura` : ''}
                   </p>
                 </div>
-                <div className="flex flex-wrap items-center gap-2" data-testid="library-view">
-                  <Segmented<ReadingFilter> label="Filtra per stato di lettura" idPrefix="filter" value={view.filter} options={[...READING_FILTERS]} onChange={(filter) => updateView({ filter })} />
-                  <Segmented<LibrarySort> label="Ordina" idPrefix="sort" value={view.sort} options={[...LIBRARY_SORTS]} onChange={(sort) => updateView({ sort })} />
-                </div>
+                {/* One quiet control for order and filter, as in Apple Books; filled while a filter narrows the grid. */}
+                <button
+                  type="button"
+                  className="btn-pill mb-0.5 shrink-0"
+                  aria-pressed={view.filter !== 'all'}
+                  aria-label="Ordina e filtra"
+                  onClick={() => setViewMenu(true)}
+                  data-testid="library-view"
+                >
+                  {SortIcon}
+                  {viewLabel}
+                </button>
               </div>
               {visibleBooks.length === 0 ? (
                 <div className="mt-6 rounded-[14px] bg-card px-6 py-14 text-center shadow-[inset_0_0_0_1px_var(--line)]" data-testid="grid-empty">
@@ -742,6 +760,40 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
             if (!coverBook) beginCoverSuggestions()
           }}
         />
+      )}
+
+      {viewMenu && (
+        <Dialog
+          title="Ordina e filtra"
+          onClose={() => setViewMenu(false)}
+          actions={
+            <DialogAction primary onClick={() => setViewMenu(false)} testId="library-view-done">
+              Fine
+            </DialogAction>
+          }
+        >
+          <div className="space-y-5 pt-1">
+            <div>
+              <div className="eyebrow mb-2">Mostra</div>
+              <Segmented<ReadingFilter>
+                label="Filtra per stato di lettura"
+                idPrefix="filter"
+                className="w-full"
+                value={view.filter}
+                options={[...READING_FILTERS]}
+                onChange={(filter) => updateView({ filter })}
+              />
+            </div>
+            <div>
+              <div className="eyebrow mb-2">Ordina per</div>
+              <Segmented<LibrarySort> label="Ordina" idPrefix="sort" className="w-full" value={view.sort} options={[...LIBRARY_SORTS]} onChange={(sort) => updateView({ sort })} />
+            </div>
+            <p className="text-footnote text-label-3">
+              Recenti: l’ultimo aperto per primo. Aggiunti: l’ultimo importato per primo. Titolo: in ordine alfabetico, con i numeri in
+              ordine naturale.
+            </p>
+          </div>
+        </Dialog>
       )}
 
       {libraryMenu && (
