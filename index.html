@@ -22,11 +22,13 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="apple-mobile-web-app-title" content="Mangadana" />
     <meta name="description" content="Mangadana: lettore di fumetti e manga (CBZ/CBR) ad alta risoluzione per iPad" />
-    <!-- Safari takes no SVG favicon: the ICO (16/32/48, BMP entries) and the PNGs serve it; the ICO also answers /favicon.ico. -->
-    <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
+    <!--
+      Favicons: PNG and a classic ICO only. Safari picks a single candidate among the rel="icon" links
+      and does not fall back when it cannot use it, so an SVG favicon here would leave the tab blank.
+    -->
     <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png" />
     <link rel="icon" type="image/png" sizes="16x16" href="/icons/favicon-16.png" />
-    <link rel="icon" type="image/svg+xml" href="/icons/icon.svg" />
+    <link rel="icon" href="/favicon.ico" sizes="32x32" />
     <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
     <link rel="mask-icon" href="/icons/mask-icon.svg" color="#26251e" />
     <title>Mangadana</title>
