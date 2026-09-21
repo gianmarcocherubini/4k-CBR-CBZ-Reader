@@ -545,11 +545,20 @@ test.describe('library', () => {
     await page.goto('/')
     await importBooks(page, ['manga-vol-01.cbz', 'short-book.cbz', 'zip64-book.cbz'])
     const titles = () => page.locator('[data-testid=book-card] .line-clamp-2').allTextContents()
+    // One pill by the section title opens "Ordina e filtra"; choices apply at once, "Fine" closes it.
+    const openView = () => page.getByTestId('library-view').click()
+    const closeView = () => page.getByTestId('library-view-done').click()
+    await expect(page.getByTestId('library-view')).toHaveText('Recenti')
 
+    await openView()
     await page.getByTestId('filter-finished').click()
+    await closeView()
+    await expect(page.getByTestId('library-view')).toHaveText('Finiti · Recenti')
+    await expect(page.getByTestId('library-view')).toHaveAttribute('aria-pressed', 'true')
     await expect(page.getByTestId('grid-empty')).toContainText('Nessun volume finito in questa collezione.')
     await page.getByRole('button', { name: 'Mostra tutti' }).click()
     await expect(page.getByTestId('book-card')).toHaveCount(3)
+    await expect(page.getByTestId('library-view')).toHaveAttribute('aria-pressed', 'false')
 
     await openBook(page, 'manga-vol-01')
     await page.keyboard.press('ArrowLeft')
@@ -562,6 +571,7 @@ test.describe('library', () => {
     await page.waitForTimeout(500)
     await page.getByTestId('back').click()
 
+    await openView()
     await page.getByTestId('filter-reading').click()
     expect(await titles()).toEqual(['manga-vol-01'])
     await expect(page.getByTestId('grid-count')).toHaveText('1 di 3 volumi · 1 in lettura')
@@ -577,10 +587,14 @@ test.describe('library', () => {
     expect(await titles()).toEqual(['short-book', 'manga-vol-01', 'zip64-book'])
     await page.getByTestId('sort-added').click()
     await page.getByTestId('filter-reading').click()
+    await closeView()
+    await expect(page.getByTestId('library-view')).toHaveText('In lettura · Aggiunti')
     await page.reload()
+    await expect(page.getByTestId('library-view')).toHaveText('In lettura · Aggiunti')
+    expect(await titles()).toEqual(['manga-vol-01'])
+    await openView()
     await expect(page.getByTestId('sort-added')).toHaveAttribute('aria-pressed', 'true')
     await expect(page.getByTestId('filter-reading')).toHaveAttribute('aria-pressed', 'true')
-    expect(await titles()).toEqual(['manga-vol-01'])
   })
 
   test('backs up the library and restores it on a fresh install, re-attaching the data when the files come back', async ({ page, browser }) => {
