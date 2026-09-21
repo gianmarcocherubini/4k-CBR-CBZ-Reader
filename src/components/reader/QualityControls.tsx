@@ -1,28 +1,33 @@
 import type { ReaderSettings, Rendering, Resolution } from '../../types'
-import { Group, Row, Segmented, Switch } from './SettingsPanel'
+import { Group, Row, Segmented, Switch, TechnicalDetails } from './SettingsPanel'
 
 interface QualityControlsProps {
   resolution: Resolution
   rendering: Rendering
   antiSpoiler: boolean
-  /** Status line of the HD tier (Anime4K). */
+  /** One plain sentence on the state of the HD tier (ready, estimate, unavailable). */
+  hdSummary: string
+  /** One plain sentence on the state of the 4K tier. */
+  fourKSummary: string
+  /** Technical status line of the HD tier (backend, level, factor, cost), under "Dettagli tecnici". */
   hdStatus: string
-  /** Status line of the 4K tier (Real-ESRGAN). */
+  /** Technical status line of the 4K tier (model, precision, kernel, estimate). */
   fourKStatus: string
   onChange: (patch: Partial<ReaderSettings>) => void
 }
 
+/** Speeds ordered by quality: what the reader gets, in seconds, without the machinery behind it. */
 const RENDERING: Array<{ value: Rendering; label: string; detail: string }> = [
-  { value: 'fast', label: 'Fast', detail: 'Anime v3, un passaggio: circa 1 s per pagina su un iPad M.' },
-  { value: 'medium', label: 'Medium', detail: 'Anime v3, quattro passaggi su copie riflesse mediati (bordi più puliti): circa 4 s.' },
-  { value: 'slow', label: 'Slow', detail: 'Anime 6B, la rete grande: la qualità più alta, circa 7 s per pagina.' },
+  { value: 'fast', label: 'Fast', detail: 'Fast: circa un secondo per pagina, già molto più nitido di HD.' },
+  { value: 'medium', label: 'Medium', detail: 'Medium: bordi e linee più puliti, circa quattro secondi per pagina.' },
+  { value: 'slow', label: 'Slow', detail: 'Slow: il massimo dettaglio possibile, circa sette secondi per pagina.' },
 ]
 
 /**
  * The one quality choice of the reader. HD is fully automatic; 4K trades time for detail and its
  * speeds are ordered by quality: Slow is the best-looking, Fast the quickest.
  */
-export function QualityControls({ resolution, rendering, antiSpoiler, hdStatus, fourKStatus, onChange }: QualityControlsProps) {
+export function QualityControls({ resolution, rendering, antiSpoiler, hdSummary, fourKSummary, hdStatus, fourKStatus, onChange }: QualityControlsProps) {
   const fourK = resolution === '4k'
   const chosen = RENDERING.find((r) => r.value === rendering)!
   return (
@@ -30,15 +35,20 @@ export function QualityControls({ resolution, rendering, antiSpoiler, hdStatus, 
       title="Risoluzione"
       testId="sr-section"
       footer={
-        <span data-testid={fourK ? 'mq-status' : 'sr-status'}>{fourK ? fourKStatus : hdStatus}</span>
+        <>
+          <span data-testid={fourK ? 'mq-summary' : 'sr-summary'}>{fourK ? fourKSummary : hdSummary}</span>
+          <TechnicalDetails>
+            <span data-testid={fourK ? 'mq-status' : 'sr-status'}>{fourK ? fourKStatus : hdStatus}</span>
+          </TechnicalDetails>
+        </>
       }
     >
       <Row
         title="Risoluzione"
         hint={
           fourK
-            ? 'Real-ESRGAN sulla GPU per le pagine sullo schermo, ×4 rispetto all’originale. Sperimentale: qualche secondo per pagina; HD resta il ripiego.'
-            : 'HD: Anime4K sulla GPU, tutto automatico, pronta in meno di un secondo. 4K: reti Real-ESRGAN, più nitide ma lente.'
+            ? 'Le pagine sullo schermo vengono ricostruite a quattro volte la risoluzione originale: linee nette, testo leggibile, niente artefatti. Richiede qualche secondo per pagina; quando non è possibile, la pagina resta in HD.'
+            : 'HD migliora ogni pagina all’istante, senza nulla da regolare. 4K è molto più nitido, ma richiede qualche secondo per pagina.'
         }
         stacked
       >
@@ -55,7 +65,7 @@ export function QualityControls({ resolution, rendering, antiSpoiler, hdStatus, 
       </Row>
       {fourK && (
         <>
-          <Row title="Rendering" hint={`Da veloce a lento cresce la qualità: Slow è la massima. ${chosen.detail}`} stacked>
+          <Row title="Rendering" hint={`Più tempo, più dettaglio: Slow è la qualità massima. ${chosen.detail}`} stacked>
             <Segmented<Rendering>
               label="Rendering"
               idPrefix="rend"
@@ -64,7 +74,7 @@ export function QualityControls({ resolution, rendering, antiSpoiler, hdStatus, 
               options={RENDERING.map((r) => ({ value: r.value, label: r.value === 'slow' ? 'Slow · massima' : r.label }))}
             />
           </Row>
-          <Row title="Sfocatura anti-spoiler" hint="Mentre la versione 4K viene calcolata, la pagina resta sfocata e si rivela solo quando è pronta.">
+          <Row title="Sfocatura anti-spoiler" hint="Finché la versione 4K non è pronta, la pagina resta sfocata: niente anticipazioni mentre aspetti.">
             <Switch checked={antiSpoiler} onChange={(v) => onChange({ antiSpoiler: v })} label="Sfocatura anti-spoiler" />
           </Row>
         </>

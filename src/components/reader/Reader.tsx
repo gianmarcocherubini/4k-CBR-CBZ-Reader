@@ -850,6 +850,43 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
     return parts.join(' · ')
   })()
 
+  /** Seconds for people: "meno di un secondo", "1,5 s", "7 s". */
+  const seconds = (ms: number) => (ms < 950 ? 'meno di un secondo' : ms < 9950 ? `${(ms / 1000).toLocaleString('it-IT', { maximumFractionDigits: 1 })} s` : `${Math.round(ms / 1000)} s`)
+  const onScreenLabel = visibleSizes.length > 1 ? 'le due pagine sullo schermo' : 'la pagina sullo schermo'
+  /** One plain sentence for the settings footer; the technical line stays under "Dettagli tecnici". */
+  const srSummary = (() => {
+    if (sr.status === 'init') return 'Avvio…'
+    if (sr.status === 'unavailable' || !sr.engine) return 'Non disponibile su questo dispositivo: le pagine vengono mostrate come sono.'
+    const first = spreadPages[0]
+    const size = first !== undefined ? sizes[first] : undefined
+    const decision = size ? sr.engine.plan(size) : undefined
+    if (decision === 'too-big') return 'Questa pagina è troppo grande per essere migliorata: viene mostrata com’è.'
+    const est = size ? sr.engine.estimateMs(size) : undefined
+    return est !== undefined ? `Pronto: ${seconds(est)} per pagina.` : 'Pronto.'
+  })()
+  const mqSummary = (() => {
+    if (!heavyOn) return 'Disattivato.'
+    switch (mq.status) {
+      case 'off':
+      case 'init':
+        return `Preparazione: ${mq.progress ?? 'avvio…'}`
+      case 'unavailable':
+        return 'Non disponibile su questo dispositivo: le pagine restano in HD.'
+      case 'ready': {
+        const engine = mq.engine
+        if (!engine) return 'Pronto.'
+        if (heavySkip === 'slow') return `Per ${onScreenLabel} servirebbe troppo tempo: resta in HD.`
+        if (heavySkip === 'too-big') return 'Pagina troppo grande per il 4K: resta in HD.'
+        if (heavySkip === 'error') return 'Il 4K non è riuscito su questa pagina: resta in HD.'
+        const est = engine.estimateMs(visibleSizes, heavyEnsembleSize)
+        const shown = spreadPages.map((i) => displayed.get(i)).find((r) => r?.level === heavyLabel)
+        const parts = [est !== undefined && visibleSizes.length > 0 ? `Pronto: circa ${seconds(est)} per ${onScreenLabel}.` : 'Pronto.']
+        if (shown && shown.ms > 0) parts.push(`L’ultima pagina ha richiesto ${seconds(shown.ms)}.`)
+        return parts.join(' ')
+      }
+    }
+  })()
+
   // ---- render --------------------------------------------------------------------------------
   if (status === 'error' && error) {
     return (
@@ -947,6 +984,8 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
               resolution={settings.resolution}
               rendering={settings.rendering}
               antiSpoiler={settings.antiSpoiler}
+              hdSummary={srSummary}
+              fourKSummary={mqSummary}
               hdStatus={srStatusLine}
               fourKStatus={mqStatusLine}
               onChange={updateSettings}
