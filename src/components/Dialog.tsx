@@ -7,11 +7,11 @@ interface DialogProps {
   onClose?: () => void
 }
 
-/** iOS-style alert card: centred, rounded, on a dimmed blurred backdrop. Tap outside or Esc to close. */
+/** Modal card on a dimmed backdrop: title, quiet body, actions aligned to the right. Tap outside or Esc to close. */
 export function Dialog({ title, children, actions, onClose }: DialogProps) {
   return (
     <div
-      className="fade-enter fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-6 backdrop-blur-sm"
+      className="fade-enter fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6 backdrop-blur-sm"
       role="presentation"
       onClick={onClose}
       onKeyDown={(e) => e.key === 'Escape' && onClose?.()}
@@ -20,20 +20,20 @@ export function Dialog({ title, children, actions, onClose }: DialogProps) {
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        className="material-strong w-full max-w-sm overflow-hidden rounded-2xl shadow-sheet"
+        className="w-full max-w-sm overflow-hidden rounded-[16px] bg-card shadow-sheet"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="px-5 pt-5 pb-1 text-center">
-          <h2 className="text-headline">{title}</h2>
+        <div className="px-6 pt-6 pb-1">
+          <h2 className="text-title2">{title}</h2>
         </div>
-        <div className="max-h-[60vh] overflow-y-auto px-5 pb-4 text-center text-footnote text-label-2">{children}</div>
-        {actions && <div className="flex flex-col divide-y divide-separator border-t border-separator">{actions}</div>}
+        <div className="max-h-[60vh] overflow-y-auto px-6 pb-5 text-subhead text-label-2">{children}</div>
+        {actions && <div className="flex flex-wrap items-center justify-end gap-2 px-6 pb-6">{actions}</div>}
       </div>
     </div>
   )
 }
 
-/** Full-width alert action, iOS style. */
+/** Dialog action: primary (ink on bone), destructive (red text), or quiet outline. */
 export function DialogAction({
   children,
   onClick,
@@ -47,13 +47,9 @@ export function DialogAction({
   primary?: boolean
   testId?: string
 }) {
+  const cls = primary ? 'btn-primary' : destructive ? 'btn-ghost !text-red' : 'btn-ghost'
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      data-testid={testId}
-      className={`min-h-[44px] w-full text-body transition-colors active:bg-fill ${destructive ? 'text-red' : 'text-tint'} ${primary ? 'font-semibold' : ''}`}
-    >
+    <button type="button" onClick={onClick} data-testid={testId} className={`${cls} !min-h-[36px] !px-3.5 !text-[13px]`}>
       {children}
     </button>
   )

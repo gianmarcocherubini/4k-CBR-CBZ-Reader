@@ -113,38 +113,38 @@ export function CoverSearchDialog({ book, onApply, onClose }: CoverSearchDialogP
         role="dialog"
         aria-modal="true"
         aria-labelledby="cover-search-title"
-        className="material-strong flex max-h-[90dvh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl shadow-sheet"
+        className="flex max-h-[90dvh] w-full max-w-3xl flex-col overflow-hidden rounded-[16px] bg-card shadow-sheet"
         onClick={(event) => event.stopPropagation()}
         data-testid="cover-search-dialog"
       >
-        <div className="hairline-b px-5 pt-5 pb-4">
+        <div className="hairline-b px-6 pt-6 pb-5">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <h2 id="cover-search-title" className="text-headline">Scegli una copertina</h2>
-              <p className="mt-0.5 text-footnote text-label-2">Open Library + AniList</p>
+              <h2 id="cover-search-title" className="text-title2">Scegli una copertina</h2>
+              <p className="mt-1 text-footnote text-label-2">Open Library + AniList</p>
             </div>
-            <button type="button" className="btn-plain -mr-2" onClick={close}>Mantieni attuale</button>
+            <button type="button" className="btn-ghost !min-h-[36px] !px-3.5 !text-[13px]" onClick={close}>Mantieni attuale</button>
           </div>
-          <form className="mt-4 flex gap-2" onSubmit={(event) => { event.preventDefault(); runSearch(query) }}>
+          <form className="mt-5 flex gap-2" onSubmit={(event) => { event.preventDefault(); runSearch(query) }}>
             <input
               value={query}
               onChange={(event) => setQuery(event.currentTarget.value)}
               maxLength={180}
               aria-label="Cerca titolo copertina"
-              className="min-h-[40px] min-w-0 flex-1 rounded-xl border border-separator bg-card px-3 text-body text-label outline-none focus:border-tint"
+              className="field min-w-0 flex-1"
             />
-            <button type="submit" className="btn-pill">Cerca</button>
+            <button type="submit" className="btn-primary !min-h-[40px]">Cerca</button>
           </form>
           {error && <p className="mt-2 text-footnote text-red">{error}</p>}
         </div>
-        <div className="min-h-40 flex-1 overflow-y-auto p-5">
+        <div className="min-h-40 flex-1 overflow-y-auto p-6">
           {loading ? (
             <div className="flex h-40 items-center justify-center"><div className="spinner" aria-label="Ricerca copertine" /></div>
           ) : (
             <div className="grid grid-cols-3 gap-4 sm:grid-cols-4 md:grid-cols-6">
               {results.map((candidate) => (
-                <button key={candidate.id} type="button" className="min-w-0 text-left" onClick={() => choose(candidate)} disabled={applying !== null} data-testid="cover-candidate">
-                  <div className="cover relative aspect-[2/3] w-full overflow-hidden bg-tertiary">
+                <button key={candidate.id} type="button" className="tile-focus min-w-0 text-left" onClick={() => choose(candidate)} disabled={applying !== null} data-testid="cover-candidate">
+                  <div className="tile relative aspect-[2/3] w-full overflow-hidden">
                     <CoverPreview candidate={candidate} />
                     {applying === candidate.id && <div className="absolute inset-0 flex items-center justify-center bg-black/30"><div className="spinner" /></div>}
                   </div>

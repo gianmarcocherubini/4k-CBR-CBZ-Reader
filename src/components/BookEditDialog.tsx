@@ -23,7 +23,7 @@ export function BookEditDialog({ book, collections, onSave, onCoverSearch, onDel
         role="dialog"
         aria-modal="true"
         aria-labelledby="book-edit-title"
-        className="material-strong w-full max-w-sm overflow-hidden rounded-2xl shadow-sheet"
+        className="w-full max-w-sm overflow-hidden rounded-[16px] bg-card shadow-sheet"
         onClick={(event) => event.stopPropagation()}
         onSubmit={(event) => {
           event.preventDefault()
@@ -31,27 +31,27 @@ export function BookEditDialog({ book, collections, onSave, onCoverSearch, onDel
         }}
         data-testid="book-edit-dialog"
       >
-        <div className="px-5 pt-5 pb-4">
-          <h2 id="book-edit-title" className="text-center text-headline">
+        <div className="px-6 pt-6 pb-2">
+          <h2 id="book-edit-title" className="text-title2">
             Modifica volume
           </h2>
-          <label className="mt-4 block text-footnote text-label-2">
+          <label className="eyebrow mt-5 block">
             Titolo
             <input
               autoFocus
               value={title}
               onChange={(event) => setTitle(event.currentTarget.value)}
               maxLength={180}
-              className="mt-1 min-h-[44px] w-full rounded-xl border border-separator bg-card px-3 text-body text-label outline-none focus:border-tint"
+              className="field mt-1.5 !text-[15px] !font-normal !tracking-normal !normal-case"
               data-testid="book-title-input"
             />
           </label>
-          <label className="mt-4 block text-footnote text-label-2">
+          <label className="eyebrow mt-4 block">
             Collezione
             <select
               value={collectionId}
               onChange={(event) => setCollectionId(event.currentTarget.value)}
-              className="mt-1 min-h-[44px] w-full appearance-none rounded-xl border border-separator bg-card px-3 text-body text-label outline-none focus:border-tint"
+              className="field mt-1.5 appearance-none !text-[15px] !font-normal !tracking-normal !normal-case"
               data-testid="book-collection-select"
             >
               <option value={DEFAULT_COLLECTION_ID}>Senza collezione</option>
@@ -64,20 +64,25 @@ export function BookEditDialog({ book, collections, onSave, onCoverSearch, onDel
           </label>
           <button
             type="button"
-            className="btn-ghost mt-4 w-full"
+            className="btn-ghost mt-5 w-full !min-h-[36px] !text-[13px]"
             disabled={!trimmed}
             onClick={() => onCoverSearch(trimmed, collectionId === DEFAULT_COLLECTION_ID ? undefined : collectionId)}
           >
             Cerca copertina online
           </button>
         </div>
-        <div className="grid grid-cols-2 border-t border-separator">
-          <button type="button" className="min-h-[44px] border-r border-separator text-body text-red active:bg-fill" onClick={onDelete}>
+        <div className="flex items-center justify-between gap-2 px-6 pt-4 pb-6">
+          <button type="button" className="btn-ghost !min-h-[36px] !px-3.5 !text-[13px] !text-red" onClick={onDelete}>
             Elimina
           </button>
-          <button type="submit" disabled={!trimmed} className="min-h-[44px] text-body font-semibold text-tint disabled:opacity-35 active:bg-fill">
-            Salva
-          </button>
+          <div className="flex gap-2">
+            <button type="button" className="btn-ghost !min-h-[36px] !px-3.5 !text-[13px]" onClick={onCancel}>
+              Annulla
+            </button>
+            <button type="submit" disabled={!trimmed} className="btn-primary !min-h-[36px] !px-3.5 !text-[13px]">
+              Salva
+            </button>
+          </div>
         </div>
       </form>
     </div>

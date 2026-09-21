@@ -152,8 +152,8 @@ export function CollectionDialog({ collection, existingNames, onSave, onCancel }
           })
         }}
       >
-        <div className="px-5 pt-5 pb-4">
-          <h2 id="collection-dialog-title" className="text-center text-headline">
+        <div className="px-6 pt-6 pb-2">
+          <h2 id="collection-dialog-title" className="text-title2">
             {collection ? 'Modifica collezione' : 'Nuova collezione'}
           </h2>
           <input
@@ -162,14 +162,15 @@ export function CollectionDialog({ collection, existingNames, onSave, onCancel }
             onChange={(event) => setName(event.currentTarget.value)}
             maxLength={80}
             aria-label="Nome collezione"
-            className="mt-4 min-h-[44px] w-full rounded-xl border border-separator bg-card px-3 text-body text-label outline-none focus:border-tint"
+            placeholder="Nome"
+            className="field mt-5"
           />
           {duplicate && <p className="mt-2 text-footnote text-red">Esiste già una collezione con questo nome.</p>}
-          <p className="mt-4 text-footnote text-label-2">Icona</p>
+          <p className="eyebrow mt-5">Icona</p>
           <div className="mt-2 grid grid-cols-6 gap-2">
             <button
               type="button"
-              className={`flex aspect-square items-center justify-center rounded-xl text-caption ${!iconImage && !icon ? 'bg-tint-soft ring-2 ring-tint' : 'bg-fill'}`}
+              className={`flex aspect-square items-center justify-center rounded-[10px] text-caption ${!iconImage && !icon ? 'bg-invert text-invert-fg' : 'bg-fill text-label-2'}`}
               aria-label="Nessuna icona"
               aria-pressed={!iconImage && !icon}
               disabled={loadingIcon || saving}
@@ -186,7 +187,7 @@ export function CollectionDialog({ collection, existingNames, onSave, onCancel }
               <button
                 key={candidate.id}
                 type="button"
-                className={`flex aspect-square items-center justify-center rounded-xl ${!iconImage && icon === candidate.id ? 'bg-tint-soft text-tint ring-2 ring-tint' : 'bg-fill text-label'}`}
+                className={`flex aspect-square items-center justify-center rounded-[10px] ${!iconImage && icon === candidate.id ? 'bg-invert text-invert-fg' : 'bg-fill text-label'}`}
                 aria-label={`Icona ${candidate.label}`}
                 aria-pressed={!iconImage && icon === candidate.id}
                 disabled={loadingIcon || saving}
@@ -201,8 +202,8 @@ export function CollectionDialog({ collection, existingNames, onSave, onCancel }
               </button>
             ))}
           </div>
-          <div className="mt-4 flex items-center gap-3 rounded-xl bg-fill p-3">
-            <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-card text-2xl">
+          <div className="mt-4 flex items-center gap-3 rounded-[12px] bg-bg p-3 shadow-[inset_0_0_0_1px_var(--line)]">
+            <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-[10px] bg-fill text-2xl">
               {iconUrl ? (
                 <img src={iconUrl} alt="" className="h-full w-full object-cover" />
               ) : icon ? (
@@ -212,7 +213,7 @@ export function CollectionDialog({ collection, existingNames, onSave, onCancel }
               )}
             </div>
             <div className="min-w-0 flex-1">
-              <label className="btn-plain cursor-pointer p-0 text-footnote font-semibold">
+              <label className="btn-pill cursor-pointer">
                 {loadingIcon ? 'Elaborazione…' : 'Carica PNG/JPEG'}
                 <input
                   type="file"
@@ -247,7 +248,7 @@ export function CollectionDialog({ collection, existingNames, onSave, onCancel }
               )}
             </div>
           </div>
-          <div className="mt-4 rounded-xl bg-fill p-3">
+          <div className="mt-4 rounded-[12px] bg-bg p-3 shadow-[inset_0_0_0_1px_var(--line)]">
             <p className="text-footnote font-semibold text-label">Cerca icone online</p>
             <p className="mt-0.5 text-caption text-label-3">Ricerca integrata Iconify · set moderni Lucide, Tabler, Phosphor e Material</p>
             <div className="mt-2 flex gap-2">
@@ -257,7 +258,7 @@ export function CollectionDialog({ collection, existingNames, onSave, onCancel }
                 maxLength={100}
                 aria-label="Cerca icone online"
                 placeholder="es. pirate, straw hat, sword"
-                className="min-h-[38px] min-w-0 flex-1 rounded-lg border border-separator bg-card px-3 text-footnote text-label outline-none focus:border-tint"
+                className="field !min-h-[36px] min-w-0 flex-1 !text-[13px]"
                 onKeyDown={(event) => {
                   if (event.key === 'Enter') {
                     event.preventDefault()
@@ -275,7 +276,7 @@ export function CollectionDialog({ collection, existingNames, onSave, onCancel }
                   <button
                     key={candidate.id}
                     type="button"
-                    className="flex aspect-square items-center justify-center rounded-lg bg-card p-2"
+                    className="flex aspect-square items-center justify-center rounded-[10px] bg-fill p-2"
                     title={`${candidate.label}${candidate.license ? ` · ${candidate.license}` : ''}`}
                     aria-label={`Scegli icona ${candidate.label}`}
                     disabled={loadingIcon || saving}
@@ -290,11 +291,11 @@ export function CollectionDialog({ collection, existingNames, onSave, onCancel }
           <p className="mt-2 text-caption text-label-3">Le icone scelte o caricate vengono copiate nel database locale e restano disponibili offline.</p>
           {iconError && <p className="mt-2 text-footnote text-red">{iconError}</p>}
         </div>
-        <div className="grid grid-cols-2 border-t border-separator">
-          <button type="button" className="min-h-[44px] border-r border-separator text-body text-tint active:bg-fill" onClick={onCancel}>
+        <div className="flex justify-end gap-2 px-6 pt-4 pb-6">
+          <button type="button" className="btn-ghost !min-h-[36px] !px-3.5 !text-[13px]" onClick={onCancel}>
             Annulla
           </button>
-          <button type="submit" disabled={!trimmed || duplicate || loadingIcon || saving} className="min-h-[44px] text-body font-semibold text-tint disabled:opacity-35 active:bg-fill">
+          <button type="submit" disabled={!trimmed || duplicate || loadingIcon || saving} className="btn-primary !min-h-[36px] !px-3.5 !text-[13px]">
             {saving ? 'Salvataggio…' : collection ? 'Salva' : 'Crea'}
           </button>
         </div>

@@ -1,32 +1,16 @@
 import type { ReactNode } from 'react'
-import type {
-  Direction,
-  FitMode,
-  Gutter,
-  GutterColor,
-  PageMode,
-  PageTransition,
-  ReaderSettings,
-  SrLevel,
-  SrScale,
-  StageBackground,
-  Theme,
-} from '../../types'
+import type { Direction, FitMode, Gutter, GutterColor, PageMode, PageTransition, ReaderSettings, StageBackground, Theme } from '../../types'
 import { fullscreenSupported, isStandalone } from '../../lib/fullscreen'
 
 interface SettingsPanelProps {
   settings: ReaderSettings
-  coverOffset: boolean
   /** Number of user-inserted blank pages in this volume. */
   blankCount: number
   onClearBlanks: () => void
   onChange: (patch: Partial<ReaderSettings>) => void
-  onCoverOffset: (value: boolean) => void
   onClose: () => void
-  /** Status line of the Anime4K tier. */
-  extra?: ReactNode
-  /** The "Qualità massima" section. */
-  maxQuality?: ReactNode
+  /** The "Risoluzione" section (HD / 4K). */
+  quality?: ReactNode
   /** Measured reading area, window, screen and safe areas (diagnostics under "Adattamento"). */
   viewportInfo?: string
 }
@@ -73,10 +57,10 @@ export function Switch({ checked, onChange, label }: { checked: boolean; onChang
   )
 }
 
-/** One line of a grouped inset list; `stacked` puts the control full-width under the title. */
+/** One line of a grouped list; `stacked` puts the control full-width under the title. */
 export function Row({ title, hint, stacked = false, children }: { title: string; hint?: string; stacked?: boolean; children?: ReactNode }) {
   return (
-    <div className={stacked ? 'row flex-col !items-stretch gap-2.5' : 'row'}>
+    <div className={stacked ? 'row flex-col !items-stretch gap-3' : 'row'}>
       <div className="min-w-0">
         <div className="text-body">{title}</div>
         {hint && <div className="mt-0.5 text-footnote text-label-2">{hint}</div>}
@@ -86,7 +70,7 @@ export function Row({ title, hint, stacked = false, children }: { title: string;
   )
 }
 
-/** Grouped inset section: uppercase header, white card, optional footer note. */
+/** Section: eyebrow header, hairline card, optional footer note. */
 export function Group({ title, footer, children, testId }: { title?: string; footer?: ReactNode; children: ReactNode; testId?: string }) {
   return (
     <section data-testid={testId}>
@@ -97,84 +81,29 @@ export function Group({ title, footer, children, testId }: { title?: string; foo
   )
 }
 
-export function SettingsPanel({
-  settings,
-  coverOffset,
-  blankCount,
-  onClearBlanks,
-  onChange,
-  onCoverOffset,
-  onClose,
-  extra,
-  maxQuality,
-  viewportInfo,
-}: SettingsPanelProps) {
+export function SettingsPanel({ settings, blankCount, onClearBlanks, onChange, onClose, quality, viewportInfo }: SettingsPanelProps) {
   return (
-    <div className="absolute inset-0 z-30 flex justify-end bg-black/10" role="presentation" onClick={onClose}>
+    <div className="absolute inset-0 z-30 flex justify-end bg-black/20" role="presentation" onClick={onClose}>
       <aside
         role="dialog"
         aria-label="Impostazioni di lettura"
-        className="sheet-enter h-full w-full max-w-sm overflow-y-auto bg-grouped pt-safe pb-safe shadow-sheet"
+        className="sheet-enter h-full w-full max-w-sm overflow-y-auto border-l border-separator bg-bg pt-safe pb-safe"
         onClick={(e) => e.stopPropagation()}
         onPointerDown={(e) => e.stopPropagation()}
         data-testid="settings-panel"
       >
-        <div className="material hairline-b sticky top-0 z-10 flex h-[52px] items-center justify-between px-4">
+        <div className="material hairline-b sticky top-0 z-10 flex h-14 items-center justify-between px-5">
           <h2 className="text-headline">Impostazioni</h2>
-          <button type="button" className="btn-plain -mr-2 font-semibold" onClick={onClose} aria-label="Chiudi impostazioni">
+          <button type="button" className="btn-pill" onClick={onClose} aria-label="Chiudi impostazioni">
             Fine
           </button>
         </div>
-        <div className="space-y-7 px-4 pt-5 pb-10">
-          <Group title="Aspetto" footer="Sfondo di lettura: Default segue l’aspetto (grigio chiaro o nero); Nero e Bianco lo fissano.">
-            <div className="row">
-              <Segmented<Theme>
-                className="w-full"
-                label="Aspetto"
-                idPrefix="theme"
-                value={settings.theme}
-                onChange={(theme) => onChange({ theme })}
-                options={[
-                  { value: 'system', label: 'Sistema' },
-                  { value: 'light', label: 'Chiaro' },
-                  { value: 'dark', label: 'Scuro' },
-                ]}
-              />
-            </div>
-            <Row title="Sfondo di lettura">
-              <Segmented<StageBackground>
-                label="Sfondo di lettura"
-                idPrefix="bg"
-                value={settings.stageBackground}
-                onChange={(stageBackground) => onChange({ stageBackground })}
-                options={[
-                  { value: 'default', label: 'Default' },
-                  { value: 'black', label: 'Nero' },
-                  { value: 'white', label: 'Bianco' },
-                ]}
-              />
-            </Row>
-            <Row
-              title="Schermo intero durante la lettura"
-              hint={
-                isStandalone()
-                  ? 'Nell’app installata iOS non consente di nascondere la barra di stato: l’app usa tutto lo schermo sotto di essa, fino al bordo inferiore. In Safari va davvero a schermo intero.'
-                  : fullscreenSupported()
-                    ? 'A schermo intero nasconde la barra di stato (ora, Wi-Fi, batteria) e l’indicatore Home mentre leggi.'
-                    : 'Non disponibile in questo browser.'
-              }
-            >
-              <Switch checked={settings.fullscreenReading} onChange={(v) => onChange({ fullscreenReading: v })} label="Schermo intero durante la lettura" />
-            </Row>
-            <Row title="Indicatore HD" hint="Piccola icona “HD” in alto a destra: accesa quando la super risoluzione o Qualità massima sono applicate alla pagina, barrata quando non lo sono.">
-              <Switch checked={settings.srIndicator} onChange={(v) => onChange({ srIndicator: v })} label="Indicatore HD" />
-            </Row>
-          </Group>
+        <div className="space-y-8 px-5 pt-6 pb-12">
+          {quality}
 
-          <Group title="Direzione di lettura">
-            <div className="row">
+          <Group title="Lettura" footer="Automatica: doppia pagina con lo schermo in orizzontale, singola in verticale. Le tavole doppie (pagine orizzontali) sono sempre mostrate da sole; la copertina sta da sola e le coppie partono da 2-3.">
+            <Row title="Direzione" stacked>
               <Segmented<Direction>
-                className="w-full"
                 label="Direzione di lettura"
                 idPrefix="dir"
                 value={settings.direction}
@@ -184,16 +113,9 @@ export function SettingsPanel({
                   { value: 'ltr', label: 'Sinistra → destra' },
                 ]}
               />
-            </div>
-          </Group>
-
-          <Group
-            title="Pagine"
-            footer="Automatica: doppia pagina con lo schermo in orizzontale, singola in verticale. Le tavole doppie (pagine orizzontali) sono sempre mostrate da sole."
-          >
-            <div className="row">
+            </Row>
+            <Row title="Pagine" stacked>
               <Segmented<PageMode>
-                className="w-full"
                 label="Modalità pagine"
                 value={settings.pageMode}
                 onChange={(pageMode) => onChange({ pageMode })}
@@ -203,7 +125,7 @@ export function SettingsPanel({
                   { value: 'auto', label: 'Automatica' },
                 ]}
               />
-            </div>
+            </Row>
             <Row title="Transizione" stacked>
               <Segmented<PageTransition>
                 label="Transizione tra le pagine"
@@ -217,9 +139,6 @@ export function SettingsPanel({
                 ]}
               />
             </Row>
-            <Row title="Sfasa coppie" hint="Copertina da sola, poi coppie 2-3, 4-5… Vale per questo volume.">
-              <Switch checked={coverOffset} onChange={onCoverOffset} label="Sfasa coppie" />
-            </Row>
             <Row
               title="Pagine bianche inserite"
               hint={
@@ -229,41 +148,10 @@ export function SettingsPanel({
               }
             >
               {blankCount > 0 && (
-                <button type="button" className="btn-plain shrink-0" onClick={onClearBlanks} data-testid="clear-blanks">
+                <button type="button" className="btn-pill shrink-0" onClick={onClearBlanks} data-testid="clear-blanks">
                   Rimuovi
                 </button>
               )}
-            </Row>
-          </Group>
-
-          <Group title="Spazio centrale (doppia pagina)" footer="Il margine tra le due pagine, bianco di default come la piega di un libro." testId="gutter-section">
-            <div className="row">
-              <Segmented<Gutter>
-                className="w-full"
-                label="Spazio centrale"
-                idPrefix="gutter"
-                value={settings.gutter}
-                onChange={(gutter) => onChange({ gutter })}
-                options={[
-                  { value: 'none', label: 'Nessuno' },
-                  { value: 's', label: 'Stretto' },
-                  { value: 'm', label: 'Medio' },
-                  { value: 'l', label: 'Largo' },
-                ]}
-              />
-            </div>
-            <Row title="Colore">
-              <Segmented<GutterColor>
-                label="Colore dello spazio centrale"
-                idPrefix="gc"
-                value={settings.gutterColor}
-                onChange={(gutterColor) => onChange({ gutterColor })}
-                options={[
-                  { value: 'white', label: 'Bianco' },
-                  { value: 'paper', label: 'Carta' },
-                  { value: 'dark', label: 'Sfondo' },
-                ]}
-              />
             </Row>
           </Group>
 
@@ -281,9 +169,8 @@ export function SettingsPanel({
               </>
             }
           >
-            <div className="row">
+            <Row title="Adattamento" stacked>
               <Segmented<FitMode>
-                className="w-full"
                 label="Adattamento"
                 idPrefix="fit"
                 value={settings.fit}
@@ -295,55 +182,79 @@ export function SettingsPanel({
                   { value: 'original', label: '1:1' },
                 ]}
               />
-            </div>
+            </Row>
+            <Row title="Spazio centrale" hint="Il margine tra le due pagine in doppia pagina, come la piega di un libro." stacked>
+              <Segmented<Gutter>
+                label="Spazio centrale"
+                idPrefix="gutter"
+                value={settings.gutter}
+                onChange={(gutter) => onChange({ gutter })}
+                options={[
+                  { value: 'none', label: 'Nessuno' },
+                  { value: 's', label: 'Stretto' },
+                  { value: 'm', label: 'Medio' },
+                  { value: 'l', label: 'Largo' },
+                ]}
+              />
+            </Row>
+            <Row title="Colore dello spazio">
+              <Segmented<GutterColor>
+                label="Colore dello spazio centrale"
+                idPrefix="gc"
+                value={settings.gutterColor}
+                onChange={(gutterColor) => onChange({ gutterColor })}
+                options={[
+                  { value: 'white', label: 'Bianco' },
+                  { value: 'paper', label: 'Carta' },
+                  { value: 'dark', label: 'Sfondo' },
+                ]}
+              />
+            </Row>
           </Group>
 
-          <Group title="Super risoluzione" footer={extra} testId="sr-section">
-            <Row
-              title="Super risoluzione"
-              hint="Anime4K sulla GPU, solo per le pagine sullo schermo: ingrandite ×2 o ×4 rispetto all’originale e poi adattate allo schermo, in meno di due secondi. Linee e lettering più nitidi a ogni zoom."
-            >
-              <Switch checked={settings.superResolution} onChange={(v) => onChange({ superResolution: v })} label="Super risoluzione" />
-            </Row>
-            <Row title="Livello">
-              <Segmented<SrLevel>
-                label="Livello"
-                idPrefix="sr"
-                value={settings.srLevel}
-                onChange={(srLevel) => onChange({ srLevel })}
+          <Group title="Aspetto" footer="Sfondo di lettura: Default segue l’aspetto (grigio caldo o nero); Nero e Bianco lo fissano.">
+            <Row title="Tema" stacked>
+              <Segmented<Theme>
+                label="Aspetto"
+                idPrefix="theme"
+                value={settings.theme}
+                onChange={(theme) => onChange({ theme })}
                 options={[
-                  { value: 'auto', label: 'Auto' },
-                  { value: 'M', label: 'M' },
-                  { value: 'VL', label: 'VL' },
-                  { value: 'UL', label: 'UL' },
+                  { value: 'system', label: 'Sistema' },
+                  { value: 'light', label: 'Chiaro' },
+                  { value: 'dark', label: 'Scuro' },
+                ]}
+              />
+            </Row>
+            <Row title="Sfondo di lettura">
+              <Segmented<StageBackground>
+                label="Sfondo di lettura"
+                idPrefix="bg"
+                value={settings.stageBackground}
+                onChange={(stageBackground) => onChange({ stageBackground })}
+                options={[
+                  { value: 'default', label: 'Default' },
+                  { value: 'black', label: 'Nero' },
+                  { value: 'white', label: 'Bianco' },
                 ]}
               />
             </Row>
             <Row
-              title="Fattore"
-              hint="Ingrandimento rispetto alla pagina originale, indipendente dallo schermo. Auto: ×4 quando GPU e memoria lo consentono (pagine fino a ~1 MP), altrimenti ×2."
+              title="Schermo intero"
+              hint={
+                isStandalone()
+                  ? 'Nell’app installata iOS non consente di nascondere la barra di stato: l’app usa tutto lo schermo sotto di essa, fino al bordo inferiore. In Safari va davvero a schermo intero.'
+                  : fullscreenSupported()
+                    ? 'A schermo intero nasconde la barra di stato (ora, Wi-Fi, batteria) e l’indicatore Home mentre leggi.'
+                    : 'Non disponibile in questo browser.'
+              }
             >
-              <Segmented<SrScale>
-                label="Fattore di ingrandimento"
-                idPrefix="scale"
-                value={settings.srScale}
-                onChange={(srScale) => onChange({ srScale })}
-                options={[
-                  { value: 'auto', label: 'Auto' },
-                  { value: 'x2', label: '×2' },
-                  { value: 'x4', label: '×4' },
-                ]}
-              />
+              <Switch checked={settings.fullscreenReading} onChange={(v) => onChange({ fullscreenReading: v })} label="Schermo intero durante la lettura" />
             </Row>
-            <Row title="Linee nitide" hint="Passaggio Restore di Anime4K prima dell’ingrandimento: tratti e testi più marcati (raddoppia il costo).">
-              <Switch checked={settings.srRestore} onChange={(v) => onChange({ srRestore: v })} label="Linee nitide" />
-            </Row>
-            <Row title="Pulizia scansione" hint="Bianco della carta e neri più netti, leggera riduzione del rumore JPEG.">
-              <Switch checked={settings.srClean} onChange={(v) => onChange({ srClean: v })} label="Pulizia scansione" />
+            <Row title="Indicatore HD / 4K" hint="Piccola etichetta in alto a destra: accesa quando la risoluzione scelta è applicata alla pagina, barrata quando non lo è.">
+              <Switch checked={settings.srIndicator} onChange={(v) => onChange({ srIndicator: v })} label="Indicatore HD" />
             </Row>
           </Group>
-
-          {maxQuality}
         </div>
       </aside>
     </div>

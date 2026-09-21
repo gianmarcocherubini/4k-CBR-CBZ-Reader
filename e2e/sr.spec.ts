@@ -27,6 +27,55 @@ async function importAndOpen(page: Page, name: string, title: string) {
 const badge = (page: Page) => page.getByTestId('sr-badge')
 
 /**
+ * HD is fully automatic in the UI; the Anime4K parameters survive as stored settings so tests can
+ * pin a level or a factor. Settings load at start-up: reload (the reader route is in the hash).
+ */
+async function presetSettings(page: Page, patch: Record<string, unknown>) {
+  await page.evaluate((p) => {
+    const key = 'reader.settings.v1'
+    const current = JSON.parse(localStorage.getItem(key) ?? '{}') as Record<string, unknown>
+    localStorage.setItem(key, JSON.stringify({ ...current, ...p }))
+  }, patch)
+  await page.reload()
+  await expect(page.getByTestId('reader')).toHaveAttribute('data-status', 'ready', { timeout: 20_000 })
+}
+
+/**
+ * Luma of an <img> or <canvas> resampled to `w` x `h` (the source page's own resolution), as a
+ * base64 byte string small enough to hand back to Node and compare across navigations.
+ */
+async function pageLuma(page: Page, selector: string, w: number, h: number): Promise<Uint8Array> {
+  const b64 = await page.evaluate(
+    async ({ selector, w, h }) => {
+      const el = document.querySelector(selector) as HTMLImageElement | HTMLCanvasElement
+      if (el instanceof HTMLImageElement) await el.decode()
+      const c = document.createElement('canvas')
+      c.width = w
+      c.height = h
+      const ctx = c.getContext('2d')!
+      ctx.imageSmoothingEnabled = true
+      ctx.imageSmoothingQuality = 'high'
+      ctx.drawImage(el, 0, 0, w, h)
+      const d = ctx.getImageData(0, 0, w, h).data
+      const out = new Uint8Array(w * h)
+      for (let i = 0, j = 0; i < d.length; i += 4, j++) out[j] = Math.round(0.299 * d[i]! + 0.587 * d[i + 1]! + 0.114 * d[i + 2]!)
+      let s = ''
+      for (let i = 0; i < out.length; i += 0x8000) s += String.fromCharCode(...out.subarray(i, i + 0x8000))
+      return btoa(s)
+    },
+    { selector, w, h },
+  )
+  return Uint8Array.from(Buffer.from(b64, 'base64'))
+}
+
+function psnrOf(a: Uint8Array, b: Uint8Array): number {
+  let se = 0
+  for (let i = 0; i < a.length; i++) se += (a[i]! - b[i]!) ** 2
+  const mse = se / a.length
+  return mse === 0 ? 99 : 10 * Math.log10((255 * 255) / mse)
+}
+
+/**
  * Width the engine renders on "Auto": a fixed factor of the source, independent of the display.
  * x4 when the result stays within the 16 MP canvas cap (800x1200 -> 3200), else x2 (1000x1500 -> 2000).
  */
@@ -78,55 +127,33 @@ test('Anime4K super resolution: enhanced canvas, badge, level probe, faithful ou
   await page.getByTestId('settings').click()
   await expect(page.getByTestId('sr-status')).toContainText('WebGPU')
   await expect(page.getByTestId('sr-status')).toContainText('livello auto')
+  // The HD tier has no knobs: level, factor, restore and clean-up are gone from the sheet.
+  await expect(page.getByTestId('res-hd')).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByTestId('scale-x2')).toHaveCount(0)
+  await expect(page.getByTestId('sr-M')).toHaveCount(0)
+  await page.getByRole('button', { name: 'Chiudi impostazioni' }).click()
 
   // Faithfulness: the exact 2x output downsampled back must match the source closely (no strip
-  // misalignment, no colour drift). Grab the source by switching SR off, then compare.
-  await page.getByTestId('scale-x2').click()
-  await page.getByRole('switch', { name: 'Super risoluzione' }).click()
+  // misalignment, no colour drift). The source comes from the same book with SR disabled.
+  const readerUrl = page.url()
+  await page.goto(readerUrl.replace(/\?[^#]*/, '').replace('#', '?sr=off#'))
+  await expect(page.getByTestId('reader')).toHaveAttribute('data-status', 'ready', { timeout: 20_000 })
   const img = page.locator('[data-testid=page][data-page="1"] img')
   await expect(img).toBeVisible()
-  await page.evaluate(async () => {
-    const el = document.querySelector('[data-testid=page][data-page="1"] img') as HTMLImageElement
-    await el.decode()
-    const c = document.createElement('canvas')
-    c.width = el.naturalWidth
-    c.height = el.naturalHeight
-    c.getContext('2d')!.drawImage(el, 0, 0)
-    ;(window as unknown as { __src: ImageData }).__src = c.getContext('2d')!.getImageData(0, 0, c.width, c.height)
-  })
-  await page.getByRole('switch', { name: 'Super risoluzione' }).click()
-  await expect(enhanced).toBeVisible({ timeout: 45_000 })
-  await expect(enhanced).toHaveAttribute('data-sr-width', '1600', { timeout: 45_000 })
-  const psnr = await page.evaluate(() => {
-    const src = (window as unknown as { __src: ImageData }).__src
-    const canvas = document.querySelector('[data-testid=page][data-page="1"] canvas') as HTMLCanvasElement
-    const c = document.createElement('canvas')
-    c.width = src.width
-    c.height = src.height
-    const ctx = c.getContext('2d')!
-    ctx.imageSmoothingEnabled = true
-    ctx.imageSmoothingQuality = 'high'
-    ctx.drawImage(canvas, 0, 0, src.width, src.height)
-    const out = ctx.getImageData(0, 0, src.width, src.height)
-    let se = 0
-    const n = src.width * src.height
-    for (let i = 0; i < n * 4; i += 4) {
-      // luma
-      const a = 0.299 * src.data[i]! + 0.587 * src.data[i + 1]! + 0.114 * src.data[i + 2]!
-      const b = 0.299 * out.data[i]! + 0.587 * out.data[i + 1]! + 0.114 * out.data[i + 2]!
-      se += (a - b) * (a - b)
-    }
-    const mse = se / n
-    return mse === 0 ? 99 : 10 * Math.log10((255 * 255) / mse)
-  })
+  const source = await pageLuma(page, '[data-testid=page][data-page="1"] img', 800, 1200)
+  await page.goto(readerUrl)
+  await presetSettings(page, { srScale: 'x2' })
+  await expect(enhanced).toBeVisible({ timeout: 90_000 })
+  await expect(enhanced).toHaveAttribute('data-sr-width', '1600', { timeout: 90_000 })
+  await expect(page.locator('[data-testid=page][data-page="1"]')).toHaveAttribute('data-sr', /^(M|VL|UL)$/, { timeout: 90_000 })
+  await page.waitForTimeout(500) // let the high-quality fit replace the quick preview
+  const psnr = psnrOf(source, await pageLuma(page, '[data-testid=page][data-page="1"] canvas', 800, 1200))
   console.log(`downsampled enhanced vs source: ${psnr.toFixed(1)} dB (level ${level})`)
   expect(psnr).toBeGreaterThan(28)
-  await page.getByTestId('scale-auto').click()
 
-  // Manual level override re-enhances at that level.
-  await page.getByTestId('sr-M').click()
-  await expect(page.locator('[data-testid=page][data-page="1"]')).toHaveAttribute('data-sr', 'M', { timeout: 45_000 })
-  await page.getByRole('button', { name: 'Chiudi impostazioni' }).click()
+  // A pinned level is honoured.
+  await presetSettings(page, { srScale: 'auto', srLevel: 'M' })
+  await expect(page.locator('[data-testid=page][data-page="1"]')).toHaveAttribute('data-sr', 'M', { timeout: 90_000 })
 
   // Turning the page enhances the new spread on demand (no read-ahead).
   await page.keyboard.press('ArrowLeft')
@@ -141,10 +168,11 @@ test('Anime4K super resolution: enhanced canvas, badge, level probe, faithful ou
   await expect(mini).toBeVisible()
   await expect(mini).toHaveAttribute('data-sr-state', 'applied', { timeout: 45_000 })
   await expect(mini).toHaveText('HD')
-  await expect(mini).toHaveAttribute('aria-label', /×4 M/)
+  await expect(mini).toHaveAttribute('aria-label', /HD ×4 M/)
   // Hidden while the toolbars (with the full badge) are visible, and when switched off.
   await page.mouse.move(640, 450)
   await expect(mini).toHaveCount(0)
+  await page.mouse.move(600, 420)
   await page.getByTestId('settings').click()
   await page.getByRole('switch', { name: 'Indicatore HD' }).click()
   await page.getByRole('button', { name: 'Chiudi impostazioni' }).click()
@@ -163,23 +191,25 @@ test('SR first, fit after: a page already at screen size is enhanced x2, and zoo
   await expect(enhanced).toBeVisible({ timeout: 60_000 })
   await expect(enhanced).toHaveAttribute('data-sr-width', String(autoWidth(1000, 1500)))
   await page.mouse.move(590, 410)
-  await expect(badge(page)).toHaveAttribute('aria-label', /SR ×2 (M|VL|UL)$/, { timeout: 60_000 })
+  await expect(badge(page)).toHaveAttribute('aria-label', /HD ×2 (M|VL|UL)$/, { timeout: 60_000 })
   const before = await enhanced.evaluate((c: HTMLCanvasElement) => c.width)
   // Zooming in does not recompute anything: same result, refitted at the larger displayed size.
   await page.mouse.dblclick(590, 410)
   await expect.poll(() => enhanced.evaluate((c: HTMLCanvasElement) => c.width), { timeout: 5_000 }).toBeGreaterThan(before)
   await expect(enhanced).toHaveAttribute('data-sr-width', String(autoWidth(1000, 1500)))
-  await expect(badge(page)).toHaveAttribute('aria-label', /SR ×2 (M|VL|UL)$/)
+  await expect(badge(page)).toHaveAttribute('aria-label', /HD ×2 (M|VL|UL)$/)
 })
 
 test('WebGL2 fallback runs the same shaders and matches the WebGPU output', async ({ page }) => {
+  test.setTimeout(4 * 60_000)
   await page.goto('/?sr=webgl2')
+  // Deterministic level and factor for the comparison (pinned through the stored settings).
+  await page.evaluate(() => localStorage.setItem('reader.settings.v1', JSON.stringify({ srLevel: 'M', srScale: 'x2' })))
+  await page.reload()
   await importAndOpen(page, 'manga-vol-01.cbz', 'manga-vol-01')
   await page.mouse.move(590, 410)
   await page.getByTestId('settings').click()
   await expect(page.getByTestId('sr-status')).toContainText('WebGL2', { timeout: 30_000 })
-  await page.getByTestId('sr-M').click() // deterministic level and factor for the comparison
-  await page.getByTestId('scale-x2').click()
   await page.getByRole('button', { name: 'Chiudi impostazioni' }).click()
   const enhanced = page.locator('[data-testid=page][data-page="1"] canvas[data-testid=enhanced]')
   await expect(enhanced).toBeVisible({ timeout: 45_000 })
@@ -196,12 +226,9 @@ test('WebGL2 fallback runs the same shaders and matches the WebGPU output', asyn
   })
 
   // The heaviest level (25 fragment programs) compiles and runs on WebGL2 too.
-  await page.mouse.move(600, 420)
-  await page.getByTestId('settings').click()
-  await page.getByTestId('sr-UL').click()
-  await expect(page.locator('[data-testid=page][data-page="1"]')).toHaveAttribute('data-sr', 'UL', { timeout: 60_000 })
-  await page.getByTestId('sr-M').click()
-  await page.getByRole('button', { name: 'Chiudi impostazioni' }).click()
+  await presetSettings(page, { srLevel: 'UL' })
+  await expect(page.locator('[data-testid=page][data-page="1"]')).toHaveAttribute('data-sr', 'UL', { timeout: 90_000 })
+  await presetSettings(page, { srLevel: 'M' })
 
   const hasWebGPU = await page.evaluate(async () => !!(navigator as Navigator & { gpu?: GPU }).gpu && !!(await (navigator as Navigator & { gpu?: GPU }).gpu!.requestAdapter()))
   test.skip(!hasWebGPU, 'WebGPU needed for the cross-backend comparison')
@@ -329,20 +356,19 @@ test('Qualità massima: Real-ESRGAN x4 on the visible page only, time budget fal
   await importAndOpen(page, 'tiny-book.cbz', 'tiny-book')
   await page.mouse.move(590, 410)
   await page.getByTestId('settings').click()
-  await expect(page.getByTestId('mq-status')).toContainText('Disattivata')
-  // No batch job, no queue: the switch, the network and the time budget.
-  await expect(page.getByTestId('mq-start')).toHaveCount(0)
-  await expect(page.getByTestId('mq-model-v3')).toHaveAttribute('aria-pressed', 'true')
-  await expect(page.getByTestId('mq-model-6b')).toBeVisible()
-  await page.getByRole('switch', { name: 'Qualità massima' }).click()
-  await page.getByTestId('mq-budget-0').click() // "Sempre": a software GPU must not be excluded by the budget
-  // The Anime4K controls stay enabled: it is the fallback, not a replaced tier.
-  await expect(page.getByTestId('sr-section').locator('..')).not.toHaveAttribute('aria-disabled', 'true')
+  // One quality choice: HD (automatic) or 4K with a rendering speed ordered by quality.
+  await expect(page.getByTestId('res-hd')).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByTestId('rend-fast')).toHaveCount(0)
+  await page.getByTestId('res-4k').click()
+  await expect(page.getByTestId('rend-fast')).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByTestId('rend-medium')).toBeVisible()
+  await expect(page.getByTestId('rend-slow')).toContainText('massima')
+  await expect(page.getByRole('switch', { name: 'Sfocatura anti-spoiler' })).toHaveAttribute('aria-checked', 'true')
   const status = page.getByTestId('mq-status')
   await expect(status).not.toContainText('Inizializzazione', { timeout: 5 * 60_000 })
   const text = (await status.textContent()) ?? ''
-  console.log('Qualità massima:', text)
-  expect(text).toMatch(/Real-ESRGAN anime v3 ×4 · WebGPU F(16|32) · kernel (4×[12]|Winograd)/)
+  console.log('4K:', text)
+  expect(text).toMatch(/^Fast · Real-ESRGAN anime v3 ×4 · WebGPU F(16|32) · kernel (4×[12]|Winograd)/)
   expect(text).toMatch(/stimati [\d.]+ s per la pagina/)
   await page.getByRole('button', { name: 'Chiudi impostazioni' }).click()
 
@@ -356,7 +382,8 @@ test('Qualità massima: Real-ESRGAN x4 on the visible page only, time budget fal
   await expect(p1.locator('canvas[data-testid=enhanced]')).toHaveAttribute('data-sr-width', '1200')
   await page.mouse.move(600, 420)
   await expect(badge(page)).toHaveAttribute('data-sr-state', 'applied')
-  await expect(badge(page)).toHaveAttribute('aria-label', /SR ×4 GAN$/)
+  await expect(badge(page)).toHaveAttribute('aria-label', /4K ×4 v3$/)
+  await expect(badge(page)).toHaveText('4K')
 
   // Sanity: not blank, not garbage (has both dark and light pixels).
   const stats = await page.evaluate(() => {
@@ -393,22 +420,27 @@ test('Qualità massima: Real-ESRGAN x4 on the visible page only, time budget fal
   expect(choices).toHaveLength(1)
   expect([1, 2, 'w']).toContain(choices[0]!.variant)
 
-  // With a 3 s budget a GPU that predicts more (the software renderer of CI does) hands the spread to Anime4K.
+  // Sanity cap: a spread predicted to take far too long stays in HD (the cap is lowered to 1 s
+  // through a test flag; the software renderer of CI predicts more than that).
   const estimated = Number(/stimati ([\d.]+) s/.exec(text)?.[1] ?? '0')
-  await page.mouse.move(600, 420)
-  await page.getByTestId('settings').click()
-  await page.getByTestId('mq-budget-3').click()
-  if (estimated > 3) {
-    await expect(page.getByTestId('mq-status')).toContainText('oltre l’attesa massima di 3 s')
+  const readerUrl = page.url()
+  await page.goto(readerUrl.replace('#', '?mqcap=1000#'))
+  await expect(page.getByTestId('reader')).toHaveAttribute('data-status', 'ready', { timeout: 20_000 })
+  await page.keyboard.press('Home') // the bookmark may still hold the previous spread
+  await expect(page.getByTestId('page-label')).toHaveText('1')
+  if (estimated > 1) {
     await expect(p1).toHaveAttribute('data-sr', /^(M|VL|UL)$/, { timeout: 90_000 })
-    await expect(badge(page)).toHaveAttribute('aria-label', /SR ×(2|4) (M|VL|UL)$/)
+    await page.mouse.move(600, 420)
+    await expect(badge(page)).toHaveAttribute('aria-label', /HD ×(2|4) (M|VL|UL)$/)
+    await page.getByTestId('settings').click()
+    await expect(page.getByTestId('mq-status')).toContainText('restano in HD', { timeout: 5 * 60_000 })
   } else {
-    await expect(p1).toHaveAttribute('data-sr', 'GAN')
+    await expect(p1).toHaveAttribute('data-sr', 'GAN', { timeout: 8 * 60_000 })
   }
 })
 
-test('factor x4 / x2 / auto, "Linee nitide", "Pulizia scansione"', async ({ page }) => {
-  test.setTimeout(4 * 60_000)
+test('Anime4K engine options (factor, Restore, clean-up) still work when pinned through the stored settings', async ({ page }) => {
+  test.setTimeout(6 * 60_000)
   await page.goto('/')
   const hasWebGPU = await page.evaluate(async () => !!(navigator as Navigator & { gpu?: GPU }).gpu && !!(await (navigator as Navigator & { gpu?: GPU }).gpu!.requestAdapter()))
   test.skip(!hasWebGPU, 'needs WebGPU')
@@ -418,27 +450,22 @@ test('factor x4 / x2 / auto, "Linee nitide", "Pulizia scansione"', async ({ page
   await expect(enhanced).toBeVisible({ timeout: 90_000 })
   // Auto picks x4 for this page (fits the 16 MP cap and the memory budget).
   await expect(enhanced).toHaveAttribute('data-sr-width', '3200', { timeout: 90_000 })
-
-  // x4 explicit: two network passes, output 4x the source (3200 px for an 800 px page).
   await page.mouse.move(600, 420)
+  await expect(badge(page)).toHaveAttribute('aria-label', /HD ×4 (M|VL|UL)$/, { timeout: 90_000 })
   await page.getByTestId('settings').click()
-  await page.getByTestId('scale-x4').click()
-  await expect(enhanced).toHaveAttribute('data-sr-width', '3200', { timeout: 90_000 })
-  await expect(badge(page)).toHaveAttribute('aria-label', /SR ×4 (M|VL|UL)$/)
   await expect(page.getByTestId('sr-status')).toContainText('×4 → 3200×4800 px')
-  // x2 fixed: exactly twice the source.
-  await page.getByTestId('scale-x2').click()
-  await expect(enhanced).toHaveAttribute('data-sr-width', '1600', { timeout: 60_000 })
-  await expect(badge(page)).toHaveAttribute('aria-label', /SR ×2 (M|VL|UL)$/)
-  await page.getByTestId('scale-auto').click()
-  await expect(enhanced).toHaveAttribute('data-sr-width', '3200', { timeout: 60_000 })
+  await page.getByRole('button', { name: 'Chiudi impostazioni' }).click()
 
-  // Restore pass ("Linee nitide"): re-enhanced, badge marks it with "+", output still faithful.
-  await page.getByRole('switch', { name: 'Linee nitide' }).click()
-  await expect(badge(page)).toHaveAttribute('aria-label', /SR ×4 (M|VL|UL)\+$/, { timeout: 90_000 })
-  await expect(enhanced).toBeVisible()
-  // Scan clean-up: paper goes to pure white on the (already white) page background.
-  await page.getByRole('switch', { name: 'Pulizia scansione' }).click()
+  // x2 fixed: exactly twice the source.
+  await presetSettings(page, { srScale: 'x2' })
+  await expect(enhanced).toHaveAttribute('data-sr-width', '1600', { timeout: 90_000 })
+  await page.mouse.move(600, 420)
+  await expect(badge(page)).toHaveAttribute('aria-label', /HD ×2 (M|VL|UL)$/, { timeout: 90_000 })
+
+  // Restore pass: the badge marks it with "+"; clean-up: paper goes to pure white.
+  await presetSettings(page, { srScale: 'auto', srRestore: true, srClean: true })
+  await page.mouse.move(600, 420)
+  await expect(badge(page)).toHaveAttribute('aria-label', /HD ×4 (M|VL|UL)\+$/, { timeout: 120_000 })
   await expect
     .poll(
       async () =>
@@ -459,9 +486,6 @@ test('factor x4 / x2 / auto, "Linee nitide", "Pulizia scansione"', async ({ page
       { timeout: 60_000 },
     )
     .toBeGreaterThanOrEqual(250)
-  await page.getByRole('switch', { name: 'Linee nitide' }).click()
-  await page.getByRole('switch', { name: 'Pulizia scansione' }).click()
-  await expect(badge(page)).toHaveAttribute('aria-label', /SR ×4 (M|VL|UL)$/, { timeout: 90_000 })
 })
 
 test('?sr=off disables super resolution entirely', async ({ page }) => {

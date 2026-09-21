@@ -30,16 +30,16 @@ export function ImportOverlay({ items, running, onCancel, onClose }: ImportOverl
         role="dialog"
         aria-modal="true"
         aria-label="Importazione"
-        className="material-strong w-full max-w-md overflow-hidden rounded-2xl shadow-sheet"
+        className="w-full max-w-md overflow-hidden rounded-[16px] bg-card shadow-sheet"
         data-testid="import-overlay"
       >
-        <div className="px-5 pt-5 pb-3 text-center">
-          <h2 className="text-headline">{running ? 'Importazione in corso' : 'Importazione completata'}</h2>
-          <p className="mt-0.5 text-footnote text-label-2">
+        <div className="px-6 pt-6 pb-4">
+          <h2 className="text-title2">{running ? 'Importazione in corso' : 'Importazione completata'}</h2>
+          <p className="mt-1 text-footnote text-label-2">
             {done} di {items.length} importati{failed > 0 ? `, ${failed} con errori` : ''}
           </p>
         </div>
-        <ul className="mx-4 mb-4 max-h-[55vh] overflow-y-auto rounded-xl bg-card">
+        <ul className="mx-6 max-h-[55vh] overflow-y-auto rounded-[12px] bg-bg shadow-[inset_0_0_0_1px_var(--line)]">
           {items.map((item, i) => {
             const pct = item.total > 0 ? Math.round((item.bytes / item.total) * 100) : 0
             const active = item.stage === 'copia' || item.stage === 'verifica' || item.stage === 'copertina'
@@ -53,9 +53,9 @@ export function ImportOverlay({ items, running, onCancel, onClose }: ImportOverl
                     {item.stage === 'copia' ? `${formatBytes(item.bytes)} / ${formatBytes(item.total)}` : formatBytes(item.total)}
                   </span>
                 </div>
-                <div className="mt-2 h-[4px] overflow-hidden rounded-full bg-fill">
+                <div className="mt-2 h-[3px] overflow-hidden rounded-full bg-fill-2">
                   <div
-                    className={`h-full rounded-full transition-[width] ${item.stage === 'errore' ? 'bg-red' : item.stage === 'completato' ? 'bg-green' : 'bg-tint'}`}
+                    className={`h-full rounded-full transition-[width] ${item.stage === 'errore' ? 'bg-red' : item.stage === 'completato' ? 'bg-green' : 'bg-invert'}`}
                     style={{ width: `${item.stage === 'completato' ? 100 : item.stage === 'copia' ? pct : active ? 8 : 0}%` }}
                   />
                 </div>
@@ -67,13 +67,13 @@ export function ImportOverlay({ items, running, onCancel, onClose }: ImportOverl
             )
           })}
         </ul>
-        <div className="border-t border-separator">
+        <div className="flex justify-end px-6 py-5">
           {running ? (
-            <button type="button" className="min-h-[44px] w-full text-body text-tint active:bg-fill" onClick={onCancel}>
+            <button type="button" className="btn-ghost !min-h-[36px] !px-3.5 !text-[13px]" onClick={onCancel}>
               Annulla
             </button>
           ) : (
-            <button type="button" className="min-h-[44px] w-full text-body font-semibold text-tint active:bg-fill" onClick={onClose} data-testid="import-close">
+            <button type="button" className="btn-primary !min-h-[36px] !px-3.5 !text-[13px]" onClick={onClose} data-testid="import-close">
               Chiudi
             </button>
           )}

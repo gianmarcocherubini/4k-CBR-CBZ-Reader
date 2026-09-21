@@ -123,12 +123,12 @@ function SpreadCanvas({ canvasRef, layout, view, pages, enhanced, gutterColor, o
                 draggable={false}
               />
             ) : state?.status === 'error' ? (
-              <div className="flex h-full w-full flex-col items-center justify-center gap-3 bg-card p-4 text-center">
+              <div className="flex h-full w-full flex-col items-center justify-center gap-3 bg-card p-4 text-center shadow-[inset_0_0_0_1px_var(--line)]">
                 <p className="text-footnote text-label-2">Pagina {box.index + 1}: {state.message}</p>
                 {onRetry && (
                   <button
                     type="button"
-                    className="btn-ghost pointer-events-auto"
+                    className="btn-ghost pointer-events-auto !min-h-[36px] !text-[13px]"
                     onPointerDown={(e) => e.stopPropagation()}
                     onClick={() => onRetry(box.index)}
                   >

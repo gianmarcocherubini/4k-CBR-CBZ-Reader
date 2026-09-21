@@ -257,7 +257,8 @@ test.describe('library', () => {
     await createCollection('One Piece')
     await createCollection('Berserk')
 
-    const onePieceNav = page.locator('aside').getByRole('button', { name: /One Piece/ }).first()
+    const tabs = page.getByTestId('collection-tabs')
+    const onePieceNav = tabs.getByRole('button', { name: /One Piece/ }).first()
     await expect(onePieceNav.locator('img, svg')).toHaveCount(0)
     await expect(page.getByTestId('collection-all').locator('svg')).toBeVisible()
     await page.getByRole('button', { name: 'Azioni collezione One Piece' }).click()
@@ -269,7 +270,7 @@ test.describe('library', () => {
     await collectionDialog.getByRole('button', { name: 'Scegli icona skull' }).click()
     await expect(collectionDialog.locator('img')).toBeVisible()
     await collectionDialog.getByRole('button', { name: 'Salva' }).click()
-    await expect(page.locator('aside').getByRole('button', { name: /One Piece/ }).first().locator('img')).toBeVisible()
+    await expect(tabs.getByRole('button', { name: /One Piece/ }).first().locator('img')).toBeVisible()
 
     await page.getByTestId('collection-default').click()
     await page.getByRole('button', { name: 'Modifica manga-vol-01' }).click()
@@ -283,19 +284,19 @@ test.describe('library', () => {
     await page.getByTestId('book-collection-select').selectOption({ label: 'Berserk' })
     await page.getByRole('button', { name: 'Salva' }).click()
 
-    const onePiece = page.locator('aside').getByRole('button', { name: /One Piece/ }).first()
-    const berserk = page.locator('aside').getByRole('button', { name: /Berserk/ }).first()
+    const onePiece = tabs.getByRole('button', { name: /One Piece/ }).first()
+    const berserk = tabs.getByRole('button', { name: /Berserk/ }).first()
     await onePiece.click()
     await expect(page.getByRole('button', { name: 'Apri One Piece Vol. 46' })).toBeVisible()
     await page.getByRole('button', { name: 'Apri One Piece Vol. 46' }).click()
     await expect(page.getByTestId('reader')).toHaveAttribute('data-status', 'ready')
     await page.getByTestId('back').click()
 
-    // Returning from the most recently read book selects and sorts its collection first.
+    // Returning from the most recently read book selects its collection and sorts it first (tabs run left to right).
     await expect(page.getByRole('heading', { name: 'One Piece' })).toBeVisible()
     const oneBox = (await onePiece.boundingBox())!
     const berserkBox = (await berserk.boundingBox())!
-    expect(oneBox.y).toBeLessThan(berserkBox.y)
+    expect(oneBox.x).toBeLessThan(berserkBox.x)
     await page.reload()
     await expect(page.getByRole('heading', { name: 'One Piece' })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Apri One Piece Vol. 46' })).toBeVisible()
@@ -601,15 +602,10 @@ test.describe('reader', () => {
     await page.keyboard.press('ArrowRight')
     await expect(lbl).toHaveText('1')
 
-    // Offset (from Settings → "Sfasa coppie"): cover paired with page 2, and back.
+    // The pairing is fixed (cover alone, then 2-3, 4-5…): no offset switch in the settings.
     await page.mouse.move(CENTER.x, CENTER.y) // reveal toolbars
     await page.getByTestId('settings').click()
-    await page.getByRole('switch', { name: 'Sfasa coppie' }).click()
-    await page.getByRole('button', { name: 'Chiudi impostazioni' }).click()
-    await expect(lbl).toHaveText('1-2')
-    await page.mouse.move(CENTER.x, CENTER.y)
-    await page.getByTestId('settings').click()
-    await page.getByRole('switch', { name: 'Sfasa coppie' }).click()
+    await expect(page.getByRole('switch', { name: 'Sfasa coppie' })).toHaveCount(0)
     await page.getByRole('button', { name: 'Chiudi impostazioni' }).click()
     await expect(lbl).toHaveText('1')
 
@@ -731,14 +727,24 @@ test.describe('reader', () => {
     await page.keyboard.press('ArrowLeft')
     await expect(label(page)).toHaveText('12')
     await page.getByTestId('back').click()
-    await expect(page.getByTestId('book-progress')).toHaveText('Pagina 12 di 19')
+    await expect(page.getByTestId('book-progress')).toHaveText(/^Pagina 12 di 19/)
+    // A started, unfinished volume also sits on the "Continua a leggere" shelf.
+    const shelf = page.getByTestId('continue-shelf')
+    await expect(shelf).toBeVisible()
+    await expect(shelf.getByRole('button', { name: 'Continua manga-vol-01' })).toContainText('Pagina 12 di 19')
+    // The header search narrows the grid by title.
+    await page.getByTestId('library-search').fill('nessuno')
+    await expect(page.getByTestId('book-card')).toHaveCount(0)
+    await expect(page.getByText('Nessun volume corrisponde alla ricerca.')).toBeVisible()
+    await page.getByTestId('library-search').fill('manga')
+    await expect(page.getByTestId('book-card')).toHaveCount(1)
   })
 
   test('CBR: lists and extracts pages through the unrar worker, wide page alone', async ({ page }) => {
     await page.goto('/')
     const statuses = await importBooks(page, ['stored-book.cbr'])
     expect(statuses).toEqual(['Importato'])
-    await expect(page.locator('[data-testid=book-card]')).toContainText('cbr')
+    await expect(page.locator('[data-testid=book-card]')).toContainText(/cbr/i)
     await expect(page.locator('[data-testid=book-card] img')).toHaveCount(1)
     await openBook(page, 'stored-book')
     await expect(label(page)).toHaveText('1')
@@ -770,7 +776,7 @@ test.describe('reader', () => {
     await openBook(page, 'short-book')
     const stage = page.getByTestId('stage')
     await expect(stage).toHaveAttribute('data-background', 'default')
-    await expect(stage).toHaveCSS('background-color', 'rgb(233, 233, 238)') // light appearance stage token
+    await expect(stage).toHaveCSS('background-color', 'rgb(233, 231, 226)') // light appearance stage token
     await page.mouse.move(CENTER.x, CENTER.y)
     await page.getByTestId('settings').click()
     await page.getByTestId('bg-black').click()
