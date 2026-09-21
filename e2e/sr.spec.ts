@@ -252,7 +252,9 @@ test('Real-ESRGAN WebGPU kernels match the float32 reference, band seams include
   const hasWebGPU = await page.evaluate(async () => !!(navigator as Navigator & { gpu?: GPU }).gpu && !!(await (navigator as Navigator & { gpu?: GPU }).gpu!.requestAdapter()))
   test.skip(!hasWebGPU, 'needs WebGPU')
   type Hooks = {
-    __reader?: { esrganSelfTest: (o: { width: number; height: number; smallBands?: boolean; ensemble?: 1 | 2 | 4 | 8; model?: 'v3' | '6b' }) => Promise<SelfTest> }
+    __reader?: {
+      esrganSelfTest: (o: { width: number; height: number; smallBands?: boolean; ensemble?: 1 | 2 | 4 | 8; model?: 'v3' | '6b'; gpuReference?: boolean }) => Promise<SelfTest>
+    }
   }
   type SelfTest = { precision: 'f16' | 'f32'; bands: number; x4: { psnr: number; maxDiff: number }; x2: { psnr: number; maxDiff: number } }
   await page.waitForFunction(() => !!(window as unknown as Hooks).__reader)
@@ -283,6 +285,17 @@ test('Real-ESRGAN WebGPU kernels match the float32 reference, band seams include
   expect(rrdb.x4.psnr).toBeGreaterThan(result.precision === 'f16' ? 38 : 60)
   expect(rrdb.x4.maxDiff).toBeLessThanOrEqual(result.precision === 'f16' ? 12 : 1)
   expect(rrdb.x2.maxDiff).toBeLessThanOrEqual(result.precision === 'f16' ? 12 : 1)
+
+  // 6B self-ensemble with all eight symmetries (transposed passes included) over three bands, the
+  // last one shorter: compared with the GPU's own single passes mapped back and averaged.
+  const rrdbEnsemble = await page.evaluate(() =>
+    (window as unknown as Hooks).__reader!.esrganSelfTest({ width: 16, height: 24, model: '6b', ensemble: 8, smallBands: true, gpuReference: true }),
+  )
+  console.log('Real-ESRGAN 6B ensemble self-test:', JSON.stringify(rrdbEnsemble))
+  expect(rrdbEnsemble.bands).toBeGreaterThan(1)
+  expect(rrdbEnsemble.x4.psnr).toBeGreaterThan(result.precision === 'f16' ? 38 : 50)
+  expect(rrdbEnsemble.x4.maxDiff).toBeLessThanOrEqual(result.precision === 'f16' ? 12 : 2)
+  expect(rrdbEnsemble.x2.maxDiff).toBeLessThanOrEqual(result.precision === 'f16' ? 12 : 2)
 })
 
 test('Qualità massima: Real-ESRGAN x4 on the visible page only, time budget falls back to Anime4K', async ({ page }) => {

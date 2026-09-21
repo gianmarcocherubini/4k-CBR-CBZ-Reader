@@ -562,8 +562,6 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
   /** Visible pages whose size is known, with the size baked into a key so the effect only re-runs on real changes. */
   const visibleKey = spreadPages.map((i) => `${i}:${sizes[i]?.w ?? '?'}x${sizes[i]?.h ?? '?'}`).join(',')
   const heavyBudgetMs = settings.maxQualityBudget * 1000
-  /** "Sempre" has no limit for the model itself; the ensemble still sizes itself to this target. */
-  const ensembleTargetMs = heavyBudgetMs > 0 ? heavyBudgetMs : 5000
   /** The tier decision is taken once per spread (and per budget), never revised by a later timing sample. */
   const heavyDecision = useRef<{ key: string; use: boolean; skip: 'slow' | 'too-big' | 'error' | null; ensemble: EnsembleSize } | null>(null)
   const [heavyEnsemble, setHeavyEnsemble] = useState<EnsembleSize>(1)
@@ -622,8 +620,9 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
             heavy.reprobe()
           } else {
             useHeavy = true
-            // Spare time goes into quality: more passes over flipped/rotated copies, averaged.
-            ensemble = settings.maxQualityEnsemble ? heavy.ensembleFor(visible, ensembleTargetMs) : 1
+            // Spare time goes into quality: more passes over flipped/rotated copies, averaged. Within
+            // a budget, as many as fit; with no limit, the four flips (the classic self-ensemble).
+            if (settings.maxQualityEnsemble && heavy.supportsEnsemble) ensemble = heavyBudgetMs > 0 ? heavy.ensembleFor(visible, heavyBudgetMs) : 4
           }
         }
         heavyDecision.current = { key: decisionKey, use: useHeavy, skip, ensemble }
@@ -734,7 +733,7 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
       cancelled = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sr.engine, sr.tick, mq.engine, status, book, visibleKey, srOptions, settings.superResolution, settings.maxQuality, settings.maxQualityEnsemble, heavyBudgetMs, ensembleTargetMs, heavyError])
+  }, [sr.engine, sr.tick, mq.engine, status, book, visibleKey, srOptions, settings.superResolution, settings.maxQuality, settings.maxQualityEnsemble, heavyBudgetMs, heavyError])
 
   const heavyLabel = 'GAN'
   const displayed = enhanced
@@ -799,6 +798,9 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
         const shown = spreadPages.map((i) => displayed.get(i)).find((r) => r?.level === heavyLabel)
         const passes = shown?.ensemble ?? heavyEnsemble
         if (heavySkip === null && passes > 1) parts.push(`self-ensemble ×${passes} (${passes} passaggi mediati, più pulito)`)
+        else if (heavySkip === null && settings.maxQualityEnsemble && heavyBudgetMs > 0) {
+          parts.push(`self-ensemble non applicato: anche 2 passaggi supererebbero l’attesa massima di ${settings.maxQualityBudget} s`)
+        }
         const est = engine.estimateMs(visibleSizes, heavySkip === null ? heavyEnsemble : 1)
         if (est !== undefined && visibleSizes.length > 0) {
           parts.push(`stimati ${(est / 1000).toFixed(1)} s per ${visibleSizes.length > 1 ? 'la coppia' : 'la pagina'} sullo schermo`)

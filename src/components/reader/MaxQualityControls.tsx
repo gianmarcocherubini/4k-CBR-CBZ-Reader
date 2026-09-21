@@ -27,7 +27,7 @@ export function MaxQualityControls({ enabled, budget, model, ensemble, blur, sta
       </Row>
       <Row
         title="Modello"
-        hint="Anime v3: compatto, circa 1 s per pagina su un iPad M (3–4 s con il self-ensemble). 6B: la rete grande di Real-ESRGAN, nove volte il lavoro, decine di secondi per pagina (pesi da 9 MB scaricati alla prima attivazione); richiede «Sempre» o un’attesa massima adeguata."
+        hint="Anime v3: compatto, circa 1 s per pagina su un iPad M. 6B: la rete grande di Real-ESRGAN, nove volte il lavoro, decine di secondi per pagina (pesi da 9 MB scaricati alla prima attivazione); richiede «Sempre» o un’attesa massima adeguata."
         stacked
       >
         <Segmented<MaxQualityModel>
@@ -61,7 +61,7 @@ export function MaxQualityControls({ enabled, budget, model, ensemble, blur, sta
       </Row>
       <Row
         title="Self-ensemble"
-        hint="Solo Anime v3: il tempo che avanza sotto l’attesa massima va in qualità, fino a 8 passaggi su copie riflesse e ruotate della pagina, mediati (bordi più puliti). Spento: un passaggio, circa 1 s."
+        hint="Spento: un passaggio (Anime v3 circa 1 s per pagina). Acceso: più passaggi su copie riflesse e ruotate della pagina, mediati (bordi più puliti): quanti ne stanno nell’attesa massima (2, 4 o 8), quattro con «Sempre». Vale per entrambi i modelli: con 6B moltiplica tempi già lunghi."
       >
         <Switch checked={ensemble} onChange={onEnsemble} label="Self-ensemble" />
       </Row>

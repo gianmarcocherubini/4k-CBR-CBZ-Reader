@@ -100,7 +100,10 @@ export interface ReaderSettings {
    */
   maxQualityBudget: MaxQualityBudget
   maxQualityModel: MaxQualityModel
-  /** Spend the time left under the budget on averaged passes over flipped/rotated copies (v3 only). */
+  /**
+   * Spend the time left under the budget on averaged passes over flipped/rotated copies (2, 4 or
+   * 8; 4 with no limit). Both networks; off = one pass.
+   */
   maxQualityEnsemble: boolean
   /** Blur the plain page while its HD version is being computed (anti-spoiler), then unblur. */
   maxQualityBlur: boolean
@@ -129,7 +132,7 @@ export const DEFAULT_SETTINGS: ReaderSettings = {
   maxQuality: false,
   maxQualityBudget: 5,
   maxQualityModel: 'v3',
-  maxQualityEnsemble: true,
+  maxQualityEnsemble: false,
   maxQualityBlur: true,
   theme: 'system',
   stageBackground: 'default',
