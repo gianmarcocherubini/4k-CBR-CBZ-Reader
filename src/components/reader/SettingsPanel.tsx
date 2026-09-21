@@ -70,6 +70,24 @@ export function Row({ title, hint, stacked = false, children }: { title: string;
   )
 }
 
+/**
+ * Collapsed disclosure for the diagnostics a reader never needs (backend, kernels, measured
+ * geometry) but that make a support question answerable: "cosa dice Dettagli tecnici?".
+ */
+export function TechnicalDetails({ children }: { children: ReactNode }) {
+  return (
+    <details className="group mt-2">
+      <summary className="inline-flex cursor-pointer select-none items-center gap-1 text-caption text-label-3 marker:content-none hover:text-label-2 [&::-webkit-details-marker]:hidden">
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="transition-transform group-open:rotate-90" aria-hidden>
+          <path d="m9 6 6 6-6 6" />
+        </svg>
+        Dettagli tecnici
+      </summary>
+      <div className="mt-1.5 font-mono text-[11px] leading-[15px] text-label-3 break-words">{children}</div>
+    </details>
+  )
+}
+
 /** Section: eyebrow header, hairline card, optional footer note. */
 export function Group({ title, footer, children, testId }: { title?: string; footer?: ReactNode; children: ReactNode; testId?: string }) {
   return (
@@ -101,7 +119,7 @@ export function SettingsPanel({ settings, blankCount, onClearBlanks, onChange, o
         <div className="space-y-8 px-5 pt-6 pb-12">
           {quality}
 
-          <Group title="Lettura" footer="Automatica: doppia pagina con lo schermo in orizzontale, singola in verticale. Le tavole doppie (pagine orizzontali) sono sempre mostrate da sole; la copertina sta da sola e le coppie partono da 2-3.">
+          <Group title="Lettura" footer="Automatica: due pagine affiancate con l’iPad in orizzontale, una sola in verticale. La copertina e le tavole doppie stanno sempre da sole.">
             <Row title="Direzione" stacked>
               <Segmented<Direction>
                 label="Direzione di lettura"
@@ -143,8 +161,8 @@ export function SettingsPanel({ settings, blankCount, onClearBlanks, onChange, o
               title="Pagine bianche inserite"
               hint={
                 blankCount > 0
-                  ? `${blankCount} in questo volume. Se una tavola doppia non combacia, usa “Pagina bianca qui” nella barra in basso.`
-                  : 'Se una tavola doppia non combacia, usa “Pagina bianca qui” nella barra in basso: le coppie seguenti si spostano di una pagina.'
+                  ? `${blankCount} in questo volume. Se due pagine affiancate non combaciano, usa “Pagina bianca qui” nella barra in basso.`
+                  : 'Se due pagine affiancate non combaciano, usa “Pagina bianca qui” nella barra in basso: da lì in avanti le coppie si spostano di una pagina.'
               }
             >
               {blankCount > 0 && (
@@ -159,12 +177,11 @@ export function SettingsPanel({ settings, blankCount, onClearBlanks, onChange, o
             title="Adattamento"
             footer={
               <>
-                Pizzica per ingrandire, doppio tocco al centro per lo zoom rapido. 1:1 = un pixel dell’immagine per pixel dello schermo.
+                Pizzica per ingrandire, doppio tocco al centro per lo zoom rapido. 1:1 mostra la pagina alla sua dimensione reale.
                 {viewportInfo && (
-                  <>
-                    <br />
-                    <span data-testid="viewport-info">Misure: {viewportInfo}.</span>
-                  </>
+                  <TechnicalDetails>
+                    <span data-testid="viewport-info">{viewportInfo}</span>
+                  </TechnicalDetails>
                 )}
               </>
             }
@@ -183,7 +200,7 @@ export function SettingsPanel({ settings, blankCount, onClearBlanks, onChange, o
                 ]}
               />
             </Row>
-            <Row title="Spazio centrale" hint="Il margine tra le due pagine in doppia pagina, come la piega di un libro." stacked>
+            <Row title="Spazio centrale" hint="Il margine tra le due pagine affiancate, come la piega di un libro." stacked>
               <Segmented<Gutter>
                 label="Spazio centrale"
                 idPrefix="gutter"
@@ -212,7 +229,7 @@ export function SettingsPanel({ settings, blankCount, onClearBlanks, onChange, o
             </Row>
           </Group>
 
-          <Group title="Aspetto" footer="Sfondo di lettura: Default segue l’aspetto (grigio caldo o nero); Nero e Bianco lo fissano.">
+          <Group title="Aspetto" footer="Sfondo di lettura: Default segue il tema (grigio caldo di giorno, nero di notte); Nero e Bianco lo fissano.">
             <Row title="Tema" stacked>
               <Segmented<Theme>
                 label="Aspetto"
@@ -243,15 +260,15 @@ export function SettingsPanel({ settings, blankCount, onClearBlanks, onChange, o
               title="Schermo intero"
               hint={
                 isStandalone()
-                  ? 'Nell’app installata iOS non consente di nascondere la barra di stato: l’app usa tutto lo schermo sotto di essa, fino al bordo inferiore. In Safari va davvero a schermo intero.'
+                  ? 'Nell’app installata la barra di stato (ora, batteria) resta visibile: è iPadOS a volerlo. La pagina usa comunque tutto lo spazio sotto di essa.'
                   : fullscreenSupported()
-                    ? 'A schermo intero nasconde la barra di stato (ora, Wi-Fi, batteria) e l’indicatore Home mentre leggi.'
+                    ? 'Nasconde la barra di stato (ora, Wi-Fi, batteria) e l’indicatore Home mentre leggi.'
                     : 'Non disponibile in questo browser.'
               }
             >
               <Switch checked={settings.fullscreenReading} onChange={(v) => onChange({ fullscreenReading: v })} label="Schermo intero durante la lettura" />
             </Row>
-            <Row title="Indicatore HD / 4K" hint="Piccola etichetta in alto a destra: accesa quando la risoluzione scelta è applicata alla pagina, barrata quando non lo è.">
+            <Row title="Indicatore HD / 4K" hint="Piccola etichetta in alto a destra: accesa quando la pagina è stata migliorata, attenuata mentre ci lavora, barrata quando non è possibile.">
               <Switch checked={settings.srIndicator} onChange={(v) => onChange({ srIndicator: v })} label="Indicatore HD" />
             </Row>
           </Group>

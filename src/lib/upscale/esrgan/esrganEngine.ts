@@ -193,14 +193,14 @@ export class EsrganEngine {
 
   /** Resolves null when WebGPU is absent; rejects with a readable message on any other failure. */
   static async create(model: MaxQualityModel, onStatus?: (message: string) => void): Promise<EsrganEngine | null> {
-    onStatus?.(`Caricamento dei pesi (${MODELS[model].megabytes.toLocaleString('it-IT')} MB)…`)
+    onStatus?.(`scaricamento del modello (${MODELS[model].megabytes.toLocaleString('it-IT')} MB)…`)
     const weights = await loadWeights(model)
-    onStatus?.('Compilazione degli shader…')
+    onStatus?.('preparazione della GPU…')
     const upscaler = await createUpscaler(weights)
     if (!upscaler) return null
     const engine = new EsrganEngine(MODELS[model], upscaler)
     try {
-      onStatus?.('Misura della GPU…')
+      onStatus?.('misura della velocità…')
       await engine.benchmark()
     } catch (e) {
       engine.dispose()
