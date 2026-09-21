@@ -23,10 +23,10 @@
 </p>
 
 <p align="center">
-  <img src="media/readme/hero-before-after.png" alt="Before and after: a 251×396 px cover viewed at 4×. Left, standard upscaling; right, Mangadana's 4K mode (Real-ESRGAN) computed on the device." width="960">
+  <img src="media/readme/hero-before-after.png" alt="Before and after: a 252×396 px cover viewed at 4×. Left, standard upscaling; right, Mangadana's 4K mode (Real-ESRGAN) computed on the device." width="960">
 </p>
 
-<p align="center"><sub>The same 251 × 396 px JPEG cover, viewed at 4×. Left: what a browser shows you. Right: Mangadana's 4K mode (Slow · best), computed on the device.<br>Death Note © Tsugumi Ohba, Takeshi Obata / Shueisha — cover used for demonstration only.</sub></p>
+<p align="center"><sub>The same 252 × 396 px JPEG cover, viewed at 4×. Left: what a browser shows you. Right: Mangadana's 4K mode (Slow · best), computed on the device.<br>Demon Slayer: Kimetsu no Yaiba © Koyoharu Gotouge / Shueisha — cover used for demonstration only.</sub></p>
 
 ## Why Mangadana
 
@@ -130,7 +130,7 @@ Mangadana stands on the work of others:
 - The crown mark comes from the *Extras* face of [Sprite Graffiti](https://www.fontfabric.com/fonts/sprite-graffiti/) by Fontfabric, whose free-font licence permits logos and static images; the font itself is not embedded.
 - The name: 漫画 *manga* + 棚 *dana* (from 本棚 *hondana*, a bookshelf). The manga shelf.
 
-The cover shown on this page is from *Death Note* vol. 1 © Tsugumi Ohba, Takeshi Obata / Shueisha, used only to demonstrate the upscaling. The app ships no manga.
+The cover shown on this page is from *Demon Slayer: Kimetsu no Yaiba* vol. 1 © Koyoharu Gotouge / Shueisha, used only to demonstrate the upscaling. The app ships no manga.
 
 ## License
 
