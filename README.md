@@ -1,8 +1,8 @@
 <p align="center">
   <a href="https://www.manga-dana.com">
     <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/gianmarcocherubini/4k-CBR-CBZ-Reader/main/public/brand/wordmark-dark.png">
-      <img src="https://raw.githubusercontent.com/gianmarcocherubini/4k-CBR-CBZ-Reader/main/public/brand/wordmark-light.png" width="360" alt="Mangadana">
+      <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/gianmarcocherubini/Mangadana/main/public/brand/wordmark-dark.png">
+      <img src="https://raw.githubusercontent.com/gianmarcocherubini/Mangadana/main/public/brand/wordmark-light.png" width="360" alt="Mangadana">
     </picture>
   </a>
 </p>
@@ -304,8 +304,8 @@ dispositivo, e non fanno parte della cache offline.
 Il workflow `.github/workflows/deploy.yml` esegue lint, typecheck, test, build e test end-to-end sulla build, poi
 pubblica `dist/` su GitHub Pages a ogni push su `main`. Nel repository: **Settings → Pages →
 Source: GitHub Actions**. Il percorso base viene letto dalla configurazione di Pages (`actions/configure-pages`):
-`/4k-CBR-CBZ-Reader/` finché l'app è servita da `gianmarcocherubini.github.io`, `/` con il dominio proprio. In
-locale vale il nome del repository, oppure `VITE_BASE=/`.
+`/Mangadana/` se l'app fosse servita da `gianmarcocherubini.github.io`, `/` con il dominio proprio. In locale vale il
+nome del repository, oppure `VITE_BASE=/`.
 
 ### Dominio www.manga-dana.com
 
@@ -336,17 +336,27 @@ HTTPS*. Per collegare il dominio a GitHub Pages, nell'ordine:
    spuntare **Enforce HTTPS** (il certificato arriva in pochi minuti). Con i record A sul dominio nudo, GitHub
    reindirizza da solo `manga-dana.com` → `www.manga-dana.com`. Consigliato anche **Settings (profilo) → Pages →
    Add a domain** per verificare il dominio e impedire che altri repository lo reclamino.
-3. **Actions → Build and deploy to GitHub Pages → Run workflow**: la build precedente ha il percorso base
-   `/4k-CBR-CBZ-Reader/` e sul nuovo dominio non caricherebbe gli asset; il workflow rilegge la configurazione e
-   ricostruisce con base `/`. Da qui `gianmarcocherubini.github.io/4k-CBR-CBZ-Reader/` reindirizza al dominio.
+3. **Actions → Build and deploy to GitHub Pages → Run workflow** (se l'ultimo deploy è precedente al dominio): la
+   build precedente ha il percorso base del repository su github.io e sul dominio non caricherebbe gli asset (pagina
+   vuota); il workflow rilegge la configurazione e ricostruisce con base `/`. Da qui `gianmarcocherubini.github.io/Mangadana/`
+   reindirizza al dominio.
 4. **Settings → General → Social preview**: caricare `public/brand/social-preview.png` (1280×640), la stessa immagine
    usata dai tag Open Graph per le anteprime dei link (iMessage, WhatsApp, X).
 
 **L'app già installata dall'indirizzo github.io** ha il suo spazio di archiviazione legato a quell'origine: non
-può seguire il dominio. Continua a funzionare dalla cache del service worker (libreria compresa) ma non riceve più
-aggiornamenti; quando rileva che il nuovo indirizzo risponde, mostra nella libreria il banner **Nuovo indirizzo**
-con il percorso da seguire: esportare un backup, installare l'app da www.manga-dana.com, ripristinare il backup e
-importare di nuovo i file (vedi *Backup della libreria*).
+può seguire il dominio. Continua a funzionare dalla cache del service worker (libreria compresa), ma dal momento in
+cui github.io reindirizza al dominio il suo service worker non trova più aggiornamenti (un redirect fa fallire
+l'aggiornamento), e resta alla versione che aveva. Il repository, inoltre, è stato rinominato da `4k-CBR-CBZ-Reader`
+a `Mangadana`: il vecchio percorso `gianmarcocherubini.github.io/4k-CBR-CBZ-Reader/` non esiste più.
+
+- Se quella versione ha già il backup (0.9.0 o successiva), appena rileva che il dominio risponde mostra nella
+  libreria il banner **Nuovo indirizzo** con il percorso: esportare un backup, installare l'app da
+  www.manga-dana.com, ripristinare il backup e importare di nuovo i file (vedi *Backup della libreria*).
+- Se è precedente (0.8.0 o prima, senza backup), serve un **ponte** temporaneo: un repository con il vecchio nome
+  `4k-CBR-CBZ-Reader` che pubblichi su GitHub Pages la build corrente con base `/4k-CBR-CBZ-Reader/`. Il workflow
+  pronto è `docs/github-io-bridge.yml` (da copiare nel repository ponte come `.github/workflows/pages.yml`: prende
+  il codice da `Mangadana`, costruisce e attiva Pages da solo). Alla prima apertura la vecchia app si aggiorna da
+  lì, mostra il banner e permette l'esportazione; poi il repository ponte si elimina.
 
 Il service worker precarica l'intera app, compresi gli shader Anime4K e i pesi di Real-ESRGAN: dopo la prima
 apertura tutto funziona offline. Non servono intestazioni COOP/COEP: non c'è più WebAssembly multi-thread.

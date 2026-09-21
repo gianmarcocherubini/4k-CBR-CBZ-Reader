@@ -6,7 +6,7 @@
 - [x] [Fattibilità AI upscaling](/cursor/stores/bc-e49a8089-4724-43a1-8857-0f717e022522/docs/ai-upscaling-feasibility.md) — Anime4K default, waifu2x CUNet experimental, Real-ESRGAN left on the PC; GPU timings are estimates until tested on the iPad
 
 ## GitHub and deploy
-- [ ] Waiting on Gianmarco: give access to [4k-CBR-CBZ-Reader](https://github.com/gianmarcocherubini/4k-CBR-CBZ-Reader) (private) via GitHub App link, Cursor secret, or self-hosted PC worker; token file on his PC is unreachable from the cloud
+- [ ] Waiting on Gianmarco: give access to [Mangadana, then 4k-CBR-CBZ-Reader](https://github.com/gianmarcocherubini/Mangadana) (private) via GitHub App link, Cursor secret, or self-hosted PC worker; token file on his PC is unreachable from the cloud
 - [ ] Hosting decision pending: Pages needs public repo or GitHub Pro, else Cloudflare Pages / Vercel
 - [ ] [Reader worker](https://cursor.com/agents/bc-86e9febf-67a5-5993-99f8-ca47629cf557) idle with both branches ready, will push and open PRs once access lands
 
