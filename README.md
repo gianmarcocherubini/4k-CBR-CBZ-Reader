@@ -139,7 +139,7 @@ WebAssembly), selezionabili in **Modello**:
   densi da 5 convoluzioni ciascuno, 64 feature, 32 canali di crescita, scala residua 0,2, coda con due upsample
   nearest + convoluzioni; 4,47 M parametri, BSD-3). Nove volte il lavoro di v3: misurati **~30 s per pagina** su un
   iPad M (la GPU si scalda e rallenta su carichi così lunghi), quindi va usato con «Sempre» o un'attesa adeguata. I pesi (8,9 MB in FP16) non sono precaricati: vengono
-  scaricati e messi in cache dal service worker la prima volta che il modello viene scelto. Niente self-ensemble.
+  scaricati e messi in cache dal service worker la prima volta che il modello viene scelto.
   Implementazione: quattro buffer di feature a rotazione, buffer di crescita a 128 canali riempito per copia dopo
   ogni convoluzione densa (una dispatch WebGPU non può leggere e scrivere lo stesso buffer), residui ripiegati
   nell'epilogo delle convoluzioni, coda ×4 a strisce di 8 righe con 2 righe di contesto (64 canali a ×4 per una
@@ -149,12 +149,16 @@ WebAssembly), selezionabili in **Modello**:
 - **Attesa massima** (3 s, 5 s, 10 s, Sempre; default 5 s): all'attivazione l'app compila gli shader e **misura la
   GPU** su un'immagine di prova; per ogni coppia di pagine prevede il tempo e, se supera il limite, quella coppia usa
   la Super risoluzione (Anime4K) e la riga di stato dice perché. La stima si aggiorna con ogni pagina elaborata.
-- **Self-ensemble** (interruttore, attivo di default, solo v3): il tempo che avanza sotto il limite va in qualità. La
-  rete viene eseguita su copie della pagina riflesse e ruotate (le 8 simmetrie del rettangolo) e i risultati,
-  riportati nell'orientamento originale, vengono mediati sulla GPU: gli artefatti direzionali della rete si cancellano
-  e i bordi restano più puliti. Il numero di passaggi (1, 2, 4 o 8) è il massimo che sta nel limite (5 s con
-  «Sempre»): su un iPad M-series una pagina a ×4 costa circa 1 s, quindi con il limite di 5 s si arriva a 4 passaggi
-  (3–4 s). Spegnendolo si torna al passaggio singolo. La riga di stato riporta i passaggi usati.
+- **Self-ensemble** (interruttore, spento di default, entrambi i modelli): acceso, la rete viene eseguita su copie
+  della pagina riflesse e ruotate (le 8 simmetrie del rettangolo) e i risultati, riportati nell'orientamento
+  originale, vengono mediati sulla GPU: gli artefatti direzionali della rete si cancellano e i bordi restano più
+  puliti. Il numero di passaggi (2, 4 o 8) è il massimo che sta nell'attesa massima; con «Sempre» sono quattro (i
+  quattro ribaltamenti, il self-ensemble classico). Su un iPad M-series v3 costa circa 1 s a passaggio, quindi con
+  il limite di 5 s si arriva a 4 passaggi (3–4 s); con 6B ogni passaggio costa decine di secondi. Spento: un
+  passaggio. La riga di stato riporta i passaggi usati (o perché non ne sta nemmeno un secondo nel limite).
+  Per il 6B il tronco e le convoluzioni sono indifferenti all'orientamento; la coda ×4 scrive i colori in un buffer
+  della fascia nell'orientamento trasformato, un kernel li riporta in quello originale accumulandoli e l'ultimo
+  passaggio ne fa la media nella pagina.
 - **Sfocatura anti-spoiler** (interruttore, attivo di default): mentre la versione HD viene calcolata la pagina
   resta sfocata (sfocatura che "respira") e si rivela nitida solo quando è pronta.
 - **Kernel scelto sul dispositivo**: le convoluzioni esistono in due varianti a risultato identico, un thread per
@@ -174,7 +178,8 @@ WebAssembly), selezionabili in **Modello**:
   di PyTorch dagli stessi pesi (fixture nel repository, differenza massima 2/255); i kernel WebGPU vengono
   confrontati con il riferimento nei test end-to-end (`window.__reader.esrganSelfTest`, anche con fasce forzate a
   8 righe e con il self-ensemble a 8 passaggi): v3 95 dB in f32 e ×2 identico al bit, ensemble 59 dB (il
-  riferimento arrotonda ogni passaggio a 8 bit), 6B identico al bit su una fascia.
+  riferimento arrotonda ogni passaggio a 8 bit), 6B identico al bit su una fascia e 59 dB con il self-ensemble a 8
+  passaggi (passaggi trasposti inclusi, anche su più fasce).
 
 I pesi si rigenerano dai checkpoint ufficiali con `scripts/convert-realesr-weights.py` (solo numpy, nessun PyTorch;
 riconosce entrambe le architetture dai nomi dei tensori).

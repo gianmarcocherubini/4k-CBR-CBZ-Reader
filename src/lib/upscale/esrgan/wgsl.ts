@@ -278,7 +278,7 @@ ${stores.join('\n')}
 /** Uniforms of the shuffle and finalize kernels (16 x u32 = 64 bytes). */
 export const SHUFFLE_PARAMS_BYTES = 64
 
-const SHUFFLE_STRUCT = `struct Shuffle {
+export const SHUFFLE_STRUCT = `struct Shuffle {
   tw: u32, th: u32, context: u32, pageW: u32,
   bandY0: u32, coreRows: u32, outW: u32, outH: u32,
   factor: u32, swap: u32, flipX: u32, flipY: u32,
@@ -377,26 +377,68 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 `
 }
 
+/**
+ * Maps one pass of a self-ensemble back to the original orientation and accumulates it: a thread
+ * per original core output pixel reads the transformed core buffer at the position the transform
+ * sent it to (same permutation at output resolution: flips and transpositions map aligned blocks
+ * to aligned blocks), `first` starting a fresh sum. `finalizeWgsl` then averages into the page.
+ */
+export function untransformWgsl(): string {
+  return `${SHUFFLE_STRUCT}
+@group(0) @binding(0) var<storage, read> tout: array<vec4f>;
+@group(0) @binding(1) var<storage, read_write> acc: array<vec4f>;
+@group(0) @binding(2) var<uniform> sp: Shuffle;
+
+@compute @workgroup_size(8, 8)
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+  let cw = sp.pageW * sp.factor;
+  let ch = sp.coreRows * sp.factor;
+  if (gid.x >= cw || gid.y >= ch) { return; }
+  let tcw = select(cw, ch, sp.swap == 1u);
+  let tch = select(ch, cw, sp.swap == 1u);
+  let u0 = select(gid.x, gid.y, sp.swap == 1u);
+  let v0 = select(gid.y, gid.x, sp.swap == 1u);
+  let u = select(u0, tcw - 1u - u0, sp.flipX == 1u);
+  let v = select(v0, tch - 1u - v0, sp.flipY == 1u);
+  let c = tout[v * tcw + u];
+  let i = gid.y * sp.accW + gid.x;
+  if (sp.first == 1u) { acc[i] = c; } else { acc[i] += c; }
+}
+`
+}
+
 /** Uniforms of the RGB output kernel (RRDB conv_last), 12 x u32 = 48 bytes. */
 export const RGB_OUT_PARAMS_BYTES = 48
+/**
+ * The network ran on a band transformed by a symmetry of the rectangle: the core (the page rows
+ * of this band, without context) is a rectangle at (coreX0, coreY0) of coreW x coreH in that
+ * band; all fields are in 4x (network output) pixels.
+ */
 export const RGB_OUT_STRUCT = `struct RgbOut {
-  srcW: u32, srcH: u32, outY0: u32, context4: u32,
-  pageW4: u32, coreRows4: u32, bandY04: u32, outW: u32,
-  outH: u32, factor: u32, coreY0: u32, pad0: u32,
+  srcW: u32, srcH: u32, outY0: u32, coreX04: u32,
+  coreY04: u32, coreW4: u32, coreH4: u32, stripY04: u32,
+  bandY04: u32, outW: u32, outH: u32, factor: u32,
 }`
 
 /**
- * RRDB conv_last: 64 input channels at 4x → RGB (the 4th output channel is padding), clamped and
- * written as RGBA8 into the page. The dispatch covers one tail strip of the band (in band 4x
- * coordinates starting at outY0); only core pixels are written. x2 output averages 2x2.
+ * RRDB conv_last: 64 input channels at 4x → RGB (the 4th output channel is padding), clamped.
+ * The dispatch covers one tail strip of the band (its rows in band 4x coordinates start at
+ * outY0); only core pixels are written; x2 output averages 2x2. Direct mode writes RGBA8 into the
+ * page (identity transform); buffer mode writes float colours into the transformed core buffer
+ * for the self-ensemble (`untransformWgsl` puts them back).
  */
-export function rgbOutWgsl(o: KernelOptions): string {
+export function rgbOutWgsl(o: KernelOptions, toBuffer: boolean): string {
   const { enable, F4 } = types(o)
+  const store = toBuffer
+    ? `  tout[v * (rp.coreW4 / sub) + u] = vec4f(c, 1.0);`
+    : `  let py = (rp.bandY04 + Y4 - rp.coreY04) / sub;
+  if (u >= rp.outW || py >= rp.outH) { return; }
+  page[py * rp.outW + u] = pack4x8unorm(vec4f(c, 1.0));`
   return `${enable}${RGB_OUT_STRUCT}
 @group(0) @binding(0) var<storage, read> src: array<${F4}>;
 @group(0) @binding(1) var<storage, read> weights: array<${F4}>;
 @group(0) @binding(2) var<storage, read> bias: array<${F4}>;
-@group(0) @binding(3) var<storage, read_write> page: array<u32>;
+${toBuffer ? '@group(0) @binding(3) var<storage, read_write> tout: array<vec4f>;' : '@group(0) @binding(3) var<storage, read_write> page: array<u32>;'}
 @group(0) @binding(4) var<uniform> rp: RgbOut;
 
 fn pixel(x: i32, y: i32) -> vec3f {
@@ -421,13 +463,13 @@ fn pixel(x: i32, y: i32) -> vec3f {
 
 @compute @workgroup_size(8, 8)
 fn main(@builtin(global_invocation_id) gid: vec3u) {
-  // Output pixel of the page at the requested factor: gid covers the strip's core at that factor.
+  // Output pixel at the requested factor: gid covers the strip's core at that factor.
   let f = rp.factor;
   let sub = 4u / f;
   // Band 4x coordinates of the first sub-pixel of this output pixel (the strip's own core rows).
-  let X4 = rp.context4 + gid.x * sub;
-  let Y4 = rp.coreY0 + gid.y * sub;
-  if (X4 >= rp.context4 + rp.pageW4 || Y4 >= rp.context4 + rp.coreRows4) { return; }
+  let X4 = rp.coreX04 + gid.x * sub;
+  let Y4 = rp.stripY04 + gid.y * sub;
+  if (X4 >= rp.coreX04 + rp.coreW4 || Y4 >= rp.coreY04 + rp.coreH4) { return; }
   var c = vec3f(0.0);
   for (var by = 0u; by < sub; by++) {
     for (var bx = 0u; bx < sub; bx++) {
@@ -435,10 +477,10 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     }
   }
   c = c / f32(sub * sub);
-  let px = (X4 - rp.context4) / sub;
-  let py = (rp.bandY04 + Y4 - rp.context4) / sub;
-  if (px >= rp.outW || py >= rp.outH) { return; }
-  page[py * rp.outW + px] = pack4x8unorm(vec4f(c, 1.0));
+  // Core-relative output pixel, in the transformed orientation.
+  let u = (X4 - rp.coreX04) / sub;
+  let v = (Y4 - rp.coreY04) / sub;
+${store}
 }
 `
 }

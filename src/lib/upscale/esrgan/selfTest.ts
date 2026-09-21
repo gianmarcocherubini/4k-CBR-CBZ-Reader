@@ -1,8 +1,8 @@
 import type { MaxQualityModel } from '../../../types'
 import { loadWeights } from './esrganEngine'
 import { createUpscaler, type EsrganFactor } from './esrganUpscaler'
-import { runRrdbReference, runSrvggEnsembleReference, runSrvggReference } from './reference'
-import { type EnsembleSize, ensembleTransforms } from './transforms'
+import { runEnsembleReference, runRrdbReference, runSrvggReference } from './reference'
+import { type EnsembleSize, ensembleTransforms, inverseTransformRgba, transformedSize, transformRgba } from './transforms'
 import type { ConvRows } from './wgsl'
 
 export interface SelfTestOptions {
@@ -16,6 +16,12 @@ export interface SelfTestOptions {
   model?: MaxQualityModel
   /** Convolution kernel variant (output rows per thread), default 1. */
   variant?: ConvRows
+  /**
+   * Ensemble reference computed by the GPU itself: single passes on the transformed images, mapped
+   * back and averaged. Checks the ensemble plumbing (transposed input, output mapping,
+   * accumulation) in seconds where the CPU network would take minutes.
+   */
+  gpuReference?: boolean
 }
 
 export interface SelfTestResult {
@@ -93,6 +99,36 @@ export async function esrganSelfTest(opts: SelfTestOptions = {}): Promise<SelfTe
     const canvas = new OffscreenCanvas(w, h)
     canvas.getContext('2d')!.putImageData(new ImageData(rgba, w, h), 0, 0)
     const ensemble: EnsembleSize = upscaler.supportsEnsemble ? (opts.ensemble ?? 1) : 1
+    const single: (img: Uint8ClampedArray, iw: number, ih: number, f: EsrganFactor) => Uint8ClampedArray =
+      weights.header.arch === 'rrdb' ? (img, iw, ih, f) => runRrdbReference(weights, img, iw, ih, f, 'clamp') : (img, iw, ih, f) => runSrvggReference(weights, img, iw, ih, f)
+    const gpuSingle = async (img: Uint8ClampedArray, iw: number, ih: number, factor: EsrganFactor): Promise<Uint8ClampedArray> => {
+      const c = new OffscreenCanvas(iw, ih)
+      c.getContext('2d')!.putImageData(new ImageData(new Uint8ClampedArray(img), iw, ih), 0, 0)
+      const bitmap = await createImageBitmap(c)
+      // Reference passes run whole (the forced small bands apply to the run under test only).
+      const cap = upscaler.maxActBytes
+      upscaler.maxActBytes = Number.MAX_SAFE_INTEGER
+      try {
+        return (await upscaler.upscale(bitmap, factor, { ensemble: 1 })).data
+      } finally {
+        upscaler.maxActBytes = cap
+        bitmap.close()
+      }
+    }
+    const gpuEnsembleReference = async (factor: EsrganFactor): Promise<Uint8ClampedArray> => {
+      const outW = w * factor
+      const outH = h * factor
+      const sum = new Float64Array(outW * outH * 4)
+      const transforms = ensembleTransforms(ensemble)
+      for (const t of transforms) {
+        const { w: tw, h: th } = transformedSize(w, h, t)
+        const back = inverseTransformRgba(await gpuSingle(transformRgba(rgba, w, h, t), tw, th, factor), outW, outH, t)
+        for (let i = 0; i < back.length; i++) sum[i] = sum[i]! + back[i]!
+      }
+      const result = new Uint8ClampedArray(outW * outH * 4)
+      for (let i = 0; i < result.length; i++) result[i] = Math.round(sum[i]! / transforms.length)
+      return result
+    }
     const run = async (factor: EsrganFactor) => {
       const bitmap = await createImageBitmap(canvas)
       const t0 = performance.now()
@@ -101,11 +137,11 @@ export async function esrganSelfTest(opts: SelfTestOptions = {}): Promise<SelfTe
       const ms = performance.now() - t0
       bitmap.close()
       const ref =
-        weights.header.arch === 'rrdb'
-          ? runRrdbReference(weights, rgba, w, h, factor, 'clamp')
-          : ensemble === 1
-            ? runSrvggReference(weights, rgba, w, h, factor)
-            : runSrvggEnsembleReference(weights, rgba, w, h, factor, ensembleTransforms(ensemble))
+        ensemble === 1
+          ? single(rgba, w, h, factor)
+          : opts.gpuReference
+            ? await gpuEnsembleReference(factor)
+            : runEnsembleReference(single, rgba, w, h, factor, ensembleTransforms(ensemble))
       return { ...compare(out.data, ref), ms, bands: steps / ensemble }
     }
     const x4 = await run(4)

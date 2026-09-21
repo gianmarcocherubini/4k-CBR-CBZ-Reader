@@ -168,10 +168,27 @@ export function runRrdbReference(weights: SrvggWeights, rgba: Uint8ClampedArray,
   return result
 }
 
+type Runner = (rgba: Uint8ClampedArray, w: number, h: number, factor: 2 | 4) => Uint8ClampedArray
+
 /**
- * Geometric self-ensemble of the reference: the network runs on each transformed copy of the
- * image, the outputs are mapped back and averaged. What the GPU path computes for `ensemble > 1`.
+ * Geometric self-ensemble of a reference network: it runs on each transformed copy of the image,
+ * the outputs are mapped back and averaged. What the GPU path computes for `ensemble > 1`.
  */
+export function runEnsembleReference(run: Runner, rgba: Uint8ClampedArray, w: number, h: number, factor: 2 | 4, transforms: readonly Dihedral[]): Uint8ClampedArray {
+  const outW = w * factor
+  const outH = h * factor
+  const sum = new Float64Array(outW * outH * 4)
+  for (const t of transforms) {
+    const { w: tw, h: th } = transformedSize(w, h, t)
+    const out = run(transformRgba(rgba, w, h, t), tw, th, factor)
+    const back = inverseTransformRgba(out, outW, outH, t)
+    for (let i = 0; i < back.length; i++) sum[i] = sum[i]! + back[i]!
+  }
+  const result = new Uint8ClampedArray(outW * outH * 4)
+  for (let i = 0; i < result.length; i++) result[i] = Math.round(sum[i]! / transforms.length)
+  return result
+}
+
 export function runSrvggEnsembleReference(
   weights: SrvggWeights,
   rgba: Uint8ClampedArray,
@@ -180,18 +197,7 @@ export function runSrvggEnsembleReference(
   factor: 2 | 4,
   transforms: readonly Dihedral[],
 ): Uint8ClampedArray {
-  const outW = w * factor
-  const outH = h * factor
-  const sum = new Float64Array(outW * outH * 4)
-  for (const t of transforms) {
-    const { w: tw, h: th } = transformedSize(w, h, t)
-    const out = runSrvggReference(weights, transformRgba(rgba, w, h, t), tw, th, factor)
-    const back = inverseTransformRgba(out, outW, outH, t)
-    for (let i = 0; i < back.length; i++) sum[i] = sum[i]! + back[i]!
-  }
-  const result = new Uint8ClampedArray(outW * outH * 4)
-  for (let i = 0; i < result.length; i++) result[i] = Math.round(sum[i]! / transforms.length)
-  return result
+  return runEnsembleReference((img, iw, ih, f) => runSrvggReference(weights, img, iw, ih, f), rgba, w, h, factor, transforms)
 }
 
 /**

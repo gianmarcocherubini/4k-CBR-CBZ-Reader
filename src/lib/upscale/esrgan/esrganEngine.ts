@@ -130,7 +130,7 @@ export class EsrganEngine {
     return engine
   }
 
-  /** Whether `upscale` averages several passes when asked (the 6B network runs single-pass). */
+  /** Whether `upscale` averages several passes when asked (both networks do). */
   get supportsEnsemble(): boolean {
     return this.upscaler.supportsEnsemble
   }

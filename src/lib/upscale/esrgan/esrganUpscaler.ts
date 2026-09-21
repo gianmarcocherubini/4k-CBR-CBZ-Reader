@@ -20,6 +20,7 @@ import {
   rgbOutWgsl,
   SHUFFLE_PARAMS_BYTES,
   shuffleWgsl,
+  untransformWgsl,
 } from './wgsl'
 
 export type EsrganFactor = 2 | 4
@@ -711,6 +712,9 @@ interface RrdbPipelines {
   body: ConvPipelines
   up: ConvPipelines
   rgb: GPUComputePipeline
+  rgbToBuffer: GPUComputePipeline
+  untransform: GPUComputePipeline
+  finalize: GPUComputePipeline
 }
 
 interface Dispatch {
@@ -728,6 +732,26 @@ interface TailStrip {
   hr: GPUBindGroup
 }
 
+/** The core of a band as the network sees it after the pass's transform (see `transformedCore`). */
+interface TransformedCore {
+  x0: number
+  y0: number
+  w: number
+  h: number
+}
+
+/**
+ * Where the page rows of a band (its core, without context) land once the padded band of
+ * `bw` x `bh` pixels is transformed by `t`. The band is padded by CONTEXT on top and bottom
+ * exactly, but on the right by `bw - CONTEXT - W` (the width is rounded up to a multiple of 4),
+ * so a flip along the band's width moves the core by that asymmetry.
+ */
+export function transformedCore(t: Dihedral, bw: number, W: number, rows: number): TransformedCore {
+  const right = bw - CONTEXT - W
+  if (!t.swap) return { x0: t.flipX ? right : CONTEXT, y0: CONTEXT, w: W, h: rows }
+  return { x0: CONTEXT, y0: t.flipY ? right : CONTEXT, w: rows, h: W }
+}
+
 /**
  * RRDBNet with 6 residual-in-residual dense blocks, at 64 features with 32 growth channels.
  *
@@ -739,9 +763,14 @@ interface TailStrip {
  * conv_body adds F. The x4 tail (two nearest upsamples with convolutions, conv_hr, conv_last)
  * runs on strips of TAIL_ROWS source rows with TAIL_CONTEXT rows of context, because 64 channels
  * at 4x for a whole band would not fit.
+ *
+ * Self-ensemble: the trunk and the convolutions are orientation-agnostic, so a transformed band
+ * (flipped, transposed) goes through unchanged; the tail strips walk the transformed core and
+ * conv_last writes float colours into a transformed-core buffer, which `untransform` maps back
+ * to the original orientation and accumulates; `finalize` averages the passes into the page.
  */
 class RrdbUpscaler extends GpuUpscaler {
-  readonly supportsEnsemble = false
+  readonly supportsEnsemble = true
   readonly bytesPerPixel: number
   private readonly pipelines: RrdbPipelines
   private readonly lp: Record<'first' | 'conv1' | 'conv5' | 'conv5Last' | 'body' | 'up2' | 'hr', GPUBuffer>
@@ -749,6 +778,7 @@ class RrdbUpscaler extends GpuUpscaler {
   private readonly bandUp1: GPUBuffer
   private readonly bandUp2: GPUBuffer
   private readonly bandHr: GPUBuffer
+  private readonly shuffleParams: GPUBuffer
   private buffers: {
     bw: number
     rows: number
@@ -756,15 +786,19 @@ class RrdbUpscaler extends GpuUpscaler {
     g: GPUBuffer
     s: GPUBuffer
     f: GPUBuffer
+    feat2: GPUBuffer
     u1: GPUBuffer
     u2: GPUBuffer
     u3: GPUBuffer
     first: GPUBindGroup
+    firstT: GPUBindGroup
     blocks: Dispatch[][]
     body: Dispatch
     strips: TailStrip[]
   } | null = null
-  private run: { rgbGroups: GPUBindGroup[] } | null = null
+  /** Transformed-core output and accumulator of the self-ensemble, grown on demand. */
+  private ensembleBuffers: { bytes: number; tout: GPUBuffer; acc: GPUBuffer } | null = null
+  private run: { rgbGroups: GPUBindGroup[]; untransformGroup: GPUBindGroup | null; finalizeGroup: GPUBindGroup | null } | null = null
 
   private constructor(dev: DeviceInfo, weights: ModelWeights, options: KernelOptions, pipelines: RrdbPipelines, f16Error?: string) {
     super(dev, weights, options, RRDB_MAX_ACT_BYTES, f16Error)
@@ -783,11 +817,12 @@ class RrdbUpscaler extends GpuUpscaler {
     this.bandUp1 = this.uniform('band-up1', BAND_PARAMS_BYTES)
     this.bandUp2 = this.uniform('band-up2', BAND_PARAMS_BYTES)
     this.bandHr = this.uniform('band-hr', BAND_PARAMS_BYTES)
+    this.shuffleParams = this.uniform('rrdb-ensemble', SHUFFLE_PARAMS_BYTES)
   }
 
   static async create(dev: DeviceInfo, weights: ModelWeights): Promise<RrdbUpscaler> {
     const { options, pipelines, f16Error } = await compileProgram(dev.device, dev.f16, async (o, pipeline, conv) => {
-      const [first, conv1, convDense, conv5, conv5Last, body, up, rgb] = await Promise.all([
+      const [first, conv1, convDense, conv5, conv5Last, body, up, rgb, rgbToBuffer, untransform, finalize] = await Promise.all([
         pipeline('rrdb-conv-first', convFirstWgsl(o, 'none')),
         conv('rrdb-conv1', { cout: 32, activation: 'lrelu', residual: 0, split: false }),
         conv('rrdb-conv-dense', { cout: 32, activation: 'lrelu', residual: 0, split: true }),
@@ -795,9 +830,12 @@ class RrdbUpscaler extends GpuUpscaler {
         conv('rrdb-conv5-last', { cout: 64, activation: 'none', residual: 2, split: true }),
         conv('rrdb-conv-body', { cout: 64, activation: 'none', residual: 1, split: false }),
         conv('rrdb-conv-up', { cout: 64, activation: 'lrelu', residual: 0, split: false }),
-        pipeline('rrdb-rgb-out', rgbOutWgsl(o)),
+        pipeline('rrdb-rgb-out', rgbOutWgsl(o, false)),
+        pipeline('rrdb-rgb-out-buffer', rgbOutWgsl(o, true)),
+        pipeline('rrdb-untransform', untransformWgsl()),
+        pipeline('rrdb-finalize', finalizeWgsl()),
       ])
-      return { first, conv1, convDense, conv5, conv5Last, body, up, rgb }
+      return { first, conv1, convDense, conv5, conv5Last, body, up, rgb, rgbToBuffer, untransform, finalize }
     })
     return new RrdbUpscaler(dev, weights, options, pipelines, f16Error)
   }
@@ -812,20 +850,22 @@ class RrdbUpscaler extends GpuUpscaler {
     const scratch = this.storage('rrdb-s', 8 * planeBytes, true)
     const f = this.storage('rrdb-f', 16 * planeBytes, true)
     const tailRows = TAIL_ROWS + 2 * TAIL_CONTEXT
-    const u1 = this.storage('rrdb-u1', 16 * bw * 2 * tailRows * 2 * q)
-    const u2 = this.storage('rrdb-u2', 16 * bw * 4 * tailRows * 4 * q)
-    const u3 = this.storage('rrdb-u3', 16 * bw * 4 * tailRows * 4 * q)
-    device.queue.writeBuffer(this.bandUp2, 0, new Uint32Array([bw * 4, tailRows * 4, bw * 2, tailRows * 2]))
-    device.queue.writeBuffer(this.bandHr, 0, new Uint32Array([bw * 4, tailRows * 4, bw * 4, tailRows * 4]))
+    // Tail strips span the transformed band's width: the band's width, or its height when transposed.
+    const maxW = Math.max(bw, rows)
+    const u1 = this.storage('rrdb-u1', 16 * maxW * 2 * tailRows * 2 * q)
+    const u2 = this.storage('rrdb-u2', 16 * maxW * 4 * tailRows * 4 * q)
+    const u3 = this.storage('rrdb-u3', 16 * maxW * 4 * tailRows * 4 * q)
     const wFirst = this.weightsOf('conv_first')
-    const first = bindGroup(device, 'rrdb-first', this.pipelines.first, [
-      [0, this.textures!.view],
+    const firstEntries = (view: GPUTextureView): Array<[number, GPUBindingResource]> => [
+      [0, view],
       [1, { buffer: wFirst.weight }],
       [2, { buffer: wFirst.bias }],
       [4, { buffer: f }],
       [5, { buffer: this.bandParams }],
       [6, { buffer: this.lp.first }],
-    ])
+    ]
+    const first = bindGroup(device, 'rrdb-first', this.pipelines.first, firstEntries(this.textures!.view))
+    const firstT = bindGroup(device, 'rrdb-first-t', this.pipelines.first, firstEntries(this.textures!.viewT))
     const conv = (pipelines: ConvPipelines, name: string, entries: Array<[number, GPUBindingResource]>, growth?: number): Dispatch => {
       const w = this.weightsOf(name)
       return {
@@ -874,58 +914,96 @@ class RrdbUpscaler extends GpuUpscaler {
     }
     const feat2 = x[(cur + 1) % 4]!
     const body = conv(this.pipelines.body, 'conv_body', [[0, { buffer: x[cur]! }], [4, { buffer: feat2 }], [8, { buffer: f }], [6, { buffer: this.lp.body }]])
-    const strips: TailStrip[] = []
-    const stripCount = Math.ceil((rows - 2 * CONTEXT) / TAIL_ROWS)
+    this.buffers = { bw, rows, x, g, s: scratch, f, feat2, u1, u2, u3, first, firstT, blocks, body, strips: [] }
+    this.ensureStrips(Math.ceil((rows - 2 * CONTEXT) / TAIL_ROWS))
+  }
+
+  /** Tail strips (uniforms and bind groups) for at least `count` strips of the transformed core. */
+  private ensureStrips(count: number): void {
+    const buffers = this.buffers!
+    const device = this.device
     const wUp1 = this.weightsOf('conv_up1')
     const wUp2 = this.weightsOf('conv_up2')
     const wHr = this.weightsOf('conv_hr')
-    for (let k = 0; k < stripCount; k++) {
+    for (let k = buffers.strips.length; k < count; k++) {
       const lpUp1 = this.layerUniform(`lp-up1-${k}`, { cin: 64, inScale: 2, srcY0: CONTEXT + k * TAIL_ROWS - TAIL_CONTEXT })
-      strips.push({
+      buffers.strips.push({
         lpUp1,
         rgbParams: this.uniform(`rgb-${k}`, RGB_OUT_PARAMS_BYTES),
         up1: bindGroup(device, `rrdb-up1-${k}`, this.pipelines.up.layout, [
-          [0, { buffer: feat2 }],
+          [0, { buffer: buffers.feat2 }],
           [1, { buffer: wUp1.weight }],
           [2, { buffer: wUp1.bias }],
-          [4, { buffer: u1 }],
+          [4, { buffer: buffers.u1 }],
           [5, { buffer: this.bandUp1 }],
           [6, { buffer: lpUp1 }],
         ]),
         up2: bindGroup(device, 'rrdb-up2', this.pipelines.up.layout, [
-          [0, { buffer: u1 }],
+          [0, { buffer: buffers.u1 }],
           [1, { buffer: wUp2.weight }],
           [2, { buffer: wUp2.bias }],
-          [4, { buffer: u2 }],
+          [4, { buffer: buffers.u2 }],
           [5, { buffer: this.bandUp2 }],
           [6, { buffer: this.lp.up2 }],
         ]),
         hr: bindGroup(device, 'rrdb-hr', this.pipelines.up.layout, [
-          [0, { buffer: u2 }],
+          [0, { buffer: buffers.u2 }],
           [1, { buffer: wHr.weight }],
           [2, { buffer: wHr.bias }],
-          [4, { buffer: u3 }],
+          [4, { buffer: buffers.u3 }],
           [5, { buffer: this.bandHr }],
           [6, { buffer: this.lp.hr }],
         ]),
       })
     }
-    this.buffers = { bw, rows, x, g, s: scratch, f, u1, u2, u3, first, blocks, body, strips }
   }
 
-  protected beginRun(page: GPUBuffer): void {
+  protected beginRun(page: GPUBuffer, factor: EsrganFactor, passes: number, W: number, H: number): void {
     const buffers = this.buffers!
+    const device = this.device
+    const coreRows = Math.min(buffers.rows - 2 * CONTEXT, H)
+    // Transposed passes walk the page's width as rows: as many strips as that needs.
+    const swaps = ensembleTransforms(passes as EnsembleSize).some((t) => t.swap)
+    this.ensureStrips(Math.max(Math.ceil(coreRows / TAIL_ROWS), swaps ? Math.ceil(W / TAIL_ROWS) : 0))
     const wLast = this.weightsOf('conv_last')
+    let tout: GPUBuffer | null = null
+    let acc: GPUBuffer | null = null
+    if (passes > 1) {
+      const bytes = W * factor * coreRows * factor * 16
+      if (!this.ensembleBuffers || this.ensembleBuffers.bytes < bytes) {
+        this.ensembleBuffers?.tout.destroy()
+        this.ensembleBuffers?.acc.destroy()
+        this.ensembleBuffers = { bytes, tout: this.storage('rrdb-ensemble-out', bytes), acc: this.storage('rrdb-ensemble-acc', bytes) }
+      }
+      tout = this.ensembleBuffers.tout
+      acc = this.ensembleBuffers.acc
+    }
+    const rgbPipeline = tout ? this.pipelines.rgbToBuffer : this.pipelines.rgb
     this.run = {
       rgbGroups: buffers.strips.map((s, k) =>
-        bindGroup(this.device, `rrdb-rgb-${k}`, this.pipelines.rgb, [
+        bindGroup(device, `rrdb-rgb-${k}`, rgbPipeline, [
           [0, { buffer: buffers.u3 }],
           [1, { buffer: wLast.weight }],
           [2, { buffer: wLast.bias }],
-          [3, { buffer: page }],
+          [3, { buffer: tout ?? page }],
           [4, { buffer: s.rgbParams }],
         ]),
       ),
+      untransformGroup:
+        tout && acc
+          ? bindGroup(device, 'rrdb-untransform', this.pipelines.untransform, [
+              [0, { buffer: tout }],
+              [1, { buffer: acc }],
+              [2, { buffer: this.shuffleParams }],
+            ])
+          : null,
+      finalizeGroup: acc
+        ? bindGroup(device, 'rrdb-finalize', this.pipelines.finalize, [
+            [0, { buffer: acc }],
+            [1, { buffer: page }],
+            [2, { buffer: this.shuffleParams }],
+          ])
+        : null,
     }
   }
 
@@ -933,19 +1011,32 @@ class RrdbUpscaler extends GpuUpscaler {
     const device = this.device
     const buffers = this.buffers!
     const run = this.run!
-    const { tw: bw, th: bh, rows, W, factor, outW, outH, y0 } = job
+    const { tw, th, rows, W, factor, outW, outH, y0, transform: t, pass, passes } = job
     const q = quadBytes(this.options)
-    const planeBytes = bw * bh * q
+    const planeBytes = tw * th * q
     const tailRows = TAIL_ROWS + 2 * TAIL_CONTEXT
-    device.queue.writeBuffer(this.bandParams, 0, new Uint32Array([bw, bh, bw, bh]))
-    device.queue.writeBuffer(this.bandUp1, 0, new Uint32Array([bw * 2, tailRows * 2, bw, bh]))
-    const stripCount = Math.ceil(rows / TAIL_ROWS)
+    // The core in the transformed band: the tail walks its rows in strips.
+    const core = transformedCore(t, t.swap ? th : tw, W, rows)
+    device.queue.writeBuffer(this.bandParams, 0, new Uint32Array([tw, th, tw, th]))
+    device.queue.writeBuffer(this.bandUp1, 0, new Uint32Array([tw * 2, tailRows * 2, tw, th]))
+    device.queue.writeBuffer(this.bandUp2, 0, new Uint32Array([tw * 4, tailRows * 4, tw * 2, tailRows * 2]))
+    device.queue.writeBuffer(this.bandHr, 0, new Uint32Array([tw * 4, tailRows * 4, tw * 4, tailRows * 4]))
+    const stripCount = Math.ceil(core.h / TAIL_ROWS)
     for (let k = 0; k < stripCount; k++) {
-      const stripY0 = CONTEXT + k * TAIL_ROWS
+      const strip = buffers.strips[k]!
+      const stripY0 = core.y0 + k * TAIL_ROWS
+      device.queue.writeBuffer(strip.lpUp1, 0, layerParams({ cin: 64, inScale: 2, srcY0: stripY0 - TAIL_CONTEXT }))
       device.queue.writeBuffer(
-        buffers.strips[k]!.rgbParams,
+        strip.rgbParams,
         0,
-        new Uint32Array([bw * 4, tailRows * 4, (stripY0 - TAIL_CONTEXT) * 4, CONTEXT * 4, W * 4, rows * 4, y0 * 4, outW, outH, factor, stripY0 * 4, 0]),
+        new Uint32Array([tw * 4, tailRows * 4, (stripY0 - TAIL_CONTEXT) * 4, core.x0 * 4, core.y0 * 4, core.w * 4, core.h * 4, stripY0 * 4, y0 * 4, outW, outH, factor]),
+      )
+    }
+    if (passes > 1) {
+      device.queue.writeBuffer(
+        this.shuffleParams,
+        0,
+        new Uint32Array([tw, th, CONTEXT, W, y0, rows, outW, outH, factor, t.swap ? 1 : 0, t.flipX ? 1 : 0, t.flipY ? 1 : 0, pass === 0 ? 1 : 0, W * factor, passes, 0]),
       )
     }
     const commands: GPUCommandBuffer[] = []
@@ -955,7 +1046,7 @@ class RrdbUpscaler extends GpuUpscaler {
       const pass = encoder.beginComputePass()
       pass.setPipeline(d.conv.byRows[this.variant])
       pass.setBindGroup(0, d.group)
-      pass.dispatchWorkgroups(Math.ceil(bw / BODY_BLOCK_W), Math.ceil(bh / blockH))
+      pass.dispatchWorkgroups(Math.ceil(tw / BODY_BLOCK_W), Math.ceil(th / blockH))
       pass.end()
       if (d.growth !== undefined) encoder.copyBufferToBuffer(buffers.s, 0, buffers.g, d.growth * 8 * planeBytes, 8 * planeBytes)
     }
@@ -964,8 +1055,8 @@ class RrdbUpscaler extends GpuUpscaler {
       const encoder = device.createCommandEncoder({ label: 'rrdb-first' })
       const pass = encoder.beginComputePass()
       pass.setPipeline(this.pipelines.first)
-      pass.setBindGroup(0, buffers.first)
-      pass.dispatchWorkgroups(Math.ceil(bw / 8), Math.ceil(bh / 8))
+      pass.setBindGroup(0, t.swap ? buffers.firstT : buffers.first)
+      pass.dispatchWorkgroups(Math.ceil(tw / 8), Math.ceil(th / 8))
       pass.end()
       encoder.copyBufferToBuffer(buffers.f, 0, buffers.x[0]!, 0, 16 * planeBytes)
       commands.push(encoder.finish())
@@ -982,6 +1073,7 @@ class RrdbUpscaler extends GpuUpscaler {
       commands.push(encoder.finish())
     }
     // The x4 tail, strip by strip; four strips per command buffer.
+    const rgbPipeline = passes > 1 ? this.pipelines.rgbToBuffer : this.pipelines.rgb
     for (let k0 = 0; k0 < stripCount; k0 += 4) {
       const encoder = device.createCommandEncoder({ label: `rrdb-tail-${k0}` })
       const pass = encoder.beginComputePass()
@@ -989,16 +1081,31 @@ class RrdbUpscaler extends GpuUpscaler {
         const strip = buffers.strips[k]!
         pass.setPipeline(up)
         pass.setBindGroup(0, strip.up1)
-        pass.dispatchWorkgroups(Math.ceil((bw * 2) / BODY_BLOCK_W), Math.ceil((tailRows * 2) / blockH))
+        pass.dispatchWorkgroups(Math.ceil((tw * 2) / BODY_BLOCK_W), Math.ceil((tailRows * 2) / blockH))
         pass.setBindGroup(0, strip.up2)
-        pass.dispatchWorkgroups(Math.ceil((bw * 4) / BODY_BLOCK_W), Math.ceil((tailRows * 4) / blockH))
+        pass.dispatchWorkgroups(Math.ceil((tw * 4) / BODY_BLOCK_W), Math.ceil((tailRows * 4) / blockH))
         pass.setBindGroup(0, strip.hr)
-        pass.dispatchWorkgroups(Math.ceil((bw * 4) / BODY_BLOCK_W), Math.ceil((tailRows * 4) / blockH))
-        pass.setPipeline(this.pipelines.rgb)
+        pass.dispatchWorkgroups(Math.ceil((tw * 4) / BODY_BLOCK_W), Math.ceil((tailRows * 4) / blockH))
+        pass.setPipeline(rgbPipeline)
         pass.setBindGroup(0, run.rgbGroups[k]!)
-        pass.dispatchWorkgroups(Math.ceil((W * factor) / 8), Math.ceil((TAIL_ROWS * factor) / 8))
+        pass.dispatchWorkgroups(Math.ceil((core.w * factor) / 8), Math.ceil((TAIL_ROWS * factor) / 8))
       }
       pass.end()
+      commands.push(encoder.finish())
+    }
+    // Self-ensemble: put this pass back into the original orientation and accumulate; average on the last.
+    if (passes > 1 && run.untransformGroup && run.finalizeGroup) {
+      const encoder = device.createCommandEncoder({ label: 'rrdb-ensemble' })
+      const computePass = encoder.beginComputePass()
+      computePass.setPipeline(this.pipelines.untransform)
+      computePass.setBindGroup(0, run.untransformGroup)
+      computePass.dispatchWorkgroups(Math.ceil((W * factor) / 8), Math.ceil((rows * factor) / 8))
+      if (pass === passes - 1) {
+        computePass.setPipeline(this.pipelines.finalize)
+        computePass.setBindGroup(0, run.finalizeGroup)
+        computePass.dispatchWorkgroups(Math.ceil((W * factor) / 8), Math.ceil((rows * factor) / 8))
+      }
+      computePass.end()
       commands.push(encoder.finish())
     }
     return commands
@@ -1013,6 +1120,9 @@ class RrdbUpscaler extends GpuUpscaler {
       s.rgbParams.destroy()
     }
     this.buffers = null
+    this.ensembleBuffers?.tout.destroy()
+    this.ensembleBuffers?.acc.destroy()
+    this.ensembleBuffers = null
   }
 
   dispose(): void {
@@ -1022,5 +1132,6 @@ class RrdbUpscaler extends GpuUpscaler {
     this.bandUp1.destroy()
     this.bandUp2.destroy()
     this.bandHr.destroy()
+    this.shuffleParams.destroy()
   }
 }
