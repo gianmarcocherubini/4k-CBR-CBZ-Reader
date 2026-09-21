@@ -23,7 +23,7 @@
 </p>
 
 <p align="center">
-  <img src="media/readme/hero-before-after.png" alt="Before and after: a 252×396 px cover viewed at 4×. Left, standard upscaling; right, Mangadana's 4K mode (Real-ESRGAN) computed on the device." width="960">
+  <img src="media/readme/demon-slayer-crop-before-after.png" alt="Before and after: a 252×396 px cover viewed at 4×. Left, standard upscaling; right, Mangadana's 4K mode (Real-ESRGAN) computed on the device." width="960">
 </p>
 
 <p align="center"><sub>The same 252 × 396 px JPEG cover, viewed at 4×. Left: what a browser shows you. Right: Mangadana's 4K mode (Slow · best), computed on the device.<br>Demon Slayer: Kimetsu no Yaiba © Koyoharu Gotouge / Shueisha — cover used for demonstration only.</sub></p>
@@ -41,7 +41,7 @@ Everything happens in the browser, on your device. There is no server: your file
 - **Installable.** Open the site in Safari and *Add to Home Screen*: a full-screen app with its own icon and splash screen that updates itself.
 
 <p align="center">
-  <img src="media/readme/reader-ipad.png" alt="The reader on an iPad in landscape: a volume cover on the dark stage, with the title bar and the page slider." width="900">
+  <img src="media/readme/reader-ipad-demon-slayer.png" alt="The reader on an iPad in landscape: a volume cover on the dark stage, with the title bar and the page slider." width="900">
 </p>
 
 ## Get started
@@ -64,7 +64,7 @@ Everything happens in the browser, on your device. There is no server: your file
 Both networks are implemented directly in WGSL and run through WebGPU (no ONNX runtime, no WebAssembly). Pages are upscaled at a fixed factor (×4, or ×2 when the result would exceed Safari's canvas limits) and then fitted to the screen with a Lanczos resampler, so zooming never recomputes anything and downscaling a ×4 result to screen pixels is what makes the lines look clean. On first use the app measures your GPU and picks the fastest convolution kernel for it. In 4K mode an *anti-spoiler* blur can hide the plain page until its enhanced version is ready.
 
 <p align="center">
-  <img src="media/readme/cover-before-after.jpg" alt="The whole cover, standard upscaling on the left and Mangadana 4K on the right." width="900">
+  <img src="media/readme/demon-slayer-cover-before-after.jpg" alt="The whole cover, standard upscaling on the left and Mangadana 4K on the right." width="900">
 </p>
 
 The numbers above are measurements on an iPad with an M-series chip; older iPads are slower, and the app falls back to HD when a page would take too long. The WebGPU kernels are verified against a float32 reference implementation of both networks, which in turn reproduces the PyTorch models to within 2/255 on the test fixtures. The images on this page were produced with that reference, from the very weights shipped in the app.
