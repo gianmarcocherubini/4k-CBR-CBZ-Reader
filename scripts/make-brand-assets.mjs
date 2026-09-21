@@ -4,8 +4,10 @@
 //   public/splash/<w>x<h>-{light,dark}.png   iOS startup images, one per iPad size and orientation
 //   public/brand/social-preview.png          1280×640 card for Open Graph and the GitHub social preview
 //   public/brand/wordmark-{light,dark}.png   README header, transparent, 2×
-//   public/favicon.ico                       16, 32 and 48 px tiles for the browsers that do not take an
-//                                            SVG favicon (Safari) and for everything that asks for /favicon.ico
+//   public/favicon.ico                       16, 32 and 48 px tiles (classic BMP entries) for the browsers
+//                                            that do not take an SVG favicon (Safari) and for everything
+//                                            that asks for /favicon.ico
+//   public/icons/favicon-{16,32}.png         the same tiles as PNG, for <link rel="icon" type="image/png">
 //   public/icons/mask-icon.svg               Safari pinned-tab mask (monochrome, 16×16 viewBox)
 //
 // The crown is read from src/components/crown.json (the same path the app draws); text is set in
@@ -71,22 +73,22 @@ body{display:flex;align-items:center;justify-content:center;font-family:Inter,sa
 ${css}
 </style></head><body>${body}</body></html>`
 
-async function render(page, { width, height, html, omitBackground = false }) {
+async function render(page, { width, height, html, omitBackground = false, raw = false }) {
   await page.setViewportSize({ width, height })
   await page.setContent(html, { waitUntil: 'load' })
   await page.evaluate(() => document.fonts.ready)
-  return indexedPng(await page.screenshot({ type: 'png', omitBackground }))
+  const png = await page.screenshot({ type: 'png', omitBackground })
+  return raw ? png : indexedPng(png)
 }
 
 /** Above this many distinct colours the image is real artwork, not a mark on a background: left as is. */
 const MAX_COLOURS = 512
 
 /**
- * Chromium writes 8-bit truecolor PNGs; a flat background with one anti-aliased mark has at most a
- * few hundred colours, so the same image stored as an indexed PNG is 5–10× smaller. Images with
- * many more colours (the social card with its text) are returned unchanged.
+ * Decodes an 8-bit truecolor PNG (RGB or RGBA, non-interlaced, as Chromium writes them) to raw
+ * pixels. Anything else returns null.
  */
-function indexedPng(png) {
+function decodePng(png) {
   const chunks = []
   let pos = 8
   while (pos < png.length) {
@@ -99,7 +101,7 @@ function indexedPng(png) {
   const width = ihdr.readUInt32BE(0)
   const height = ihdr.readUInt32BE(4)
   const colorType = ihdr[9]
-  if (ihdr[8] !== 8 || ihdr[12] !== 0 || (colorType !== 2 && colorType !== 6)) return png
+  if (ihdr[8] !== 8 || ihdr[12] !== 0 || (colorType !== 2 && colorType !== 6)) return null
   const bpp = colorType === 6 ? 4 : 3
   const raw = inflateSync(Buffer.concat(chunks.filter((c) => c.type === 'IDAT').map((c) => c.data)))
   const stride = width * bpp
@@ -128,6 +130,19 @@ function indexedPng(png) {
     }
     prev = out
   }
+  return { width, height, bpp, pixels, ihdr }
+}
+
+/**
+ * Chromium writes 8-bit truecolor PNGs; a flat background with one anti-aliased mark has at most a
+ * few hundred colours, so the same image stored as an indexed PNG is 5–10× smaller. Images with
+ * many more colours (the social card with its text) are returned unchanged.
+ */
+function indexedPng(png) {
+  const decoded = decodePng(png)
+  if (!decoded) return png
+  const { width, height, bpp, pixels, ihdr } = decoded
+  const stride = width * bpp
   const keyAt = (o) => ((pixels[o] << 24) | (pixels[o + 1] << 16) | (pixels[o + 2] << 8) | (bpp === 4 ? pixels[o + 3] : 255)) >>> 0
   const counts = new Map()
   for (let o = 0; o < pixels.length; o += bpp) {
@@ -271,9 +286,39 @@ function tileSvg(px, { crownFraction, radiusFraction, stroke = 0 }) {
 }
 
 /**
- * ICO container: a 6-byte header, one 16-byte directory entry per image, then the images. PNG
- * payloads are accepted by every current browser and keep the file small.
+ * One ICO image in the classic form every decoder handles (Safari's ImageIO included; PNG
+ * payloads are not reliably read there): BITMAPINFOHEADER, 32-bit BGRA rows bottom-up, then the
+ * 1-bit AND mask, set from the alpha channel for readers that ignore alpha.
  */
+function dib(png) {
+  const { width, height, bpp, pixels } = decodePng(png)
+  const header = Buffer.alloc(40)
+  header.writeUInt32LE(40, 0)
+  header.writeInt32LE(width, 4)
+  header.writeInt32LE(height * 2, 8)
+  header.writeUInt16LE(1, 12)
+  header.writeUInt16LE(32, 14)
+  const xor = Buffer.alloc(width * height * 4)
+  const maskStride = ((width + 31) >> 5) * 4
+  const and = Buffer.alloc(maskStride * height)
+  for (let y = 0; y < height; y++) {
+    const row = height - 1 - y
+    for (let x = 0; x < width; x++) {
+      const s = (y * width + x) * bpp
+      const d = (row * width + x) * 4
+      const alpha = bpp === 4 ? pixels[s + 3] : 255
+      xor[d] = pixels[s + 2]
+      xor[d + 1] = pixels[s + 1]
+      xor[d + 2] = pixels[s]
+      xor[d + 3] = alpha
+      if (alpha === 0) and[row * maskStride + (x >> 3)] |= 0x80 >> (x & 7)
+    }
+  }
+  header.writeUInt32LE(xor.length + and.length, 20)
+  return Buffer.concat([header, xor, and])
+}
+
+/** ICO container: a 6-byte header, one 16-byte directory entry per image, then the images. */
 function ico(images) {
   const header = Buffer.alloc(6)
   header.writeUInt16LE(0, 0)
@@ -281,7 +326,7 @@ function ico(images) {
   header.writeUInt16LE(images.length, 4)
   const entries = []
   let offset = 6 + 16 * images.length
-  for (const { size, png } of images) {
+  for (const { size, data } of images) {
     const entry = Buffer.alloc(16)
     entry[0] = size === 256 ? 0 : size
     entry[1] = size === 256 ? 0 : size
@@ -289,12 +334,12 @@ function ico(images) {
     entry[3] = 0
     entry.writeUInt16LE(1, 4)
     entry.writeUInt16LE(32, 6)
-    entry.writeUInt32LE(png.length, 8)
+    entry.writeUInt32LE(data.length, 8)
     entry.writeUInt32LE(offset, 12)
     entries.push(entry)
-    offset += png.length
+    offset += data.length
   }
-  return Buffer.concat([header, ...entries, ...images.map((image) => image.png)])
+  return Buffer.concat([header, ...entries, ...images.map((image) => image.data)])
 }
 
 async function favicon(page) {
@@ -309,15 +354,19 @@ async function favicon(page) {
   const images = []
   for (const [size, tile] of Object.entries(tiles).map(([k, v]) => [Number(k), v])) {
     const html = page_(tileSvg(size, tile), 'body{background:transparent;display:block}')
-    images.push({ size, png: await render(page, { width: size, height: size, html, omitBackground: true }) })
+    const png = await render(page, { width: size, height: size, html, omitBackground: true, raw: true })
+    images.push({ size, data: dib(png) })
+    // The same tiles as plain PNGs, for the <link rel="icon" type="image/png"> tags.
+    if (size !== 48) await writeFile(join(publicDir, 'icons', `favicon-${size}.png`), indexedPng(png))
   }
-  await writeFile(join(publicDir, 'favicon.ico'), ico(images))
+  const file = ico(images)
+  await writeFile(join(publicDir, 'favicon.ico'), file)
   const mask = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
   <path transform="scale(0.16)" d="${crown.d}"/>
 </svg>
 `
   await writeFile(join(publicDir, 'icons', 'mask-icon.svg'), mask)
-  console.log(`favicon: public/favicon.ico (16, 32, 48 px; ${ico(images).length} bytes), public/icons/mask-icon.svg`)
+  console.log(`favicon: public/favicon.ico (16, 32, 48 px, BMP; ${file.length} bytes), public/icons/favicon-{16,32}.png, public/icons/mask-icon.svg`)
 }
 
 const wanted = new Set(process.argv.slice(2))
