@@ -9,7 +9,7 @@
 // Inter, the typeface in the app's font stack after the system fonts, fetched once from the
 // fontsource package on jsDelivr and cached under node_modules/.cache.
 //
-//   node scripts/make-brand-assets.mjs [splash] [social] [wordmark]     (default: everything)
+//   node scripts/make-brand-assets.mjs [splash] [social] [wordmark]     (default: everything; Node 22+)
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
