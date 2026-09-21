@@ -53,6 +53,28 @@ export interface Progress {
   blanks?: number[]
 }
 
+/**
+ * A volume restored from a backup before its file is back in the library: everything the user
+ * had given it (title, collection, chosen cover, bookmark), applied when a file with the same name
+ * and size is imported.
+ */
+export interface PendingRestore {
+  /** `${fileSize}:${fileName}`, the importer's duplicate key. */
+  key: string
+  fileName: string
+  fileSize: number
+  title: string
+  pageCount: number
+  addedAt: number
+  lastReadAt: number
+  collectionId?: string
+  /** Only user-chosen (remote) covers travel in a backup; archive thumbnails are rebuilt on import. */
+  cover?: Blob
+  progress?: Omit<Progress, 'bookId'>
+  /** When the backup was restored. */
+  restoredAt: number
+}
+
 export type Direction = 'rtl' | 'ltr'
 export type PageMode = 'single' | 'double' | 'auto'
 /** Appearance: follow the system, or force light/dark like Apple Books' themes. */

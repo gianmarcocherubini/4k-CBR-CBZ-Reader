@@ -112,6 +112,7 @@ export default function App() {
         onSessionBook={addSessionBook}
         onRemoveSessionBook={removeSessionBook}
         requestPassword={requestPassword}
+        onRestoreSettings={updateSettings}
       />
     )
 

@@ -3,7 +3,7 @@ import { openArchive } from '../archive/openArchive'
 import { ArchiveError, type ArchiveErrorCode, isArchiveError } from '../archive/types'
 import { detectBlob, titleFromFileName } from '../detect'
 import type { CopyRequest, CopyResponse } from './copyProtocol'
-import { deleteBookRecord, getFile, listBooks, putBook, putFileAndBook, putPageSizes } from './db'
+import { deleteBookRecord, deletePendingRestore, getFile, getPendingRestore, listBooks, listCollections, putBook, putFileAndBook, putPageSizes, putProgress } from './db'
 import {
   beginOpfsBookWrite,
   BOOKS_DIR,
@@ -239,9 +239,29 @@ export async function importFile(file: File, opts: ImportOptions = {}): Promise<
       coverSource: info.cover ? 'archive' : undefined,
       passwordProtected: password !== undefined,
     }
+    // A restored backup listed this file: give the volume back its title, collection, cover and bookmark.
+    const pending = await getPendingRestore(file.name, file.size).catch(() => undefined)
+    if (pending) {
+      book.title = pending.title
+      book.lastReadAt = pending.lastReadAt
+      if (pending.addedAt > 0) book.addedAt = pending.addedAt
+      if (pending.collectionId && (await listCollections()).some((collection) => collection.id === pending.collectionId)) {
+        book.collectionId = pending.collectionId
+      }
+      if (pending.cover) {
+        book.cover = pending.cover
+        book.coverSource = 'remote'
+      }
+    }
     if (stored === 'idb') await putFileAndBook(book, file)
     else await putBook(book)
     throwIfAborted(opts.signal)
+    if (pending) {
+      if (pending.progress && info.pageCount > 0) {
+        await putProgress({ bookId: id, ...pending.progress, page: Math.min(pending.progress.page, info.pageCount - 1) })
+      }
+      await deletePendingRestore(pending.key)
+    }
     if (password !== undefined) rememberArchivePassword(id, password)
     if (info.firstSize) {
       const sizes: Array<PageSize | null> = new Array(info.pageCount).fill(null)

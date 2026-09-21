@@ -2,18 +2,33 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { ArchiveError, describeError, isArchiveError } from '../lib/archive/types'
 import { ALL_COLLECTION_ID, collectionViews, DEFAULT_COLLECTION_ID, effectiveCollectionId, mostRecentCollectionId, type CollectionView } from '../lib/collections'
 import { flags, isIOS, isStandalone } from '../lib/flags'
-import { DatabaseBlockedError, deleteCollection, getAllProgress, getBook, listBooks, listCollections, putBook, putCollection } from '../lib/storage/db'
+import { applyLibraryView, LIBRARY_SORTS, type LibrarySort, type LibraryView, loadLibraryView, READING_FILTERS, type ReadingFilter, readingState, saveLibraryView } from '../lib/libraryView'
+import { useRelocationNotice } from '../lib/relocation'
+import { createBackupFile, restoreBackupFile, type RestoreResult, shareOrDownload } from '../lib/storage/backupActions'
+import {
+  clearPendingRestores,
+  DatabaseBlockedError,
+  deleteCollection,
+  getAllProgress,
+  getBook,
+  listBooks,
+  listCollections,
+  listPendingRestores,
+  putBook,
+  putCollection,
+} from '../lib/storage/db'
 import { type ArchivePasswordRequest, deleteBook, importFile, newId, openSessionBook } from '../lib/storage/importer'
 import { cleanupOrphanedBookFiles, estimateStorage, formatBytes, ORPHAN_RETRY_MS, type StorageEstimate } from '../lib/storage/opfs'
-import type { Book, Collection, Progress } from '../types'
-import { BookCard, ContinueCard, readingState } from './BookCard'
-import { CrownMark, Wordmark } from './Brand'
+import type { Book, Collection, PendingRestore, Progress, ReaderSettings } from '../types'
+import { BookCard, ContinueCard } from './BookCard'
+import { CrownMark, SITE_URL, Wordmark } from './Brand'
 import { BookEditDialog } from './BookEditDialog'
 import { CollectionDialog } from './CollectionDialog'
 import { CollectionTabs } from './CollectionTabs'
 import { CoverSearchDialog } from './CoverSearchDialog'
 import { Dialog, DialogAction } from './Dialog'
 import { type ImportItem, ImportOverlay } from './ImportOverlay'
+import { Segmented } from './reader/SettingsPanel'
 
 interface LibraryProps {
   sessionBooks: Book[]
@@ -23,6 +38,8 @@ interface LibraryProps {
   onSessionBook: (book: Book) => void
   onRemoveSessionBook: (id: string) => void
   requestPassword: (request: ArchivePasswordRequest) => Promise<string | null>
+  /** Reading settings found in a restored backup, to apply to the running app. */
+  onRestoreSettings?: (settings: ReaderSettings) => void
 }
 
 declare global {
@@ -56,14 +73,35 @@ const SearchIcon = (
     <path d="m20 20-3.5-3.5" />
   </svg>
 )
+const MoreIcon = (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+    <circle cx="5" cy="12" r="1.8" />
+    <circle cx="12" cy="12" r="1.8" />
+    <circle cx="19" cy="12" r="1.8" />
+  </svg>
+)
 /** Volumes shown on the "Continua a leggere" shelf, most recently read first. */
 const CONTINUE_LIMIT = 8
+const EMPTY_FILTER_LABEL: Record<ReadingFilter, string> = {
+  all: '',
+  unread: 'Nessun volume da leggere',
+  reading: 'Nessun volume in lettura',
+  finished: 'Nessun volume finito',
+}
+const BACKUP_ACCEPT = '.json,application/json'
 
-export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBook, onRemoveSessionBook, requestPassword }: LibraryProps) {
+export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBook, onRemoveSessionBook, requestPassword, onRestoreSettings }: LibraryProps) {
   const [books, setBooks] = useState<Book[] | null>(null)
   const [collections, setCollections] = useState<Collection[]>([])
   const [selectedCollectionId, setSelectedCollectionId] = useState(DEFAULT_COLLECTION_ID)
   const [progress, setProgress] = useState<Map<string, Progress>>(new Map())
+  const [pendingRestores, setPendingRestores] = useState<PendingRestore[]>([])
+  const [view, setView] = useState<LibraryView>(loadLibraryView)
+  const [libraryMenu, setLibraryMenu] = useState(false)
+  const [backupBusy, setBackupBusy] = useState(false)
+  const [restoreResult, setRestoreResult] = useState<RestoreResult | null>(null)
+  const [showPending, setShowPending] = useState(false)
+  const relocated = useRelocationNotice()
   const [estimate, setEstimate] = useState<StorageEstimate | null>(null)
   const [importItems, setImportItems] = useState<ImportItem[] | null>(null)
   const [importing, setImporting] = useState(false)
@@ -82,6 +120,7 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
   const abortRef = useRef<AbortController | null>(null)
   const importInput = useRef<HTMLInputElement>(null)
   const sessionInput = useRef<HTMLInputElement>(null)
+  const restoreInput = useRef<HTMLInputElement>(null)
   const orphanCleanupDone = useRef(false)
   const initialCollectionSelected = useRef(false)
   const refreshGeneration = useRef(0)
@@ -98,10 +137,11 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
         async (bookId) => (await getBook(bookId))?.storage === 'opfs',
       )
     }
-    const [p, e] = await Promise.all([getAllProgress(), estimateStorage()])
+    const [p, e, pending] = await Promise.all([getAllProgress(), estimateStorage(), listPendingRestores()])
     if (generation !== refreshGeneration.current) return
     setBooks(b)
     setCollections(c)
+    setPendingRestores(pending)
     if (!initialCollectionSelected.current) {
       initialCollectionSelected.current = true
       setSelectedCollectionId(mostRecentCollectionId(c, b))
@@ -356,6 +396,48 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
     showNextCoverSuggestion()
   }
 
+  const exportBackup = async () => {
+    setLibraryMenu(false)
+    if (backupBusy) return
+    setBackupBusy(true)
+    try {
+      await shareOrDownload(await createBackupFile())
+    } catch (reason) {
+      reportOperationError(reason, 'Impossibile creare il backup')
+    } finally {
+      setBackupBusy(false)
+    }
+  }
+
+  const restoreBackup = async (file: File) => {
+    try {
+      const result = await restoreBackupFile(file)
+      if (result.settings) onRestoreSettings?.(result.settings)
+      setRestoreResult(result)
+      await refresh()
+    } catch (reason) {
+      reportOperationError(reason, 'Impossibile ripristinare il backup')
+    }
+  }
+
+  const dismissPendingRestores = async () => {
+    setShowPending(false)
+    try {
+      await clearPendingRestores()
+      await refresh()
+    } catch (reason) {
+      reportOperationError(reason)
+    }
+  }
+
+  const updateView = (patch: Partial<LibraryView>) => {
+    setView((prev) => {
+      const next = { ...prev, ...patch }
+      saveLibraryView(next)
+      return next
+    })
+  }
+
   const allBooks = [...sessionBooks, ...(books ?? [])]
   const collectionList = collectionViews(collections, allBooks)
   const knownCollectionIds = new Set(collections.map((collection) => collection.id))
@@ -364,7 +446,8 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
       ? allBooks
       : allBooks.filter((book) => effectiveCollectionId(book, knownCollectionIds) === selectedCollectionId)
   const needle = query.trim().toLocaleLowerCase('it')
-  const visibleBooks = needle ? inCollection.filter((book) => book.title.toLocaleLowerCase('it').includes(needle)) : inCollection
+  const matchingQuery = needle ? inCollection.filter((book) => book.title.toLocaleLowerCase('it').includes(needle)) : inCollection
+  const visibleBooks = applyLibraryView(matchingQuery, progress, view)
   const selectedCollectionName =
     selectedCollectionId === ALL_COLLECTION_ID
       ? 'Tutti i libri'
@@ -417,6 +500,15 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
             {PlusIcon}
             Importa
           </button>
+          <button
+            type="button"
+            className="btn-icon !h-[34px] !w-[34px]"
+            onClick={() => setLibraryMenu(true)}
+            aria-label="Altre azioni: backup e ripristino"
+            data-testid="library-menu"
+          >
+            {MoreIcon}
+          </button>
         </div>
         {books !== null && (
           <div className="mx-auto w-full max-w-[1400px] px-5 sm:px-8">
@@ -454,6 +546,18 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
             e.currentTarget.value = ''
           }}
         />
+        <input
+          ref={restoreInput}
+          type="file"
+          accept={BACKUP_ACCEPT}
+          className="hidden"
+          data-testid="restore-input"
+          onChange={(e) => {
+            const f = e.currentTarget.files?.[0]
+            if (f) void restoreBackup(f)
+            e.currentTarget.value = ''
+          }}
+        />
       </header>
 
       <main className="mx-auto w-full max-w-[1400px] flex-1 px-5 pb-16 sm:px-8">
@@ -463,6 +567,46 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
             <button type="button" className="btn-pill" onClick={() => location.reload()}>
               Ricarica
             </button>
+          </div>
+        )}
+        {relocated && (
+          <div className="mt-6 rounded-[14px] bg-card px-5 py-4 shadow-[inset_0_0_0_1px_var(--line)]" role="status" data-testid="relocation-banner">
+            <div className="flex items-center gap-2 text-headline">
+              <CrownMark className="h-4 w-4 shrink-0" />
+              Mangadana ha un nuovo indirizzo: {new URL(SITE_URL).host}
+            </div>
+            <p className="mt-1.5 text-footnote text-label-2">
+              Questa copia dell’app resta legata al vecchio indirizzo e non riceverà più aggiornamenti; la libreria continua a
+              funzionare. Per passare: esporta un backup della libreria, apri {new URL(SITE_URL).host} in Safari e aggiungi
+              l’app alla schermata Home, poi nella nuova app ripristina il backup e importa di nuovo i file: titoli,
+              collezioni, copertine e segnalibri tornano da soli.
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button type="button" className="btn-primary !min-h-[34px] !px-3.5 !text-[13px]" onClick={() => void exportBackup()} disabled={backupBusy}>
+                Esporta backup
+              </button>
+              <a className="btn-ghost !min-h-[34px] !px-3.5 !text-[13px]" href={SITE_URL} target="_blank" rel="noopener">
+                Apri il nuovo indirizzo
+              </a>
+            </div>
+          </div>
+        )}
+        {pendingRestores.length > 0 && (
+          <div className="mt-6 flex flex-wrap items-center justify-between gap-3 rounded-[14px] bg-card px-4 py-3 shadow-[inset_0_0_0_1px_var(--line)]" role="status" data-testid="pending-restores">
+            <div className="min-w-0">
+              <span className="text-subhead">
+                Dal backup: {pendingRestores.length === 1 ? '1 volume da importare di nuovo.' : `${pendingRestores.length} volumi da importare di nuovo.`}
+              </span>{' '}
+              <span className="text-footnote text-label-2">Importando gli stessi file, titoli, collezioni, copertine e segnalibri tornano da soli.</span>
+            </div>
+            <div className="flex shrink-0 gap-2">
+              <button type="button" className="btn-pill" onClick={() => setShowPending(true)} data-testid="pending-restores-list">
+                Elenco
+              </button>
+              <button type="button" className="btn-pill" onClick={() => importInput.current?.click()}>
+                Importa file
+              </button>
+            </div>
           </div>
         )}
         {books === null ? (
@@ -492,6 +636,9 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
                 Apri senza importare
               </button>
             </div>
+            <button type="button" className="btn-plain mt-4 !text-[13px]" onClick={() => restoreInput.current?.click()} data-testid="restore-empty">
+              Ripristina da un backup
+            </button>
           </div>
         ) : (
           <>
@@ -511,17 +658,38 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
               </section>
             )}
             <section className="pt-8">
-              <div className="flex items-baseline justify-between gap-4">
-                <h2 className="text-large-title">{needle ? `Risultati per “${query.trim()}”` : selectedCollectionName}</h2>
-                <p className="shrink-0 text-footnote text-label-2 tabular-nums">
-                  {visibleBooks.length === 1 ? '1 volume' : `${visibleBooks.length} volumi`}
-                  {!needle && reading.length > 0 ? ` · ${reading.length} in lettura` : ''}
-                </p>
+              <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
+                <div className="min-w-0">
+                  <h2 className="text-large-title">{needle ? `Risultati per “${query.trim()}”` : selectedCollectionName}</h2>
+                  <p className="mt-1 text-footnote text-label-2 tabular-nums" data-testid="grid-count">
+                    {view.filter !== 'all' && matchingQuery.length !== visibleBooks.length
+                      ? `${visibleBooks.length} di ${matchingQuery.length} volumi`
+                      : visibleBooks.length === 1
+                        ? '1 volume'
+                        : `${visibleBooks.length} volumi`}
+                    {!needle && reading.length > 0 ? ` · ${reading.length} in lettura` : ''}
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2" data-testid="library-view">
+                  <Segmented<ReadingFilter> label="Filtra per stato di lettura" idPrefix="filter" value={view.filter} options={[...READING_FILTERS]} onChange={(filter) => updateView({ filter })} />
+                  <Segmented<LibrarySort> label="Ordina" idPrefix="sort" value={view.sort} options={[...LIBRARY_SORTS]} onChange={(sort) => updateView({ sort })} />
+                </div>
               </div>
               {visibleBooks.length === 0 ? (
-                <div className="mt-6 rounded-[14px] bg-card px-6 py-14 text-center shadow-[inset_0_0_0_1px_var(--line)]">
-                  <p className="text-body text-label-2">{needle ? 'Nessun volume corrisponde alla ricerca.' : 'Questa collezione è vuota.'}</p>
-                  {!needle && <p className="mt-1 text-footnote text-label-3">Modifica un volume per spostarlo qui oppure importane uno nuovo.</p>}
+                <div className="mt-6 rounded-[14px] bg-card px-6 py-14 text-center shadow-[inset_0_0_0_1px_var(--line)]" data-testid="grid-empty">
+                  <p className="text-body text-label-2">
+                    {needle
+                      ? 'Nessun volume corrisponde alla ricerca.'
+                      : matchingQuery.length > 0
+                        ? `${EMPTY_FILTER_LABEL[view.filter]} in questa collezione.`
+                        : 'Questa collezione è vuota.'}
+                  </p>
+                  {!needle && matchingQuery.length === 0 && <p className="mt-1 text-footnote text-label-3">Modifica un volume per spostarlo qui oppure importane uno nuovo.</p>}
+                  {!needle && matchingQuery.length > 0 && (
+                    <button type="button" className="btn-pill mt-4" onClick={() => updateView({ filter: 'all' })}>
+                      Mostra tutti
+                    </button>
+                  )}
                 </div>
               ) : (
                 <div className="mt-5 grid grid-cols-[repeat(auto-fill,minmax(136px,1fr))] gap-x-5 gap-y-9 sm:grid-cols-[repeat(auto-fill,minmax(164px,1fr))] lg:grid-cols-[repeat(auto-fill,minmax(184px,1fr))]">
@@ -549,6 +717,9 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
               : 'Spazio disponibile: sconosciuto'}
           </span>
           <span>{books?.length ?? 0} nella libreria</span>
+          <a className="hover:text-label" href={SITE_URL} target="_blank" rel="noopener">
+            {new URL(SITE_URL).host}
+          </a>
           <span className="font-mono tabular-nums" data-testid="app-version">
             Versione {__APP_VERSION__} ({__APP_BUILD__})
           </span>
@@ -571,6 +742,114 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
             if (!coverBook) beginCoverSuggestions()
           }}
         />
+      )}
+
+      {libraryMenu && (
+        <Dialog
+          title="Backup della libreria"
+          onClose={() => setLibraryMenu(false)}
+          actions={
+            <>
+              <DialogAction primary onClick={() => void exportBackup()} testId="export-backup">
+                Esporta backup
+              </DialogAction>
+              <DialogAction
+                onClick={() => {
+                  setLibraryMenu(false)
+                  restoreInput.current?.click()
+                }}
+                testId="restore-backup"
+              >
+                Ripristina da backup…
+              </DialogAction>
+              <DialogAction onClick={() => setLibraryMenu(false)}>Annulla</DialogAction>
+            </>
+          }
+        >
+          <p>
+            Il backup è un file JSON con titoli, collezioni, copertine scelte, segnalibri e impostazioni di lettura: non
+            contiene i file CBZ/CBR. Ripristinato su un altro iPad o dopo una reinstallazione, riconosce i volumi dal nome e
+            dalla dimensione del file quando li importi di nuovo.
+          </p>
+        </Dialog>
+      )}
+
+      {restoreResult && (
+        <Dialog
+          title="Backup ripristinato"
+          onClose={() => setRestoreResult(null)}
+          actions={
+            <>
+              {restoreResult.pending > 0 && (
+                <DialogAction
+                  primary
+                  onClick={() => {
+                    setRestoreResult(null)
+                    importInput.current?.click()
+                  }}
+                >
+                  Importa file
+                </DialogAction>
+              )}
+              <DialogAction primary={restoreResult.pending === 0} onClick={() => setRestoreResult(null)} testId="restore-close">
+                {restoreResult.pending > 0 ? 'Più tardi' : 'OK'}
+              </DialogAction>
+            </>
+          }
+        >
+          <ul className="space-y-1.5" data-testid="restore-summary">
+            {restoreResult.updated > 0 && <li>{restoreResult.updated === 1 ? '1 volume già in libreria aggiornato.' : `${restoreResult.updated} volumi già in libreria aggiornati.`}</li>}
+            {restoreResult.pending > 0 && (
+              <li>
+                {restoreResult.pending === 1 ? '1 volume da importare di nuovo' : `${restoreResult.pending} volumi da importare di nuovo`}: titoli, collezioni,
+                copertine e segnalibri verranno riapplicati importando gli stessi file.
+              </li>
+            )}
+            {restoreResult.collectionsCreated > 0 && (
+              <li>{restoreResult.collectionsCreated === 1 ? '1 collezione creata.' : `${restoreResult.collectionsCreated} collezioni create.`}</li>
+            )}
+            {restoreResult.settingsRestored && <li>Impostazioni di lettura ripristinate.</li>}
+            {restoreResult.updated === 0 && restoreResult.pending === 0 && restoreResult.collectionsCreated === 0 && !restoreResult.settingsRestored && (
+              <li>Il backup non conteneva nulla da aggiungere.</li>
+            )}
+          </ul>
+        </Dialog>
+      )}
+
+      {showPending && (
+        <Dialog
+          title="Volumi del backup da importare"
+          onClose={() => setShowPending(false)}
+          actions={
+            <>
+              <DialogAction
+                primary
+                onClick={() => {
+                  setShowPending(false)
+                  importInput.current?.click()
+                }}
+              >
+                Importa file
+              </DialogAction>
+              <DialogAction destructive onClick={() => void dismissPendingRestores()} testId="dismiss-pending">
+                Ignora tutti
+              </DialogAction>
+              <DialogAction onClick={() => setShowPending(false)}>Chiudi</DialogAction>
+            </>
+          }
+        >
+          <ul className="space-y-1" data-testid="pending-list">
+            {pendingRestores.map((item) => (
+              <li key={item.key} className="flex items-baseline justify-between gap-3">
+                <span className="min-w-0 truncate text-label" title={item.fileName}>
+                  {item.title}
+                </span>
+                <span className="shrink-0 text-caption text-label-3 tabular-nums">{formatBytes(item.fileSize)}</span>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-3 text-footnote text-label-3">«Ignora tutti» dimentica questi dati del backup; i file già in libreria non vengono toccati.</p>
+        </Dialog>
       )}
 
       {coverConsentPending && (

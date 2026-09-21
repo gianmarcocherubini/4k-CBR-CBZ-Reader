@@ -1,6 +1,7 @@
 import { type DBSchema, type IDBPDatabase, openDB } from 'idb'
-import type { Book, Collection, PageSize, Progress } from '../../types'
+import type { Book, Collection, PageSize, PendingRestore, Progress } from '../../types'
 import { normalizeCollectionGlyph } from '../collections'
+import { pendingRestoreKey } from './backup'
 
 interface ReaderDB extends DBSchema {
   books: {
@@ -25,6 +26,11 @@ interface ReaderDB extends DBSchema {
     value: Collection
     indexes: { byCreated: number }
   }
+  /** Books of a restored backup whose file is not in the library yet, keyed by file name and size. */
+  pendingRestores: {
+    key: string
+    value: PendingRestore
+  }
 }
 
 let dbPromise: Promise<IDBPDatabase<ReaderDB>> | null = null
@@ -38,7 +44,7 @@ export class DatabaseBlockedError extends Error {
 export function getDB(): Promise<IDBPDatabase<ReaderDB>> {
   if (!dbPromise) {
     let timedOut = false
-    const opening = openDB<ReaderDB>('cbz-reader', 2, {
+    const opening = openDB<ReaderDB>('cbz-reader', 3, {
       upgrade(db, oldVersion) {
         if (oldVersion < 1) {
           const books = db.createObjectStore('books', { keyPath: 'id' })
@@ -50,6 +56,9 @@ export function getDB(): Promise<IDBPDatabase<ReaderDB>> {
         if (oldVersion < 2) {
           const collections = db.createObjectStore('collections', { keyPath: 'id' })
           collections.createIndex('byCreated', 'createdAt')
+        }
+        if (oldVersion < 3) {
+          db.createObjectStore('pendingRestores', { keyPath: 'key' })
         }
       },
       // A tab running this version must not block a later schema upgrade.
@@ -200,4 +209,40 @@ export async function getFile(bookId: string): Promise<Blob | undefined> {
 
 export async function deleteFile(bookId: string): Promise<void> {
   await (await getDB()).delete('files', bookId)
+}
+
+export async function listPendingRestores(): Promise<PendingRestore[]> {
+  const all = await (await getDB()).getAll('pendingRestores')
+  return all.sort((a, b) => a.fileName.localeCompare(b.fileName, 'it', { numeric: true, sensitivity: 'base' }))
+}
+
+export async function getPendingRestore(fileName: string, fileSize: number): Promise<PendingRestore | undefined> {
+  return (await getDB()).get('pendingRestores', pendingRestoreKey(fileName, fileSize))
+}
+
+export async function putPendingRestores(items: readonly PendingRestore[]): Promise<void> {
+  if (items.length === 0) return
+  const db = await getDB()
+  const tx = db.transaction('pendingRestores', 'readwrite')
+  await Promise.all([...items.map((item) => tx.store.put(item)), tx.done])
+}
+
+export async function deletePendingRestore(key: string): Promise<void> {
+  await (await getDB()).delete('pendingRestores', key)
+}
+
+export async function clearPendingRestores(): Promise<void> {
+  await (await getDB()).clear('pendingRestores')
+}
+
+/** Applies a restored backup in one transaction: collections, merged books and their bookmarks. */
+export async function applyRestore(collections: readonly Collection[], books: readonly Book[], progress: readonly Progress[]): Promise<void> {
+  const db = await getDB()
+  const tx = db.transaction(['collections', 'books', 'progress'], 'readwrite')
+  await Promise.all([
+    ...collections.map((collection) => tx.objectStore('collections').put(collection)),
+    ...books.map((book) => tx.objectStore('books').put(book)),
+    ...progress.map((p) => tx.objectStore('progress').put(p)),
+    tx.done,
+  ])
 }

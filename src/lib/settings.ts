@@ -18,23 +18,46 @@ interface LegacySettings {
 const pick = <T extends string>(value: unknown, allowed: readonly T[], fallback: T): T =>
   typeof value === 'string' && (allowed as readonly string[]).includes(value) ? (value as T) : fallback
 
+/**
+ * Settings as stored (any version, any origin: localStorage or a backup file) → the current shape.
+ * Unknown values fall back to the defaults; fields of earlier versions are folded into the current ones.
+ */
+export function normalizeSettings(stored: unknown): ReaderSettings {
+  if (!stored || typeof stored !== 'object') return { ...DEFAULT_SETTINGS }
+  const parsed = stored as Partial<ReaderSettings> & LegacySettings
+  const { ganModel, maxQuality, maxQualityModel, maxQualityEnsemble, maxQualityBlur, superResolution, coverOffset, maxQualityBudget, ...rest } = parsed
+  void superResolution
+  void coverOffset
+  void maxQualityBudget
+  const bool = (value: unknown, fallback: boolean) => (typeof value === 'boolean' ? value : fallback)
+  const d = DEFAULT_SETTINGS
+  return {
+    direction: pick(rest.direction, ['rtl', 'ltr'], d.direction),
+    pageMode: pick(rest.pageMode, ['single', 'double', 'auto'], d.pageMode),
+    fit: pick(rest.fit, ['screen', 'height', 'width', 'original'], d.fit),
+    // "Qualità massima" (+ model, self-ensemble, blur) became the 4K tier with a rendering speed.
+    resolution: pick(rest.resolution, ['hd', '4k'], maxQuality || ganModel ? '4k' : 'hd'),
+    rendering: pick(rest.rendering, ['fast', 'medium', 'slow'], maxQualityModel === '6b' ? 'slow' : maxQualityEnsemble ? 'medium' : 'fast'),
+    antiSpoiler: bool(rest.antiSpoiler, bool(maxQualityBlur, d.antiSpoiler)),
+    srLevel: pick(rest.srLevel, ['auto', 'M', 'VL', 'UL'], 'auto'),
+    srScale: pick(rest.srScale, ['auto', 'x2', 'x4'], 'auto'),
+    srRestore: bool(rest.srRestore, d.srRestore),
+    srClean: bool(rest.srClean, d.srClean),
+    theme: pick(rest.theme, ['system', 'light', 'dark'], d.theme),
+    stageBackground: pick(rest.stageBackground, ['default', 'black', 'white'], d.stageBackground),
+    gutter: pick(rest.gutter, ['none', 's', 'm', 'l'], d.gutter),
+    gutterColor: pick(rest.gutterColor, ['white', 'paper', 'dark'], d.gutterColor),
+    transition: pick(rest.transition, ['none', 'fade', 'slide'], d.transition),
+    fullscreenReading: bool(rest.fullscreenReading, d.fullscreenReading),
+    srIndicator: bool(rest.srIndicator, d.srIndicator),
+  }
+}
+
 export function loadSettings(): ReaderSettings {
   try {
     const raw = localStorage.getItem(KEY)
     if (!raw) return { ...DEFAULT_SETTINGS }
-    const parsed = JSON.parse(raw) as Partial<ReaderSettings> & LegacySettings
-    const { ganModel, maxQuality, maxQualityModel, maxQualityEnsemble, maxQualityBlur, superResolution, coverOffset, maxQualityBudget, ...rest } = parsed
-    void superResolution
-    void coverOffset
-    void maxQualityBudget
-    const settings: ReaderSettings = { ...DEFAULT_SETTINGS, ...rest }
-    // "Qualità massima" (+ model, self-ensemble, blur) became the 4K tier with a rendering speed.
-    settings.resolution = pick(rest.resolution, ['hd', '4k'], maxQuality || ganModel ? '4k' : 'hd')
-    settings.rendering = pick(rest.rendering, ['fast', 'medium', 'slow'], maxQualityModel === '6b' ? 'slow' : maxQualityEnsemble ? 'medium' : 'fast')
-    if (typeof rest.antiSpoiler !== 'boolean') settings.antiSpoiler = typeof maxQualityBlur === 'boolean' ? maxQualityBlur : DEFAULT_SETTINGS.antiSpoiler
-    settings.srLevel = pick(rest.srLevel, ['auto', 'M', 'VL', 'UL'], 'auto')
-    settings.srScale = pick(rest.srScale, ['auto', 'x2', 'x4'], 'auto')
-    return settings
+    return normalizeSettings(JSON.parse(raw))
   } catch {
     return { ...DEFAULT_SETTINGS }
   }
