@@ -47,7 +47,7 @@ export interface Progress {
   /** 0-based index of the first page of the last displayed spread. */
   page: number
   updatedAt: number
-  /** Per-book override of the pairing offset ("Sfasa coppie"). */
+  /** Legacy per-book pairing override; pairing is now fixed (cover alone, then pairs) and blanks re-align. */
   coverOffset?: boolean
   /** Pages preceded by a user-inserted blank page (re-aligns the following pairs). */
   blanks?: number[]
@@ -73,40 +73,35 @@ export type SrLevel = 'auto' | 'M' | 'VL' | 'UL'
  * auto = x4 when memory and GPU allow (heavy models: their native factor), else x2.
  */
 export type SrScale = 'auto' | 'x2' | 'x4'
-/** Longest wait accepted for Real-ESRGAN on the visible spread, seconds (0 = no limit). */
-export type MaxQualityBudget = 3 | 5 | 10 | 0
-/** Real-ESRGAN network of "Qualità massima": the compact anime video v3 or the 6-block RRDB (about 9x the work). */
+/** Real-ESRGAN network of the 4K tier: the compact anime video v3 or the 6-block RRDB (about 9x the work). */
 export type MaxQualityModel = 'v3' | '6b'
+/**
+ * What the pages are enhanced with. HD: Anime4K on the GPU, everything automatic, well under a
+ * second. 4K (experimental): Real-ESRGAN for the pages on screen, seconds per page, HD as fallback.
+ */
+export type Resolution = 'hd' | '4k'
+/**
+ * Speed/quality of the 4K tier, slowest = best: fast = Anime v3 in one pass (~1 s on an iPad M),
+ * medium = Anime v3 with a four-pass self-ensemble (~4 s), slow = Anime 6B (~7 s).
+ */
+export type Rendering = 'fast' | 'medium' | 'slow'
 
 export interface ReaderSettings {
   direction: Direction
   pageMode: PageMode
   fit: FitMode
-  /** Default pairing offset for new books: cover alone, then pairs. */
-  coverOffset: boolean
-  /** Super resolution (Anime4K) enabled. */
-  superResolution: boolean
+  resolution: Resolution
+  rendering: Rendering
+  /** 4K: blur the plain page while its HD version is being computed (anti-spoiler), then reveal. */
+  antiSpoiler: boolean
+  /**
+   * Anime4K parameters. Not exposed: HD is fully automatic. Kept as stored fields so tests can pin
+   * a level or factor through localStorage.
+   */
   srLevel: SrLevel
   srScale: SrScale
-  /** Anime4K Restore pass before the upscale ("Linee nitide"). */
   srRestore: boolean
-  /** Scan clean-up: paper levels + light denoise ("Pulizia scansione"). */
   srClean: boolean
-  /** "Qualità massima": Real-ESRGAN (anime video v3) at x4 on WebGPU for the pages on screen. */
-  maxQuality: boolean
-  /**
-   * Time budget for the visible spread: when the measured GPU throughput predicts a longer wait,
-   * the spread uses the standard super resolution instead.
-   */
-  maxQualityBudget: MaxQualityBudget
-  maxQualityModel: MaxQualityModel
-  /**
-   * Spend the time left under the budget on averaged passes over flipped/rotated copies (2, 4 or
-   * 8; 4 with no limit). Anime v3 only; off = one pass.
-   */
-  maxQualityEnsemble: boolean
-  /** Blur the plain page while its HD version is being computed (anti-spoiler), then unblur. */
-  maxQualityBlur: boolean
   theme: Theme
   stageBackground: StageBackground
   /** Centre margin between the two pages in double-page mode. */
@@ -123,17 +118,13 @@ export const DEFAULT_SETTINGS: ReaderSettings = {
   direction: 'rtl',
   pageMode: 'auto',
   fit: 'screen',
-  coverOffset: true,
-  superResolution: true,
+  resolution: 'hd',
+  rendering: 'fast',
+  antiSpoiler: true,
   srLevel: 'auto',
   srScale: 'auto',
   srRestore: false,
   srClean: false,
-  maxQuality: false,
-  maxQualityBudget: 5,
-  maxQualityModel: 'v3',
-  maxQualityEnsemble: false,
-  maxQualityBlur: true,
   theme: 'system',
   stageBackground: 'default',
   gutter: 'm',

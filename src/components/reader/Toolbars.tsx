@@ -25,12 +25,12 @@ interface ToolbarsProps {
 
 const Icon = {
   chevron: (
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
       <path d="M15 5l-7 7 7 7" />
     </svg>
   ),
   settings: (
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
       <circle cx="12" cy="12" r="3" />
       <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" />
     </svg>
@@ -66,15 +66,15 @@ export function Toolbars({
         onPointerLeave={() => onHoverChange(false)}
         data-testid="toolbar-top"
       >
-        <div className="grid h-[52px] grid-cols-[1fr_auto_1fr] items-center px-1">
+        <div className="grid h-14 grid-cols-[1fr_auto_1fr] items-center px-2">
           <div className="flex items-center">
-            <button type="button" className="btn-plain -ml-1 gap-0.5 pr-3 pl-1" onClick={onBack} aria-label="Torna alla libreria" data-testid="back">
+            <button type="button" className="btn-plain gap-0.5 pr-3 pl-1 !text-label" onClick={onBack} aria-label="Torna alla libreria" data-testid="back">
               {Icon.chevron}
-              <span className="hidden text-body sm:inline">Libreria</span>
+              <span className="hidden text-[14px] font-medium sm:inline">Libreria</span>
             </button>
           </div>
           <div className="min-w-0 max-w-[60vw] truncate text-center text-headline">{title}</div>
-          <div className="flex items-center justify-end gap-1">
+          <div className="flex items-center justify-end gap-2">
             {badgeState && badge && <HdBadge state={badgeState} label={badge} testId="sr-badge" />}
             <button type="button" className="btn-icon" onClick={onSettings} aria-label="Impostazioni" data-testid="settings">
               {Icon.settings}
@@ -89,7 +89,7 @@ export function Toolbars({
         onPointerLeave={() => onHoverChange(false)}
         data-testid="toolbar-bottom"
       >
-        <div className="mx-auto flex w-full max-w-3xl items-center gap-3 px-4 pt-1">
+        <div className="mx-auto flex w-full max-w-3xl items-center gap-3 px-5 pt-1">
           <span className="w-8 shrink-0 text-caption text-label-3 tabular-nums" aria-hidden>
             {direction === 'rtl' ? pageCount : 1}
           </span>
@@ -109,10 +109,10 @@ export function Toolbars({
             {direction === 'rtl' ? 1 : pageCount}
           </span>
         </div>
-        <div className="-mt-1 text-center text-footnote text-label-2 tabular-nums">
+        <div className="-mt-1 text-center text-caption text-label-2 tabular-nums">
           Pagina <span data-testid="page-label">{label}</span> di {pageCount}
         </div>
-        <div className="flex flex-wrap items-center justify-center gap-2 px-4 pt-2 pb-3">
+        <div className="flex flex-wrap items-center justify-center gap-2 px-5 pt-2.5 pb-3.5">
           <button type="button" className="btn-pill" onClick={onToggleDouble} aria-pressed={double} data-testid="toggle-double">
             Doppia pagina
           </button>

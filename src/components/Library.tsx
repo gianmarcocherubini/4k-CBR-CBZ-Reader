@@ -6,10 +6,10 @@ import { DatabaseBlockedError, deleteCollection, getAllProgress, getBook, listBo
 import { type ArchivePasswordRequest, deleteBook, importFile, newId, openSessionBook } from '../lib/storage/importer'
 import { cleanupOrphanedBookFiles, estimateStorage, formatBytes, ORPHAN_RETRY_MS, type StorageEstimate } from '../lib/storage/opfs'
 import type { Book, Collection, Progress } from '../types'
-import { BookCard } from './BookCard'
+import { BookCard, ContinueCard, readingState } from './BookCard'
 import { BookEditDialog } from './BookEditDialog'
 import { CollectionDialog } from './CollectionDialog'
-import { CollectionSidebar } from './CollectionSidebar'
+import { CollectionTabs } from './CollectionTabs'
 import { CoverSearchDialog } from './CoverSearchDialog'
 import { Dialog, DialogAction } from './Dialog'
 import { type ImportItem, ImportOverlay } from './ImportOverlay'
@@ -39,10 +39,31 @@ const ACCEPT = isIOS() ? undefined : '.cbz,.cbr,.zip,.rar,application/zip,applic
 const COVER_CONSENT_KEY = 'reader.cover-search-consent-v4'
 
 const PlusIcon = (
-  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden>
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden>
     <path d="M12 5v14M5 12h14" />
   </svg>
 )
+const FolderOpenIcon = (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v1H7.5a2 2 0 0 0-1.9 1.4L3 19z" />
+    <path d="M3 19h15.2a2 2 0 0 0 1.9-1.4L22 11" />
+  </svg>
+)
+const SearchIcon = (
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden>
+    <circle cx="11" cy="11" r="7" />
+    <path d="m20 20-3.5-3.5" />
+  </svg>
+)
+/** Wordmark: a small open-book glyph, ink on bone. */
+const Mark = (
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <path d="M3 5.5A1.5 1.5 0 0 1 4.5 4H10a2 2 0 0 1 2 2v14a2 2 0 0 0-2-2H4.5A1.5 1.5 0 0 1 3 16.5z" />
+    <path d="M21 5.5A1.5 1.5 0 0 0 19.5 4H14a2 2 0 0 0-2 2v14a2 2 0 0 1 2-2h5.5a1.5 1.5 0 0 0 1.5-1.5z" />
+  </svg>
+)
+/** Volumes shown on the "Continua a leggere" shelf, most recently read first. */
+const CONTINUE_LIMIT = 8
 
 export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBook, onRemoveSessionBook, requestPassword }: LibraryProps) {
   const [books, setBooks] = useState<Book[] | null>(null)
@@ -63,6 +84,7 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
   const [editingCollection, setEditingCollection] = useState<Collection | null>(null)
   const [collectionMenu, setCollectionMenu] = useState<CollectionView | null>(null)
   const [collectionToDelete, setCollectionToDelete] = useState<CollectionView | null>(null)
+  const [query, setQuery] = useState('')
   const abortRef = useRef<AbortController | null>(null)
   const importInput = useRef<HTMLInputElement>(null)
   const sessionInput = useRef<HTMLInputElement>(null)
@@ -343,16 +365,22 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
   const allBooks = [...sessionBooks, ...(books ?? [])]
   const collectionList = collectionViews(collections, allBooks)
   const knownCollectionIds = new Set(collections.map((collection) => collection.id))
-  const visibleBooks =
+  const inCollection =
     selectedCollectionId === ALL_COLLECTION_ID
       ? allBooks
       : allBooks.filter((book) => effectiveCollectionId(book, knownCollectionIds) === selectedCollectionId)
+  const needle = query.trim().toLocaleLowerCase('it')
+  const visibleBooks = needle ? inCollection.filter((book) => book.title.toLocaleLowerCase('it').includes(needle)) : inCollection
   const selectedCollectionName =
     selectedCollectionId === ALL_COLLECTION_ID
       ? 'Tutti i libri'
       : collectionList.find((collection) => collection.id === selectedCollectionId)?.name ?? 'Senza collezione'
   const showInstallHint = isIOS() && !isStandalone()
-  const reading = visibleBooks.filter((b) => (progress.get(b.id)?.page ?? 0) > 0 && (progress.get(b.id)?.page ?? 0) < b.pageCount - 1)
+  const reading = inCollection.filter((b) => {
+    const state = readingState(b, progress.get(b.id))
+    return state.started && !state.finished
+  })
+  const continueReading = !needle ? [...reading].sort((a, b) => b.lastReadAt - a.lastReadAt).slice(0, CONTINUE_LIMIT) : []
 
   return (
     <div
@@ -368,18 +396,47 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
       onDrop={onDrop}
     >
       <header className="material hairline-b sticky top-0 z-10">
-        <div className="mx-auto flex w-full max-w-[1400px] items-end justify-between gap-3 px-5 pt-4 pb-2 sm:px-8">
-          <h1 className="text-large-title">Libreria</h1>
-          <div className="flex items-center gap-1 pb-1">
-            <button type="button" className="btn-plain" onClick={() => sessionInput.current?.click()} data-testid="open-session">
-              Apri senza importare
-            </button>
-            <button type="button" className="btn-pill" onClick={() => importInput.current?.click()} data-testid="import" aria-label="Importa">
-              {PlusIcon}
-              Importa
-            </button>
+        <div className="mx-auto flex h-14 w-full max-w-[1400px] items-center gap-3 px-5 sm:px-8">
+          <div className="flex items-center gap-2 text-label">
+            {Mark}
+            <h1 className="text-[15px] font-semibold tracking-tight">Libreria</h1>
           </div>
+          <div className="flex-1" />
+          {allBooks.length > 0 && (
+            <label className="relative hidden items-center sm:flex">
+              <span className="pointer-events-none absolute left-3 text-label-3">{SearchIcon}</span>
+              <input
+                type="search"
+                value={query}
+                onChange={(e) => setQuery(e.currentTarget.value)}
+                placeholder="Cerca"
+                aria-label="Cerca nella libreria"
+                className="field !min-h-[34px] w-44 !rounded-full !pl-9 !text-[14px] transition-[width] focus:w-64"
+                data-testid="library-search"
+              />
+            </label>
+          )}
+          <button type="button" className="btn-ghost !min-h-[34px] !px-3 !text-[13px]" onClick={() => sessionInput.current?.click()} data-testid="open-session" aria-label="Apri senza importare">
+            {FolderOpenIcon}
+            <span className="hidden md:inline">Apri senza importare</span>
+          </button>
+          <button type="button" className="btn-primary !min-h-[34px] !px-3.5 !text-[13px]" onClick={() => importInput.current?.click()} data-testid="import" aria-label="Importa">
+            {PlusIcon}
+            Importa
+          </button>
         </div>
+        {books !== null && (
+          <div className="mx-auto w-full max-w-[1400px] px-5 sm:px-8">
+            <CollectionTabs
+              collections={collectionList}
+              selectedId={selectedCollectionId}
+              onSelect={setSelectedCollectionId}
+              onCreate={() => setCreatingCollection(true)}
+              onMenu={setCollectionMenu}
+              total={allBooks.length}
+            />
+          </div>
+        )}
         <input
           ref={importInput}
           type="file"
@@ -406,18 +463,9 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
         />
       </header>
 
-      <div className="mx-auto flex w-full max-w-[1400px] flex-1 flex-col md:flex-row">
-        <CollectionSidebar
-          collections={collectionList}
-          selectedId={selectedCollectionId}
-          onSelect={setSelectedCollectionId}
-          onCreate={() => setCreatingCollection(true)}
-          onMenu={setCollectionMenu}
-          total={allBooks.length}
-        />
-      <main className="min-w-0 flex-1 px-5 pb-10 sm:px-8">
+      <main className="mx-auto w-full max-w-[1400px] flex-1 px-5 pb-16 sm:px-8">
         {updateReady && (
-          <div className="mt-4 flex items-center justify-between gap-3 rounded-2xl bg-tint-soft px-4 py-3" role="status" data-testid="update-banner">
+          <div className="mt-6 flex items-center justify-between gap-3 rounded-[14px] bg-card px-4 py-3 shadow-[inset_0_0_0_1px_var(--line)]" role="status" data-testid="update-banner">
             <span className="text-subhead">Nuova versione dell’app pronta.</span>
             <button type="button" className="btn-pill" onClick={() => location.reload()}>
               Ricarica
@@ -430,23 +478,23 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
           </div>
         ) : allBooks.length === 0 ? (
           <div
-            className={`mt-10 flex flex-col items-center justify-center rounded-3xl px-6 py-20 text-center transition-colors ${
-              dragOver ? 'bg-tint-soft outline-2 outline-dashed outline-tint' : 'bg-grouped'
+            className={`mt-10 flex flex-col items-center justify-center rounded-[20px] px-6 py-24 text-center transition-colors ${
+              dragOver ? 'bg-tint-soft shadow-[inset_0_0_0_1.5px_var(--accent)]' : 'bg-card shadow-[inset_0_0_0_1px_var(--line)]'
             }`}
             data-testid="empty-library"
           >
-            <div className="cover flex h-40 w-[7.5rem] items-center justify-center bg-card">
-              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-label-3" aria-hidden>
+            <div className="tile flex h-44 w-[8.25rem] items-center justify-center">
+              <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" className="text-label-3" aria-hidden>
                 <path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5z" />
                 <path d="M4 20.5A2.5 2.5 0 0 1 6.5 18H20" />
               </svg>
             </div>
-            <h2 className="mt-7 text-title2">Nessun libro</h2>
-            <p className="mt-2 max-w-md text-subhead text-label-2">
-              Importa file CBZ o CBR (fino a 10 GB ciascuno): vengono copiati nell’archiviazione dell’app e restano disponibili
+            <h2 className="mt-8 text-large-title">La tua libreria è vuota</h2>
+            <p className="mt-3 max-w-md text-subhead text-label-2">
+              Importa file CBZ o CBR, fino a 10 GB ciascuno: vengono copiati nell’archiviazione dell’app e restano disponibili
               anche offline. Oppure trascinali qui.
             </p>
-            <div className="mt-7 flex flex-wrap justify-center gap-3">
+            <div className="mt-8 flex flex-wrap justify-center gap-3">
               <button type="button" className="btn-primary" onClick={() => importInput.current?.click()}>
                 Importa file
               </button>
@@ -458,23 +506,35 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
         ) : (
           <>
             {dragOver && (
-              <div className="pointer-events-none fixed inset-0 z-20 flex items-center justify-center bg-tint-soft outline-4 outline-dashed -outline-offset-8 outline-tint">
-                <span className="material-strong rounded-2xl px-5 py-3 text-headline shadow-sheet">Rilascia per importare</span>
+              <div className="pointer-events-none fixed inset-0 z-20 flex items-center justify-center bg-tint-soft shadow-[inset_0_0_0_3px_var(--accent)]">
+                <span className="material-strong rounded-[14px] px-5 py-3 text-headline shadow-sheet">Rilascia per importare</span>
               </div>
             )}
-            <section className="pt-6">
-              <h2 className="text-title2">{selectedCollectionName}</h2>
-              <p className="mt-1 text-footnote text-label-2">
-                {visibleBooks.length === 1 ? '1 libro' : `${visibleBooks.length} libri`}
-                {reading.length > 0 ? ` · ${reading.length} in lettura` : ''}
-              </p>
+            {continueReading.length > 0 && (
+              <section className="pt-8" data-testid="continue-shelf">
+                <h2 className="eyebrow">Continua a leggere</h2>
+                <div className="shelf mt-3">
+                  {continueReading.map((book) => (
+                    <ContinueCard key={book.id} book={book} progress={progress.get(book.id)!} onOpen={() => void openLibraryBook(book)} />
+                  ))}
+                </div>
+              </section>
+            )}
+            <section className="pt-8">
+              <div className="flex items-baseline justify-between gap-4">
+                <h2 className="text-large-title">{needle ? `Risultati per “${query.trim()}”` : selectedCollectionName}</h2>
+                <p className="shrink-0 text-footnote text-label-2 tabular-nums">
+                  {visibleBooks.length === 1 ? '1 volume' : `${visibleBooks.length} volumi`}
+                  {!needle && reading.length > 0 ? ` · ${reading.length} in lettura` : ''}
+                </p>
+              </div>
               {visibleBooks.length === 0 ? (
-                <div className="mt-6 rounded-2xl bg-grouped px-6 py-12 text-center">
-                  <p className="text-body text-label-2">Questa collezione è vuota.</p>
-                  <p className="mt-1 text-footnote text-label-3">Modifica un volume per spostarlo qui oppure importane uno nuovo.</p>
+                <div className="mt-6 rounded-[14px] bg-card px-6 py-14 text-center shadow-[inset_0_0_0_1px_var(--line)]">
+                  <p className="text-body text-label-2">{needle ? 'Nessun volume corrisponde alla ricerca.' : 'Questa collezione è vuota.'}</p>
+                  {!needle && <p className="mt-1 text-footnote text-label-3">Modifica un volume per spostarlo qui oppure importane uno nuovo.</p>}
                 </div>
               ) : (
-                <div className="mt-4 grid grid-cols-[repeat(auto-fill,minmax(140px,1fr))] gap-x-5 gap-y-8 sm:grid-cols-[repeat(auto-fill,minmax(160px,1fr))]">
+                <div className="mt-5 grid grid-cols-[repeat(auto-fill,minmax(136px,1fr))] gap-x-5 gap-y-9 sm:grid-cols-[repeat(auto-fill,minmax(164px,1fr))] lg:grid-cols-[repeat(auto-fill,minmax(184px,1fr))]">
                   {visibleBooks.map((book) => (
                     <BookCard
                       key={book.id}
@@ -490,22 +550,21 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
           </>
         )}
       </main>
-      </div>
 
-      <footer className="hairline-t px-5 py-4 pb-safe text-footnote text-label-2 sm:px-8">
-        <div className="mx-auto flex w-full max-w-6xl flex-wrap items-center justify-between gap-2">
+      <footer className="hairline-t px-5 py-5 pb-safe text-caption text-label-3 sm:px-8">
+        <div className="mx-auto flex w-full max-w-[1400px] flex-wrap items-center justify-between gap-x-6 gap-y-1">
           <span data-testid="storage-footer">
             {estimate && estimate.quota > 0
               ? `Spazio usato: ${formatBytes(estimate.usage)} di ${formatBytes(estimate.quota)} disponibili`
               : 'Spazio disponibile: sconosciuto'}
           </span>
           <span>{books?.length ?? 0} nella libreria</span>
-          <span className="tabular-nums" data-testid="app-version">
+          <span className="font-mono tabular-nums" data-testid="app-version">
             Versione {__APP_VERSION__} ({__APP_BUILD__})
           </span>
         </div>
         {showInstallHint && (
-          <p className="mx-auto mt-2 w-full max-w-6xl" data-testid="install-hint">
+          <p className="mx-auto mt-3 w-full max-w-[1400px] text-footnote text-label-2" data-testid="install-hint">
             Per installare: tocca <strong>Condividi</strong> in Safari e poi <strong>Aggiungi alla schermata Home</strong>. L’app
             installata ha uno spazio di archiviazione separato da Safari: importa i file dall’app installata.
           </p>

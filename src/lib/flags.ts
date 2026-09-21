@@ -6,6 +6,8 @@ export const flags = {
   forceIdb: params.get('storage') === 'idb',
   /** Super-resolution backend override. */
   sr: params.get('sr') as 'off' | 'webgl2' | 'webgpu' | null,
+  /** Test override of the 4K sanity cap (ms): a spread predicted to take longer stays in HD. */
+  mqCapMs: params.has('mqcap') ? Number(params.get('mqcap')) : undefined,
   /** Expose window.__reader test hooks (always on in dev). */
   test: params.has('test') || import.meta.env.DEV,
 }

@@ -23,7 +23,7 @@ export function PasswordDialog({ fileName, invalid, onSubmit, onCancel }: Passwo
         role="dialog"
         aria-modal="true"
         aria-labelledby="password-title"
-        className="material-strong w-full max-w-sm overflow-hidden rounded-2xl shadow-sheet"
+        className="w-full max-w-sm overflow-hidden rounded-[16px] bg-card shadow-sheet"
         onClick={(event) => event.stopPropagation()}
         onSubmit={(event) => {
           event.preventDefault()
@@ -33,11 +33,11 @@ export function PasswordDialog({ fileName, invalid, onSubmit, onCancel }: Passwo
         }}
         data-testid="password-dialog"
       >
-        <div className="px-5 pt-5 pb-4 text-center">
-          <h2 id="password-title" className="text-headline">
+        <div className="px-6 pt-6 pb-2">
+          <h2 id="password-title" className="text-title2">
             {invalid ? 'Password non corretta' : 'Archivio protetto'}
           </h2>
-          <p className="mt-1 text-footnote text-label-2">
+          <p className="mt-2 text-subhead text-label-2">
             Inserisci la password per <span className="font-medium text-label">“{fileName}”</span>.
           </p>
           <input
@@ -48,16 +48,16 @@ export function PasswordDialog({ fileName, invalid, onSubmit, onCancel }: Passwo
             autoComplete="off"
             maxLength={1024}
             aria-label="Password dell’archivio"
-            className="mt-4 min-h-[44px] w-full rounded-xl border border-separator bg-card px-3 text-body text-label outline-none focus:border-tint"
+            className="field mt-4"
             data-testid="archive-password"
           />
           {invalid && <p className="mt-2 text-footnote text-red">Riprova: la password precedente non ha decifrato il file.</p>}
         </div>
-        <div className="grid grid-cols-2 border-t border-separator">
-          <button type="button" className="min-h-[44px] border-r border-separator text-body text-tint active:bg-fill" onClick={onCancel}>
+        <div className="flex justify-end gap-2 px-6 pt-4 pb-6">
+          <button type="button" className="btn-ghost !min-h-[36px] !px-3.5 !text-[13px]" onClick={onCancel}>
             Annulla
           </button>
-          <button type="submit" className="min-h-[44px] text-body font-semibold text-tint active:bg-fill">
+          <button type="submit" className="btn-primary !min-h-[36px] !px-3.5 !text-[13px]">
             Sblocca
           </button>
         </div>

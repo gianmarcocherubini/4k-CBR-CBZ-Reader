@@ -9,8 +9,8 @@ doppia pagina intelligente e super risoluzione AI sulla GPU.
 ## Requisiti
 
 - Node.js 20+ (sviluppato con Node 24) e npm.
-- Per leggere: l'app installata sulla schermata Home di un iPad con iPadOS 26+ (WebGPU: Super risoluzione e Qualità
-  massima), iPadOS 17/18 (Super risoluzione su WebGL2), oppure Chrome/Edge desktop.
+- Per leggere: l'app installata sulla schermata Home di un iPad con iPadOS 26+ (WebGPU: HD e 4K), iPadOS 17/18 (HD
+  su WebGL2), oppure Chrome/Edge desktop.
 
 ## Avvio in locale
 
@@ -23,8 +23,8 @@ Apri l'indirizzo nel browser, tocca **Importa** e scegli uno o più `.cbz` / `.c
 **Apri senza importare** legge il file scelto direttamente, senza copiarlo nell'archiviazione dell'app: utile se lo
 spazio è poco (il segnalibro resta comunque salvato).
 
-Non serve alcun passo di setup: i pesi del modello "Qualità massima" (1,2 MB) sono nel repository e vengono
-distribuiti con l'app.
+Non serve alcun passo di setup: i pesi dei modelli 4K sono nel repository (1,2 MB precaricati, 8,9 MB scaricati alla
+prima scelta di Slow) e vengono distribuiti con l'app.
 
 Altri comandi:
 
@@ -43,16 +43,22 @@ build di produzione e verificano anche il funzionamento offline.
 
 ## Interfaccia
 
-Libreria e lettore seguono lo stile di Apple Libri: titolo grande, copertine con ombra, barre traslucide, controlli
-segmentati e interruttori iOS, elenchi raggruppati nelle impostazioni. L'aspetto segue quello del sistema (chiaro o
-scuro); in **Impostazioni → Aspetto** si può forzare, e lo **sfondo di lettura** dietro le pagine può essere Default
-(grigio chiaro o nero a seconda dell'aspetto), Nero o Bianco.
+Un monocromo caldo con una sola tinta d'accento, nello spirito delle superfici di Cursor (inchiostro su avorio,
+avorio su quasi nero, linee sottili come inchiostro a bassa opacità, etichette piccole in maiuscoletto, pochissime
+ombre) impaginato come l'app Apple TV: barra superiore con le collezioni a schede, uno scaffale **Continua a
+leggere**, poi la griglia delle copertine, che si sollevano al passaggio o al fuoco. I controlli sono inchiostro o
+avorio; l'arancione segna solo l'avanzamento e l'indicatore di risoluzione. L'aspetto segue quello del sistema
+(chiaro o scuro); in **Impostazioni → Aspetto** si può forzare, e lo **sfondo di lettura** dietro le pagine può
+essere Default (grigio caldo o nero a seconda dell'aspetto), Nero o Bianco.
 
 ### Libreria, collezioni e copertine
 
-- La barra laterale raccoglie le collezioni create dall'utente; i volumi non assegnati sono in **Senza collezione**.
-  Le collezioni si riordinano in base all'ultima apertura di un loro volume e, tornando dal lettore, quella appena
-  usata viene selezionata. **Tutti i libri** mostra l'intera libreria.
+- La riga di schede sotto la barra raccoglie **Tutti i libri** e le collezioni create dall'utente; i volumi non
+  assegnati sono in **Senza collezione**. Le collezioni si riordinano in base all'ultima apertura di un loro volume
+  e, tornando dal lettore, quella appena usata viene selezionata.
+- **Continua a leggere**: i volumi iniziati e non finiti della collezione selezionata, dal più recente, con pagina e
+  avanzamento; un tocco riprende la lettura.
+- Il campo **Cerca** nella barra filtra la griglia per titolo.
 - Ogni collezione può non avere icona, usare una delle icone SVG monocromatiche integrate o un'immagine locale.
   La ricerca **Iconify** è incorporata nel dialogo (set moderni Lucide, Tabler, Phosphor e Material): non si lascia
   l'app; l'SVG scelto viene validato e copiato nel database locale. Un PNG/JPEG personale viene limitato a 2 MB /
@@ -72,9 +78,8 @@ scuro); in **Impostazioni → Aspetto** si può forzare, e lo **sfondo di lettur
 - **Tocco ai lati**: in modalità manga (destra → sinistra) il tocco a sinistra va avanti, a destra indietro. Tocco al
   centro: mostra/nasconde le barre. Funzionano anche scorrimento orizzontale, frecce, spazio, PagSu/PagGiù, Home/Fine.
 - **Doppia pagina intelligente**: le pagine verticali vengono accoppiate, le tavole doppie (orizzontali) restano da sole
-  e la coppia riparte dopo. **Sfasa coppie** (in Impostazioni) decide se la copertina sta da sola (1 | 2-3 | 4-5…) o si
-  accoppia (1-2 | 3-4…); l'impostazione è per volume. Con **Automatica** la doppia pagina si attiva con lo schermo in
-  orizzontale.
+  e la coppia riparte dopo. La copertina sta da sola e le coppie partono da 2-3; se un volume non combacia si usa
+  **Pagina bianca qui**. Con **Automatica** la doppia pagina si attiva con lo schermo in orizzontale.
 - **Pagina bianca qui**: se in un punto le coppie non combaciano (una pagina pubblicitaria in mezzo, per esempio),
   inserisce una pagina bianca prima di quella corrente e le coppie seguenti si spostano di una. Si ricorda per volume.
 - **Spazio centrale**: il margine tra le due pagine, bianco di default come la piega di un libro; in Impostazioni si
@@ -90,20 +95,30 @@ scuro); in **Impostazioni → Aspetto** si può forzare, e lo **sfondo di lettur
   permette di nascondere la barra di stato: la barra resta opaca (chiara o scura come il sistema) e l'app usa tutto
   ciò che sta sotto, fino al bordo inferiore, indicatore Home compreso. Lo stile traslucido della barra non viene
   usato: su iPad sposta la web view verso il basso e lascia una fascia nera inutilizzata in fondo allo schermo.
-- **Indicatore HD**: una piccola icona “HD” in alto a destra (nascosta quando le barre sono visibili, disattivabile):
-  accesa (arancione) quando la super risoluzione o Qualità massima sono applicate a tutte le pagine sullo schermo,
-  attenuata mentre elaborano, barrata (“non HD”) quando non sono disponibili. Il testo completo è nell'etichetta.
+- **Indicatore HD / 4K**: una piccola etichetta in alto a destra (nascosta quando le barre sono visibili,
+  disattivabile): accesa (arancione) quando la risoluzione scelta è applicata a tutte le pagine sullo schermo,
+  attenuata mentre elabora, barrata quando non è disponibile. Il testo completo è nell'etichetta accessibile
+  (`HD ×4 UL`, `4K ×4 v3`, `4K ×4 6B`, `HD…`, `HD n/d`).
 - Lo schermo resta acceso durante la lettura (Wake Lock).
 
-## Super risoluzione
+## Risoluzione
 
-Entrambi i livelli lavorano **solo sulle pagine sullo schermo** (una, o due in doppia pagina): nessuna
+Una sola scelta in **Impostazioni → Risoluzione**: **HD** (default, tutto automatico) oppure **4K · Sperimentale**
+con un **Rendering** a tre velocità ordinate per qualità, **Fast**, **Medium** e **Slow · massima**: la più lenta è
+la migliore. Entrambi i livelli lavorano **solo sulle pagine sullo schermo** (una, o due in doppia pagina): nessuna
 pre-elaborazione delle pagine seguenti, nessun lavoro in coda, nessuna cache su disco. Voltando pagina, ciò che era
 in corso per la pagina precedente viene annullato e la GPU si occupa esclusivamente della nuova. I risultati recenti
 restano in una piccola cache in memoria (limitata in byte), così tornare indietro di una pagina è immediato. Tutto
 gira nel processo della pagina: nessun worker WebAssembly, nessun runtime da scaricare.
 
-### "Super risoluzione" (Anime4K, attiva di default)
+| Scelta | Rete | Passaggi | Tempo per pagina (iPad M) |
+| --- | --- | --- | --- |
+| HD | Anime4K Upscale_CNN_x2 (livello e fattore automatici) | 1–2 | < 0,5 s |
+| 4K Fast | Real-ESRGAN anime video v3 | 1 | ~1 s |
+| 4K Medium | Real-ESRGAN anime video v3 | 4 (self-ensemble) | ~4 s |
+| 4K Slow · massima | Real-ESRGAN x4plus anime 6B | 1 | ~7 s |
+
+### HD (Anime4K)
 
 Ogni pagina viene ingrandita con la rete **Anime4K Upscale_CNN_x2** sulla GPU, a strisce di 288 righe per usare poca
 memoria, **a un fattore fisso rispetto all'originale (×2 o ×4)**, indipendente dallo schermo; il risultato viene poi
@@ -112,33 +127,29 @@ il modello "prima la super risoluzione, poi l'adattamento": un solo risultato pe
 orientamento e impaginazione (lo zoom non ricalcola nulla), e ridurre un ×4 ai pixel dello schermo è ciò che rende
 le linee pulite. Obiettivo: la coppia di pagine pronta in **meno di due secondi**.
 
-- **Livello**: `Auto` parte da VL, misura il tempo della prima pagina e sceglie il livello più forte che sta sotto
-  800 ms per pagina (UL solo se la GPU lo consente; con 2–4 GB di RAM si ferma a M/VL). Si può forzare M, VL o UL.
-- **Fattore**: `Auto` usa **×4** (due passaggi, il secondo al livello M) quando il risultato sta nel limite di 16 MP
-  dei canvas di Safari e nel bilancio di memoria (pagine fino a ~1 MP, cioè i tipici 800×1200), altrimenti ×2; si
-  può fissare ×2 o ×4.
-- **Linee nitide**: passaggio *Restore_CNN_Soft* di Anime4K prima dell'ingrandimento, tratti e testi più marcati
-  (raddoppia il costo). **Pulizia scansione**: bianco della carta e neri più netti, leggera riduzione del rumore JPEG.
+- **Livello** automatico: parte da VL, misura il tempo della prima pagina e sceglie il livello più forte che sta
+  sotto 800 ms per pagina (UL solo se la GPU lo consente; con 2–4 GB di RAM si ferma a M/VL), deciso una volta e mai
+  rialzato nella sessione.
+- **Fattore** automatico: **×4** (due passaggi, il secondo al livello M) quando il risultato sta nel limite di 16 MP
+  dei canvas di Safari e nel bilancio di memoria (pagine fino a ~1 MP, cioè i tipici 800×1200), altrimenti ×2.
+- Livello, fattore, passaggio *Restore* e pulizia della scansione non sono più esposti: restano nel motore e nelle
+  impostazioni salvate (`srLevel`, `srScale`, `srRestore`, `srClean`), dove i test end-to-end li fissano.
 - **Backend automatico**: WebGPU (iPadOS 26+); su iPadOS 17/18 gli stessi shader ufficiali girano su **WebGL2**
   (risultato verificato equivalente: 54,6 dB tra i due backend); senza GPU utilizzabile, ridimensionamento del browser.
   Se il sistema toglie il dispositivo GPU all'app (ad esempio dopo una sospensione in background) l'app lo ricrea da
   sola. Le impostazioni dicono sempre backend, livello, fattore, dimensione di uscita e tempo stimato.
-- **Indicatore HD** (barra in alto e angolo): l'etichetta riporta `SR ×2 VL` / `SR ×4 UL` (fattore e livello in uso,
-  `+` con Linee nitide), `SR ×4 GAN` (Qualità massima), `SR…` (in elaborazione), `SR n/d` (nessuna GPU utilizzabile o
-  pagina troppo grande).
-
-### "Qualità massima" (Real-ESRGAN, spenta di default)
+### 4K · Sperimentale (Real-ESRGAN)
 
 Due reti Real-ESRGAN, entrambe implementate **direttamente in WGSL** su WebGPU (niente ONNX Runtime, niente
-WebAssembly), selezionabili in **Modello**:
+WebAssembly), scelte dal **Rendering**:
 
-- **Anime v3** (default): `realesr-animevideov3`, SRVGGNetCompact (3→64, 16 convoluzioni 64→64 con PReLU, 64→48,
-  pixel shuffle ×4; 621k parametri, BSD-3). Circa **1 s per pagina** su un iPad M-series; il tempo che avanza va nel
-  self-ensemble (sotto).
-- **Anime 6B** (opzionale): `RealESRGAN_x4plus_anime_6B`, RRDBNet con 6 blocchi residual-in-residual dense (3 blocchi
+- **Fast** e **Medium**: `realesr-animevideov3`, SRVGGNetCompact (3→64, 16 convoluzioni 64→64 con PReLU, 64→48,
+  pixel shuffle ×4; 621k parametri, BSD-3). Circa **1 s per pagina** su un iPad M-series in un passaggio (Fast);
+  Medium ne fa quattro su copie riflesse e ne fa la media (self-ensemble, sotto).
+- **Slow · massima**: `RealESRGAN_x4plus_anime_6B`, RRDBNet con 6 blocchi residual-in-residual dense (3 blocchi
   densi da 5 convoluzioni ciascuno, 64 feature, 32 canali di crescita, scala residua 0,2, coda con due upsample
-  nearest + convoluzioni; 4,47 M parametri, BSD-3). Nove volte il lavoro di v3: misurati **~30 s per pagina** su un
-  iPad M (la GPU si scalda e rallenta su carichi così lunghi), quindi va usato con «Sempre» o un'attesa adeguata. I pesi (8,9 MB in FP16) non sono precaricati: vengono
+  nearest + convoluzioni; 4,47 M parametri, BSD-3). Nove volte il lavoro di v3: misurati **~7 s per pagina** in
+  f16 su un iPad M. I pesi (8,9 MB in FP16) non sono precaricati: vengono
   scaricati e messi in cache dal service worker la prima volta che il modello viene scelto.
   Implementazione: quattro buffer di feature a rotazione, buffer di crescita a 128 canali riempito per copia dopo
   ogni convoluzione densa (una dispatch WebGPU non può leggere e scrivere lo stesso buffer), residui ripiegati
@@ -146,20 +157,17 @@ WebAssembly), selezionabili in **Modello**:
   fascia intera non starebbero in memoria). Le giunzioni tra fasce non sono esatte al bit (campo recettivo teorico
   ~100 px contro 24 di contesto) ma la differenza misurata è ≤ 2/255 (62,8 dB con fasce forzate a 8 righe).
 
-- **Attesa massima** (3 s, 5 s, 10 s, Sempre; default 5 s): all'attivazione l'app compila gli shader e **misura la
-  GPU** su un'immagine di prova; per ogni coppia di pagine prevede il tempo e, se supera il limite, quella coppia usa
-  la Super risoluzione (Anime4K) e la riga di stato dice perché. La stima si aggiorna con ogni pagina elaborata.
-- **Self-ensemble** (interruttore, spento di default, solo Anime v3): acceso, la rete viene eseguita su copie della
-  pagina riflesse e ruotate (le 8 simmetrie del rettangolo) e i risultati, riportati nell'orientamento originale,
-  vengono mediati sulla GPU: gli artefatti direzionali della rete si cancellano e i bordi restano più puliti. È un
-  moltiplicatore di qualità pagato in tempo, non un'accelerazione. Il numero di passaggi (2, 4 o 8) è il massimo che
-  sta nell'attesa massima; con «Sempre» sono quattro (i quattro ribaltamenti, il self-ensemble classico). Su un iPad
-  M-series v3 costa circa 1 s a passaggio, quindi con il limite di 5 s si arriva a 4 passaggi (3–4 s). Spento: un
-  passaggio. La riga di stato riporta i passaggi usati (o perché non ne sta nemmeno un secondo nel limite). Il
+- Il **Rendering** è la scelta del tempo: non c'è più un'«attesa massima». All'attivazione l'app compila gli shader
+  e **misura la GPU** su un'immagine di prova; la riga di stato riporta la stima per le pagine sullo schermo e il
+  tempo dell'ultima pagina. Resta un limite di sicurezza (60 s per coppia): un dispositivo troppo lento per il 4K
+  mostra la coppia in HD e lo dice.
+- **Self-ensemble** (Medium): la rete viene eseguita sulle quattro copie ribaltate della pagina e i risultati,
+  riportati nell'orientamento originale, vengono mediati sulla GPU: gli artefatti direzionali della rete si
+  cancellano e i bordi restano più puliti. È un moltiplicatore di qualità pagato in tempo (quattro passaggi). Il
   runner WebGPU lo supporta anche per il 6B (coda ×4 in un buffer nell'orientamento trasformato, kernel che lo
-  riporta in quello originale accumulando, media nella pagina) e i test lo verificano, ma l'app non lo applica a
-  quel modello: a secondi per passaggio significherebbe un minuto per pagina.
-- **Sfocatura anti-spoiler** (interruttore, attivo di default): mentre la versione HD viene calcolata la pagina
+  riporta in quello originale accumulando, media nella pagina) e i test lo verificano, ma Slow usa un passaggio: a
+  secondi per passaggio significherebbe un minuto per pagina.
+- **Sfocatura anti-spoiler** (interruttore, attivo di default): mentre la versione 4K viene calcolata la pagina
   resta sfocata (sfocatura che "respira") e si rivela nitida solo quando è pronta.
 - **Kernel scelto sul dispositivo**: le convoluzioni esistono in tre versioni. Due dirette a risultato identico,
   un thread per 4 pixel di una riga (16 accumulatori) o per 4 pixel di due righe (32 accumulatori: metà dei
@@ -263,7 +271,8 @@ l'app alla schermata Home; libri, segnalibri e cache restano al loro posto.
 ## Flag per i test
 
 - `?storage=idb` forza l'import in IndexedDB invece che in OPFS.
-- `?sr=off` disattiva la super risoluzione; `?sr=webgl2` / `?sr=webgpu` forzano il backend Anime4K.
+- `?sr=off` disattiva la super risoluzione; `?sr=webgl2` / `?sr=webgpu` forzano il backend Anime4K; `?mqcap=<ms>`
+  abbassa il limite di sicurezza del 4K (una coppia stimata oltre resta in HD).
 - `?test` espone `window.__reader.importFiles(files)`, `window.__reader.openSession(file)` e
   `window.__reader.esrganSelfTest(opts)` (sempre attivi in sviluppo).
 
