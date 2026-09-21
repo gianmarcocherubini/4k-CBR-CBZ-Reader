@@ -102,7 +102,7 @@ export interface ReaderSettings {
   maxQualityModel: MaxQualityModel
   /**
    * Spend the time left under the budget on averaged passes over flipped/rotated copies (2, 4 or
-   * 8; 4 with no limit). Both networks; off = one pass.
+   * 8; 4 with no limit). Anime v3 only; off = one pass.
    */
   maxQualityEnsemble: boolean
   /** Blur the plain page while its HD version is being computed (anti-spoiler), then unblur. */

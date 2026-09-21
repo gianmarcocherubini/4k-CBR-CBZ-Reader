@@ -149,16 +149,16 @@ WebAssembly), selezionabili in **Modello**:
 - **Attesa massima** (3 s, 5 s, 10 s, Sempre; default 5 s): all'attivazione l'app compila gli shader e **misura la
   GPU** su un'immagine di prova; per ogni coppia di pagine prevede il tempo e, se supera il limite, quella coppia usa
   la Super risoluzione (Anime4K) e la riga di stato dice perché. La stima si aggiorna con ogni pagina elaborata.
-- **Self-ensemble** (interruttore, spento di default, entrambi i modelli): acceso, la rete viene eseguita su copie
-  della pagina riflesse e ruotate (le 8 simmetrie del rettangolo) e i risultati, riportati nell'orientamento
-  originale, vengono mediati sulla GPU: gli artefatti direzionali della rete si cancellano e i bordi restano più
-  puliti. Il numero di passaggi (2, 4 o 8) è il massimo che sta nell'attesa massima; con «Sempre» sono quattro (i
-  quattro ribaltamenti, il self-ensemble classico). Su un iPad M-series v3 costa circa 1 s a passaggio, quindi con
-  il limite di 5 s si arriva a 4 passaggi (3–4 s); con 6B ogni passaggio costa decine di secondi. Spento: un
-  passaggio. La riga di stato riporta i passaggi usati (o perché non ne sta nemmeno un secondo nel limite).
-  Per il 6B il tronco e le convoluzioni sono indifferenti all'orientamento; la coda ×4 scrive i colori in un buffer
-  della fascia nell'orientamento trasformato, un kernel li riporta in quello originale accumulandoli e l'ultimo
-  passaggio ne fa la media nella pagina.
+- **Self-ensemble** (interruttore, spento di default, solo Anime v3): acceso, la rete viene eseguita su copie della
+  pagina riflesse e ruotate (le 8 simmetrie del rettangolo) e i risultati, riportati nell'orientamento originale,
+  vengono mediati sulla GPU: gli artefatti direzionali della rete si cancellano e i bordi restano più puliti. È un
+  moltiplicatore di qualità pagato in tempo, non un'accelerazione. Il numero di passaggi (2, 4 o 8) è il massimo che
+  sta nell'attesa massima; con «Sempre» sono quattro (i quattro ribaltamenti, il self-ensemble classico). Su un iPad
+  M-series v3 costa circa 1 s a passaggio, quindi con il limite di 5 s si arriva a 4 passaggi (3–4 s). Spento: un
+  passaggio. La riga di stato riporta i passaggi usati (o perché non ne sta nemmeno un secondo nel limite). Il
+  runner WebGPU lo supporta anche per il 6B (coda ×4 in un buffer nell'orientamento trasformato, kernel che lo
+  riporta in quello originale accumulando, media nella pagina) e i test lo verificano, ma l'app non lo applica a
+  quel modello: a secondi per passaggio significherebbe un minuto per pagina.
 - **Sfocatura anti-spoiler** (interruttore, attivo di default): mentre la versione HD viene calcolata la pagina
   resta sfocata (sfocatura che "respira") e si rivela nitida solo quando è pronta.
 - **Kernel scelto sul dispositivo**: le convoluzioni esistono in due varianti a risultato identico, un thread per

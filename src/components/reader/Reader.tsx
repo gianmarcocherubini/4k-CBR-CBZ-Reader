@@ -798,6 +798,7 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
         const shown = spreadPages.map((i) => displayed.get(i)).find((r) => r?.level === heavyLabel)
         const passes = shown?.ensemble ?? heavyEnsemble
         if (heavySkip === null && passes > 1) parts.push(`self-ensemble ×${passes} (${passes} passaggi mediati, più pulito)`)
+        else if (heavySkip === null && settings.maxQualityEnsemble && !engine.supportsEnsemble) parts.push('self-ensemble non applicato a questo modello (solo Anime v3)')
         else if (heavySkip === null && settings.maxQualityEnsemble && heavyBudgetMs > 0) {
           parts.push(`self-ensemble non applicato: anche 2 passaggi supererebbero l’attesa massima di ${settings.maxQualityBudget} s`)
         }

@@ -29,11 +29,16 @@ export interface ModelInfo {
   url: string
   /** Weight file size, for the download message. */
   megabytes: number
+  /**
+   * Whether the self-ensemble is offered for this network. The GPU runner supports it for both;
+   * the 6B costs seconds per pass, so averaging passes would mean a minute per page.
+   */
+  ensemble: boolean
 }
 
 export const MODELS: Record<MaxQualityModel, ModelInfo> = {
-  v3: { id: 'v3', label: 'Real-ESRGAN anime v3', url: weightsUrlV3, megabytes: 1.2 },
-  '6b': { id: '6b', label: 'Real-ESRGAN x4plus anime 6B', url: weightsUrl6b, megabytes: 8.9 },
+  v3: { id: 'v3', label: 'Real-ESRGAN anime v3', url: weightsUrlV3, megabytes: 1.2, ensemble: true },
+  '6b': { id: '6b', label: 'Real-ESRGAN x4plus anime 6B', url: weightsUrl6b, megabytes: 8.9, ensemble: false },
 }
 
 function synthetic(w: number, h: number): ImageBitmap {
@@ -130,9 +135,9 @@ export class EsrganEngine {
     return engine
   }
 
-  /** Whether `upscale` averages several passes when asked (both networks do). */
+  /** Whether the self-ensemble is available: the runner must support it and the model must be cheap enough per pass. */
   get supportsEnsemble(): boolean {
-    return this.upscaler.supportsEnsemble
+    return this.upscaler.supportsEnsemble && this.model.ensemble
   }
 
   /** Convolution kernel variant the benchmark selected (output rows per thread). */

@@ -61,7 +61,7 @@ export function MaxQualityControls({ enabled, budget, model, ensemble, blur, sta
       </Row>
       <Row
         title="Self-ensemble"
-        hint="Spento: un passaggio (Anime v3 circa 1 s per pagina). Acceso: più passaggi su copie riflesse e ruotate della pagina, mediati (bordi più puliti): quanti ne stanno nell’attesa massima (2, 4 o 8), quattro con «Sempre». Vale per entrambi i modelli: con 6B moltiplica tempi già lunghi."
+        hint="Solo Anime v3. Spento: un passaggio (circa 1 s per pagina). Acceso: più passaggi su copie riflesse e ruotate della pagina, mediati (bordi più puliti), al costo di altrettanto tempo: quanti ne stanno nell’attesa massima (2, 4 o 8), quattro con «Sempre». Non accelera nulla; sul 6B, che costa secondi a passaggio, non viene applicato."
       >
         <Switch checked={ensemble} onChange={onEnsemble} label="Self-ensemble" />
       </Row>
