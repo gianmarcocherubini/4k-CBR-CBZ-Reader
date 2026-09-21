@@ -247,13 +247,21 @@ test('WebGL2 fallback runs the same shaders and matches the WebGPU output', asyn
 })
 
 test('Real-ESRGAN WebGPU kernels match the float32 reference, band seams included', async ({ page }) => {
-  test.setTimeout(15 * 60_000)
+  test.setTimeout(25 * 60_000)
   await page.goto('/?test')
   const hasWebGPU = await page.evaluate(async () => !!(navigator as Navigator & { gpu?: GPU }).gpu && !!(await (navigator as Navigator & { gpu?: GPU }).gpu!.requestAdapter()))
   test.skip(!hasWebGPU, 'needs WebGPU')
   type Hooks = {
     __reader?: {
-      esrganSelfTest: (o: { width: number; height: number; smallBands?: boolean; ensemble?: 1 | 2 | 4 | 8; model?: 'v3' | '6b'; gpuReference?: boolean }) => Promise<SelfTest>
+      esrganSelfTest: (o: {
+        width: number
+        height: number
+        smallBands?: boolean
+        ensemble?: 1 | 2 | 4 | 8
+        model?: 'v3' | '6b'
+        gpuReference?: boolean
+        variant?: 1 | 2 | 'w'
+      }) => Promise<SelfTest>
     }
   }
   type SelfTest = { precision: 'f16' | 'f32'; bands: number; x4: { psnr: number; maxDiff: number }; x2: { psnr: number; maxDiff: number } }
@@ -278,6 +286,14 @@ test('Real-ESRGAN WebGPU kernels match the float32 reference, band seams include
   expect(ensemble.x4.maxDiff).toBeLessThanOrEqual(result.precision === 'f16' ? 12 : 2)
   expect(ensemble.x2.maxDiff).toBeLessThanOrEqual(result.precision === 'f16' ? 12 : 2)
 
+  // Winograd F(2x2, 3x3) kernels (input transform, shared-memory multiply, fused output transform)
+  // on the same bands: the same maths through transforms, exact to f32 rounding.
+  const wino = await page.evaluate(() => (window as unknown as Hooks).__reader!.esrganSelfTest({ width: 40, height: 56, smallBands: true, variant: 'w' }))
+  console.log('Real-ESRGAN Winograd self-test:', JSON.stringify(wino))
+  expect(wino.x4.psnr).toBeGreaterThan(result.precision === 'f16' ? 38 : 60)
+  expect(wino.x4.maxDiff).toBeLessThanOrEqual(result.precision === 'f16' ? 12 : 1)
+  expect(wino.x2.maxDiff).toBeLessThanOrEqual(result.precision === 'f16' ? 12 : 1)
+
   // The 6-block RRDB network (dense blocks, residual scaling, nearest-upsample tail on strips): one
   // band of a 16x12 image reproduces the CPU reference to the bit in f32.
   const rrdb = await page.evaluate(() => (window as unknown as Hooks).__reader!.esrganSelfTest({ width: 16, height: 12, model: '6b' }))
@@ -285,6 +301,13 @@ test('Real-ESRGAN WebGPU kernels match the float32 reference, band seams include
   expect(rrdb.x4.psnr).toBeGreaterThan(result.precision === 'f16' ? 38 : 60)
   expect(rrdb.x4.maxDiff).toBeLessThanOrEqual(result.precision === 'f16' ? 12 : 1)
   expect(rrdb.x2.maxDiff).toBeLessThanOrEqual(result.precision === 'f16' ? 12 : 1)
+
+  // Winograd on the 6B: dense concatenations, residual epilogues and the upsampling tail, bit-exact in f32.
+  const rrdbWino = await page.evaluate(() => (window as unknown as Hooks).__reader!.esrganSelfTest({ width: 16, height: 12, model: '6b', variant: 'w' }))
+  console.log('Real-ESRGAN 6B Winograd self-test:', JSON.stringify(rrdbWino))
+  expect(rrdbWino.x4.psnr).toBeGreaterThan(result.precision === 'f16' ? 38 : 60)
+  expect(rrdbWino.x4.maxDiff).toBeLessThanOrEqual(result.precision === 'f16' ? 12 : 1)
+  expect(rrdbWino.x2.maxDiff).toBeLessThanOrEqual(result.precision === 'f16' ? 12 : 1)
 
   // 6B self-ensemble with all eight symmetries (transposed passes included) over three bands, the
   // last one shorter: compared with the GPU's own single passes mapped back and averaged.
@@ -319,7 +342,7 @@ test('Qualità massima: Real-ESRGAN x4 on the visible page only, time budget fal
   await expect(status).not.toContainText('Inizializzazione', { timeout: 5 * 60_000 })
   const text = (await status.textContent()) ?? ''
   console.log('Qualità massima:', text)
-  expect(text).toMatch(/Real-ESRGAN anime v3 ×4 · WebGPU F(16|32) · kernel 4×[12]/)
+  expect(text).toMatch(/Real-ESRGAN anime v3 ×4 · WebGPU F(16|32) · kernel (4×[12]|Winograd)/)
   expect(text).toMatch(/stimati [\d.]+ s per la pagina/)
   await page.getByRole('button', { name: 'Chiudi impostazioni' }).click()
 

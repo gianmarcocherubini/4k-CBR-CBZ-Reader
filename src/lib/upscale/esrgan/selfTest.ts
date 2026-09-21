@@ -3,7 +3,7 @@ import { loadWeights } from './esrganEngine'
 import { createUpscaler, type EsrganFactor } from './esrganUpscaler'
 import { runEnsembleReference, runRrdbReference, runSrvggReference } from './reference'
 import { type EnsembleSize, ensembleTransforms, inverseTransformRgba, transformedSize, transformRgba } from './transforms'
-import type { ConvRows } from './wgsl'
+import type { ConvVariant } from './wgsl'
 
 export interface SelfTestOptions {
   width?: number
@@ -14,8 +14,8 @@ export interface SelfTestOptions {
   ensemble?: EnsembleSize
   /** Network to test (default the compact v3). */
   model?: MaxQualityModel
-  /** Convolution kernel variant (output rows per thread), default 1. */
-  variant?: ConvRows
+  /** Convolution kernel: 1 or 2 direct output rows per thread, or 'w' for Winograd (default 1). */
+  variant?: ConvVariant
   /**
    * Ensemble reference computed by the GPU itself: single passes on the transformed images, mapped
    * back and averaged. Checks the ensemble plumbing (transposed input, output mapping,
@@ -26,7 +26,7 @@ export interface SelfTestOptions {
 
 export interface SelfTestResult {
   model: MaxQualityModel
-  variant: ConvRows
+  variant: ConvVariant
   adapter: string
   precision: 'f16' | 'f32'
   bands: number
