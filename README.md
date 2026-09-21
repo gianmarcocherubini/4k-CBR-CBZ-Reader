@@ -1,7 +1,10 @@
-# 4K CBR/CBZ Reader
+# Mangadana
 
-Lettore di fumetti e manga per iPad, come **web app installabile (PWA)** con un'interfaccia nello stile di Apple
-Libri: tutto gira nel browser, nessun server. Importa file **CBZ/ZIP** (anche protetti da password) e **CBR** (RAR)
+Lettore di fumetti e manga per iPad, come **web app installabile (PWA)**: tutto gira nel browser, nessun server.
+Il nome viene da 漫画 (manga) e 棚 (*dana*, da 本棚 *hondana*, lo scaffale dei libri): lo scaffale dei manga. Il
+marchio è la corona del set «Extras» del carattere Sprite Graffiti di Fontfabric (licenza gratuita per uso
+commerciale: loghi e immagini statiche sono permessi; il font non viene incorporato nell'app, il marchio è un
+tracciato SVG in `src/components/Brand.tsx` e `public/icons/`). Importa file **CBZ/ZIP** (anche protetti da password) e **CBR** (RAR)
 fino a 10 GB ciascuno, li
 tiene nell'archiviazione dell'app anche offline e li mostra a piena risoluzione con lettura da destra a sinistra,
 doppia pagina intelligente e super risoluzione AI sulla GPU.
@@ -45,8 +48,9 @@ build di produzione e verificano anche il funzionamento offline.
 
 Un monocromo caldo con una sola tinta d'accento, nello spirito delle superfici di Cursor (inchiostro su avorio,
 avorio su quasi nero, linee sottili come inchiostro a bassa opacità, etichette piccole in maiuscoletto, pochissime
-ombre) impaginato come l'app Apple TV: barra superiore con le collezioni a schede, uno scaffale **Continua a
-leggere**, poi la griglia delle copertine, che si sollevano al passaggio o al fuoco. I controlli sono inchiostro o
+ombre) impaginato come l'app Apple TV: barra superiore con il wordmark (corona + Mangadana) e le collezioni a
+schede, uno scaffale **Continua a leggere**, poi la griglia delle copertine, che si sollevano al passaggio o al
+fuoco. L'icona dell'app è la corona in avorio su inchiostro. I controlli sono inchiostro o
 avorio; l'arancione segna solo l'avanzamento e l'indicatore di risoluzione. L'aspetto segue quello del sistema
 (chiaro o scuro); in **Impostazioni → Aspetto** si può forzare, e lo **sfondo di lettura** dietro le pagine può
 essere Default (grigio caldo o nero a seconda dell'aspetto), Nero o Bianco.

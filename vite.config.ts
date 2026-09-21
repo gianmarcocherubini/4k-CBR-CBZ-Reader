@@ -40,9 +40,9 @@ export default defineConfig({
       includeAssets: ['icons/*.png', 'icons/*.svg'],
       manifest: {
         id: './',
-        name: '4K CBR/CBZ Reader',
-        short_name: 'Reader',
-        description: 'Lettore di fumetti e manga (CBZ/CBR) ad alta risoluzione per iPad',
+        name: 'Mangadana',
+        short_name: 'Mangadana',
+        description: 'Mangadana: lettore di fumetti e manga (CBZ/CBR) ad alta risoluzione per iPad',
         lang: 'it',
         dir: 'ltr',
         start_url: './',
@@ -52,8 +52,8 @@ export default defineConfig({
         display: 'fullscreen',
         display_override: ['fullscreen', 'standalone'],
         orientation: 'any',
-        background_color: '#ffffff',
-        theme_color: '#f2f2f7',
+        background_color: '#f7f7f4',
+        theme_color: '#f7f7f4',
         categories: ['books', 'entertainment'],
         icons: [
           { src: 'icons/icon-192.png', sizes: '192x192', type: 'image/png' },
