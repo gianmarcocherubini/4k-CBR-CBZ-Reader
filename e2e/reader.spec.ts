@@ -808,6 +808,65 @@ test.describe('library', () => {
     await expect(page.getByTestId('check-updates')).toHaveText('Aggiornamenti automatici non attivi in questa modalità')
   })
 
+  test('PDF, CBT and fixed-layout EPUB open like archives; a PDF page renders at the resolution of its embedded image', async ({ page }) => {
+    await page.goto('/')
+    const statuses = await importBooks(page, ['manga-pdf.pdf', 'manga-cbt.cbt', 'manga-epub.epub'])
+    expect(statuses).toEqual(['Importato', 'Importato', 'Importato'])
+    await expect(page.getByTestId('book-card')).toHaveCount(3)
+    // Every format yields a first-page thumbnail: rendered (PDF), sliced (tar), spine-ordered (EPUB).
+    await expect(page.locator('[data-testid=book-card] img')).toHaveCount(3)
+    const progress = (await page.getByTestId('book-progress').allTextContents()).join('|')
+    expect(progress).toMatch(/4 pagine · PDF/)
+    expect(progress).toMatch(/3 pagine · CBT/)
+    expect(progress).toMatch(/3 pagine · EPUB/)
+    const storedSizes = () =>
+      page.evaluate(
+        () =>
+          new Promise<Record<string, Array<{ w: number; h: number } | null>>>((resolve, reject) => {
+            const open = indexedDB.open('cbz-reader')
+            open.onerror = () => reject(open.error)
+            open.onsuccess = () => {
+              const tx = open.result.transaction(['books', 'pageSizes'])
+              const books = tx.objectStore('books').getAll()
+              const sizes = tx.objectStore('pageSizes').getAll()
+              tx.oncomplete = () => {
+                const byId = new Map((books.result as Array<{ id: string; fileName: string }>).map((b) => [b.id, b.fileName]))
+                resolve(Object.fromEntries((sizes.result as Array<{ bookId: string; sizes: Array<{ w: number; h: number } | null> }>).map((s) => [byId.get(s.bookId)!, s.sizes])))
+              }
+              tx.onerror = () => reject(tx.error)
+            }
+          }),
+      )
+
+    // PDF: pages are 400×600 points holding 800×1200 images; the reader renders at the image's size.
+    await openBook(page, 'manga-pdf')
+    await expect(label(page)).toHaveText('1')
+    await page.keyboard.press('End')
+    await expect(label(page)).toHaveText('4')
+    await page.keyboard.press('Home')
+    await expect(label(page)).toHaveText('1')
+    await page.waitForTimeout(700)
+    await page.getByTestId('back').click()
+    await expect.poll(async () => (await storedSizes())['manga-pdf.pdf']?.[0]).toEqual({ w: 800, h: 1200 })
+    expect((await storedSizes())['manga-pdf.pdf']?.[2]).toEqual({ w: 1600, h: 1200 })
+
+    // CBT: three pages, the wide one (2) alone once its size is known, so the last spread is page 3.
+    await openBook(page, 'manga-cbt')
+    await expect(label(page)).toHaveText('1')
+    await page.keyboard.press('ArrowLeft')
+    await expect(label(page)).toHaveText('2', { timeout: 15_000 })
+    await page.keyboard.press('End')
+    await expect(label(page)).toHaveText('3')
+    await page.getByTestId('back').click()
+
+    // EPUB: the spine puts the wide image first, although its file name sorts second.
+    await openBook(page, 'manga-epub')
+    await expect(label(page)).toHaveText('1')
+    await page.waitForTimeout(700)
+    await page.getByTestId('back').click()
+    await expect.poll(async () => (await storedSizes())['manga-epub.epub']?.[0]).toEqual({ w: 1600, h: 1200 })
+  })
+
   test('a file that is not a backup is refused with a clear message', async ({ page }) => {
     await page.goto('/')
     await page.setInputFiles('[data-testid=restore-input]', { name: 'note.json', mimeType: 'application/json', buffer: Buffer.from('{"hello":1}') })

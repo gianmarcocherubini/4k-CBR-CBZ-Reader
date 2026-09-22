@@ -22,7 +22,8 @@ marchio è la corona del set «Extras» del carattere Sprite Graffiti di Fontfab
 commerciale: loghi e immagini statiche sono permessi; il font non viene incorporato nell'app, il marchio è un
 tracciato SVG in `src/components/crown.json`, disegnato da `Brand.tsx` e da `scripts/make-brand-assets.mjs`, che
 genera le immagini di avvio iOS, l'anteprima social, il wordmark di questo README e la favicon; le icone sono in
-`public/icons/`). Importa file **CBZ/ZIP** (anche protetti da password) e **CBR** (RAR) fino a 10 GB ciascuno, li
+`public/icons/`). Importa file **CBZ/ZIP** (anche protetti da password), **CBR** (RAR), **CBT** (tar), **PDF** ed **EPUB** a
+layout fisso fino a 10 GB ciascuno, li
 tiene nell'archiviazione dell'app anche offline e li mostra a piena risoluzione con lettura da destra a sinistra,
 doppia pagina intelligente e super risoluzione AI sulla GPU.
 
@@ -300,7 +301,10 @@ riconosce entrambe le architetture dai nomi dei tensori).
 | CBR / RAR 4 e RAR 5 | Sì, tramite unrar (WebAssembly) in un worker con letture a finestra sul file. |
 | RAR "solido" o multi-volume | No: messaggio esplicito. Ricomprimere senza l'opzione solido. |
 | RAR cifrati / directory centrale ZIP cifrata | No: messaggio esplicito. |
-| 7z, PDF | No. |
+| CBT / tar | Sì: tar non compresso, ogni pagina è una fetta del file (ustar, nomi lunghi GNU, pax). |
+| PDF | Sì, anche protetti da password. Ogni pagina viene resa con pdf.js **alla risoluzione dell'immagine più grande che contiene** (un fumetto in PDF è un'immagine per pagina), quindi senza perdere né inventare dettaglio; le pagine senza immagini a 144 dpi. Il file viene letto a intervalli (`PDFDataRangeTransport` su `Blob.slice`), mai caricato intero; il parser gira in un worker dedicato per documento, caricato alla prima apertura (build «legacy» di pdf.js, con i polyfill per iPadOS 17/18). |
+| EPUB a layout fisso | Sì: le immagini delle pagine dello *spine*, nell'ordine di lettura (`container.xml` → OPF → manifest e spine → `<img>`/`<image>` di ogni XHTML); le pagine di solo testo vengono saltate. Se il pacchetto non si legge, le immagini in ordine naturale. Gli EPUB cifrati come ZIP si aprono con la password come i CBZ. |
+| CB7 / 7z | No: i 7z di fumetti sono quasi sempre «solidi» (un unico flusso compresso), il che esclude la lettura pagina per pagina. |
 | Immagini | JPEG, PNG, GIF, WebP, BMP, AVIF, HEIC (quelle che il browser sa decodificare). |
 
 Le pagine sono ordinate in modo naturale (`2.jpg` prima di `10.jpg`), ignorando `__MACOSX`, file nascosti e
@@ -425,7 +429,8 @@ segnalibri e cache restano al loro posto.
 
 ```
 src/
-  lib/archive/     rilevamento formato, lettore ZIP (zip.js), lettore RAR (worker + Extractor su Blob)
+  lib/archive/     rilevamento formato, lettore ZIP (zip.js), lettore RAR (worker + Extractor su Blob), lettore tar,
+                   lettore PDF (pdf.js, pagine rese a richiesta), spine EPUB
   lib/storage/     IndexedDB (idb), OPFS, worker di copia, import, miniature, backup della libreria
                    (backup.ts: formato, validazione e piano di ripristino; backupActions.ts: file, condivisione)
   lib/reader/      layout delle tavole (con spazio centrale), cache LRU delle pagine

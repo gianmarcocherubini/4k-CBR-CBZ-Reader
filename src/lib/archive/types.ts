@@ -56,7 +56,7 @@ export function describeError(code: ArchiveErrorCode, fileName?: string): string
     case 'invalid-password':
       return `La password inserita per ${f} non è corretta.`
     case 'unsupported':
-      return `${f} non è un archivio CBZ (ZIP) o CBR (RAR). Formati come 7z o PDF non sono supportati.`
+      return `${f} non è un formato supportato: CBZ (ZIP), CBR (RAR), CBT (tar), PDF o EPUB. Il 7z non è supportato.`
     case 'empty':
       return `${f} non contiene immagini.`
     case 'solid':
@@ -80,9 +80,9 @@ export function describeError(code: ArchiveErrorCode, fileName?: string): string
   }
 }
 
-/** Common interface of CBZ and CBR readers. Memory-bounded: never loads the whole archive. */
+/** Common interface of the container readers. Memory-bounded: never loads the whole file. */
 export interface ArchiveReader {
-  readonly format: 'cbz' | 'cbr'
+  readonly format: 'cbz' | 'cbr' | 'cbt' | 'pdf'
   /** Lists every entry of the archive (directories included). */
   entries(): Promise<ArchiveEntry[]>
   /** Extracts a single entry as a Blob. */

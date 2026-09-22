@@ -195,7 +195,7 @@ export function parseBackup(json: string): BackupFile {
     if (!isRecord(item)) continue
     const fileName = text(item.fileName, 512)
     const fileSize = finite(item.fileSize, -1)
-    const format = item.format === 'cbr' ? 'cbr' : item.format === 'cbz' ? 'cbz' : undefined
+    const format = (['cbz', 'cbr', 'cbt', 'pdf', 'epub'] as const).find((f) => f === item.format)
     if (!fileName || fileSize < 0 || !Number.isInteger(fileSize) || !format) continue
     const key = pendingRestoreKey(fileName, fileSize)
     if (seen.has(key)) continue

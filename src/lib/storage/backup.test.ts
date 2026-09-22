@@ -79,7 +79,7 @@ describe('parseBackup', () => {
           { fileName: 'a.cbz', fileSize: 10, format: 'cbz', collectionId: 'missing', cover: 'data:text/html;base64,PGI+', progress: { page: -3, updatedAt: 'x', blanks: [1, -1, 'q', 2.5, 4] } },
           { fileName: 'a.cbz', fileSize: 10, format: 'cbz', title: 'duplicate' },
           { fileName: 'b.cbr', fileSize: 10.5, format: 'cbr' },
-          { fileName: 'c.cbr', fileSize: 20, format: 'pdf' },
+          { fileName: 'c.cbr', fileSize: 20, format: 'djvu' },
           { fileName: '', fileSize: 20, format: 'cbz' },
           { fileName: 'd.cbz', fileSize: 30, format: 'cbz', collectionId: 'c1', passwordProtected: 'yes' },
         ],

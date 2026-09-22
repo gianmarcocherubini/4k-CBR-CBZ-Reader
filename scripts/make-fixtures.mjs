@@ -112,6 +112,11 @@ function hue(i) {
 }
 
 function drawPage(index, label, w, h) {
+  return encodePng(w, h, paintPage(index, label, w, h).buf)
+}
+
+/** The RGB buffer of a page, for containers that embed raw samples (the PDF fixture). */
+function paintPage(index, label, w, h) {
   const p = new Page(w, h)
   const ink = [0x14, 0x14, 0x1a]
   p.frame(24, 24, w - 48, h - 48, 6, ink)
@@ -133,7 +138,7 @@ function drawPage(index, label, w, h) {
   p.text(label, w / 2, h / 2, w > h ? 22 : 18, ink)
   // small "reading direction" marks: black bar at the left edge (RTL: left = next)
   p.rect(0, 0, 14, h, [0x30, 0x30, 0x38])
-  return encodePng(w, h, p.buf)
+  return p
 }
 
 async function writeZip(name, entries, opts = {}) {
@@ -241,3 +246,112 @@ const sevenZip = Buffer.alloc(4096)
 sevenZip.set([0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c])
 writeFileSync(join(outDir, 'archive.7z'), sevenZip)
 console.log('wrote archive.7z')
+// ---- PDF: one FlateDecode RGB image per page, drawn to fill a page of half its pixel size --------
+// (so the reader must render at the image's own resolution, not at the page's 72 dpi).
+function pdf(pages) {
+  const objects = []
+  const add = (body) => {
+    objects.push(body)
+    return objects.length
+  }
+  const catalog = add(null)
+  const pagesObj = add(null)
+  const kids = []
+  for (const { w, h, rgb } of pages) {
+    const data = deflateSync(Buffer.from(rgb.buffer, rgb.byteOffset, rgb.byteLength), { level: 6 })
+    const image = add(Buffer.concat([
+      Buffer.from(`<< /Type /XObject /Subtype /Image /Width ${w} /Height ${h} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode /Length ${data.length} >>\nstream\n`),
+      data,
+      Buffer.from('\nendstream'),
+    ]))
+    const pw = w / 2
+    const ph = h / 2
+    const content = Buffer.from(`q ${pw} 0 0 ${ph} 0 0 cm /Im0 Do Q`)
+    const contents = add(Buffer.concat([Buffer.from(`<< /Length ${content.length} >>\nstream\n`), content, Buffer.from('\nendstream')]))
+    kids.push(add(`<< /Type /Page /Parent ${pagesObj} 0 R /MediaBox [0 0 ${pw} ${ph}] /Resources << /XObject << /Im0 ${image} 0 R >> >> /Contents ${contents} 0 R >>`))
+  }
+  objects[catalog - 1] = `<< /Type /Catalog /Pages ${pagesObj} 0 R >>`
+  objects[pagesObj - 1] = `<< /Type /Pages /Kids [${kids.map((k) => `${k} 0 R`).join(' ')}] /Count ${kids.length} >>`
+  const parts = [Buffer.from('%PDF-1.4\n%\xe2\xe3\xcf\xd3\n', 'latin1')]
+  const offsets = []
+  let position = parts[0].length
+  objects.forEach((body, i) => {
+    offsets.push(position)
+    const chunk = Buffer.concat([Buffer.from(`${i + 1} 0 obj\n`), Buffer.isBuffer(body) ? body : Buffer.from(body), Buffer.from('\nendobj\n')])
+    parts.push(chunk)
+    position += chunk.length
+  })
+  const xref = [`xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`, ...offsets.map((o) => `${String(o).padStart(10, '0')} 00000 n \n`)].join('')
+  parts.push(Buffer.from(`${xref}trailer\n<< /Size ${objects.length + 1} /Root ${catalog} 0 R >>\nstartxref\n${position}\n%%EOF\n`))
+  return Buffer.concat(parts)
+}
+const pdfPages = [0, 1, 2, 3].map((i) => {
+  const wide = i === 2
+  const w = wide ? 1600 : 800
+  const h = 1200
+  return { w, h, rgb: paintPage(i + 100, String(i + 1), w, h).buf }
+})
+writeFileSync(join(outDir, 'manga-pdf.pdf'), pdf(pdfPages))
+console.log('wrote manga-pdf.pdf')
+
+// ---- CBT: ustar with a directory, three pages (one wide) and a text entry -----------------------
+function tarHeader(name, size, type) {
+  const block = Buffer.alloc(512)
+  block.write(name.slice(0, 100), 0, 'utf8')
+  block.write('0000644\0', 100)
+  block.write('0001750\0', 108)
+  block.write('0001750\0', 116)
+  block.write(`${size.toString(8).padStart(11, '0')}\0`, 124)
+  block.write('00000000000\0', 136)
+  block.write('        ', 148)
+  block.write(type, 156)
+  block.write('ustar\0', 257)
+  block.write('00', 263)
+  let sum = 0
+  for (const b of block) sum += b
+  block.write(`${sum.toString(8).padStart(6, '0')}\0 `, 148)
+  return block
+}
+function tar(entries) {
+  const parts = []
+  for (const e of entries) {
+    const data = e.directory ? Buffer.alloc(0) : typeof e.data === 'string' ? Buffer.from(e.data) : Buffer.from(e.data)
+    parts.push(tarHeader(e.name, data.length, e.directory ? '5' : '0'))
+    if (!e.directory) {
+      parts.push(data)
+      const pad = (512 - (data.length % 512)) % 512
+      if (pad) parts.push(Buffer.alloc(pad))
+    }
+  }
+  parts.push(Buffer.alloc(1024))
+  return Buffer.concat(parts)
+}
+writeFileSync(
+  join(outDir, 'manga-cbt.cbt'),
+  tar([
+    { name: 'Tar Book/', directory: true },
+    { name: 'Tar Book/003.png', data: drawPage(112, '3', 800, 1200) },
+    { name: 'Tar Book/001.png', data: drawPage(110, '1', 800, 1200) },
+    { name: 'Tar Book/002.png', data: drawPage(111, '2', 1600, 1200) },
+    { name: 'Tar Book/notes.txt', data: 'non una pagina' },
+  ]),
+)
+console.log('wrote manga-cbt.cbt')
+
+// ---- EPUB (fixed layout): spine order differs from the natural order of the file names ----------
+const epubImages = { 'OEBPS/image/img-a.png': drawPage(120, 'A', 800, 1200), 'OEBPS/image/img-b.png': drawPage(121, 'B', 1600, 1200), 'OEBPS/image/img-c.png': drawPage(122, 'C', 800, 1200) }
+const xhtml = (img) => `<?xml version="1.0" encoding="UTF-8"?><html xmlns="http://www.w3.org/1999/xhtml"><head><meta name="viewport" content="width=800, height=1200"/></head><body><div><img src="../image/${img}" alt=""/></div></body></html>`
+await writeZip('manga-epub.epub', [
+  { name: 'mimetype', data: Buffer.from('application/epub+zip'), level: 0 },
+  { name: 'META-INF/container.xml', data: '<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>' },
+  {
+    name: 'OEBPS/content.opf',
+    data: `<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">urn:uuid:test</dc:identifier><dc:title>Epub Book</dc:title><meta property="rendition:layout">pre-paginated</meta></metadata><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="pb" href="xhtml/p-b.xhtml" media-type="application/xhtml+xml"/><item id="pc" href="xhtml/p-c.xhtml" media-type="application/xhtml+xml"/><item id="pa" href="xhtml/p-a.xhtml" media-type="application/xhtml+xml"/><item id="ptext" href="xhtml/colophon.xhtml" media-type="application/xhtml+xml"/><item id="ia" href="image/img-a.png" media-type="image/png"/><item id="ib" href="image/img-b.png" media-type="image/png"/><item id="ic" href="image/img-c.png" media-type="image/png"/></manifest><spine page-progression-direction="rtl"><itemref idref="pb"/><itemref idref="pc"/><itemref idref="pa"/><itemref idref="ptext"/></spine></package>`,
+  },
+  { name: 'OEBPS/nav.xhtml', data: '<html xmlns="http://www.w3.org/1999/xhtml"><body><nav epub:type="toc" xmlns:epub="http://www.idpf.org/2007/ops"><ol><li><a href="xhtml/p-b.xhtml">Start</a></li></ol></nav></body></html>' },
+  { name: 'OEBPS/xhtml/p-b.xhtml', data: xhtml('img-b.png') },
+  { name: 'OEBPS/xhtml/p-c.xhtml', data: xhtml('img-c.png') },
+  { name: 'OEBPS/xhtml/p-a.xhtml', data: xhtml('img-a.png') },
+  { name: 'OEBPS/xhtml/colophon.xhtml', data: '<html xmlns="http://www.w3.org/1999/xhtml"><body><p>Solo testo</p></body></html>' },
+  ...Object.entries(epubImages).map(([name, data]) => ({ name, data })),
+])
