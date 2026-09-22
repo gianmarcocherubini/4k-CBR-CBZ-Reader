@@ -1,25 +1,40 @@
 import { describe, expect, it } from 'vitest'
 import { MAX_OUTPUT_PIXELS } from '../backend'
-import { esrganFactor, planBands, workPixels } from './esrganUpscaler'
+import { esrganFactor, paddedWidth, planBands, workPixels } from './esrganUpscaler'
 import { CONTEXT } from './weights'
 
 const F16_BYTES_PER_PIXEL = 16 * 8
 const MAX_ACT = 48 * 1024 * 1024
 
 describe('esrganFactor', () => {
-  it('uses x4 when it fits the canvas cap, x2 when only x2 fits, and refuses oversized pages', () => {
+  it('uses x4 when it fits the canvas cap, x2 when only x2 fits, x1 for larger pages, and refuses only huge ones', () => {
     expect(esrganFactor({ w: 800, h: 1200 })).toBe(4)
     expect(esrganFactor({ w: 1000, h: 1500 })).toBe(2)
+    // High-resolution digital releases (2000x3000 and the like) are larger than any screen: the
+    // network still restores them, at their own size.
+    expect(esrganFactor({ w: 2000, h: 3000 })).toBe(1)
+    expect(esrganFactor({ w: 1700, h: 2500 })).toBe(1)
+    expect(esrganFactor({ w: 3000, h: 4200 })).toBe(1)
     expect(esrganFactor({ w: 8000, h: 4000 })).toBeNull()
     for (const [w, h] of [
       [800, 1200],
       [1024, 1024],
       [1000, 1500],
       [2000, 2000],
+      [2000, 3000],
+      [3000, 5000],
     ]) {
       const f = esrganFactor({ w, h })
       if (f) expect(w * h * f * f).toBeLessThanOrEqual(MAX_OUTPUT_PIXELS)
     }
+  })
+
+  it('at x1 the padded copy of the page the run starts from must fit the cap too', () => {
+    // 4000x4190 is under 16.8 MP, but padded by CONTEXT on every side it is not.
+    expect(4000 * 4190).toBeLessThanOrEqual(MAX_OUTPUT_PIXELS)
+    expect(paddedWidth(4000) * (4190 + 2 * CONTEXT)).toBeGreaterThan(MAX_OUTPUT_PIXELS)
+    expect(esrganFactor({ w: 4000, h: 4190 })).toBeNull()
+    expect(esrganFactor({ w: 4000, h: 4000 })).toBe(1)
   })
 })
 

@@ -1,3 +1,4 @@
+import type { EsrganFactor } from './esrganUpscaler'
 import { type Dihedral, inverseTransformRgba, transformedSize, transformRgba } from './transforms'
 import { CONTEXT, f16ArrayToF32, type Layer, RECEPTIVE_FIELD, type SrvggWeights } from './weights'
 
@@ -114,7 +115,7 @@ function rgbaToPlanes(rgba: Uint8ClampedArray, w: number, h: number, pad: number
  * stages, conv_hr, conv_last. `pad = 'zero'` runs the whole image like PyTorch (for the fixture);
  * `'clamp'` replicate-pads the input by CONTEXT and clamps at every layer, like one GPU band.
  */
-export function runRrdbReference(weights: SrvggWeights, rgba: Uint8ClampedArray, w: number, h: number, factor: 2 | 4, pad: PadMode = 'clamp'): Uint8ClampedArray {
+export function runRrdbReference(weights: SrvggWeights, rgba: Uint8ClampedArray, w: number, h: number, factor: EsrganFactor, pad: PadMode = 'clamp'): Uint8ClampedArray {
   const context = pad === 'clamp' ? CONTEXT : 0
   const layer = (name: string) => {
     const l = weights.byName.get(name)
@@ -142,7 +143,7 @@ export function runRrdbReference(weights: SrvggWeights, rgba: Uint8ClampedArray,
   const u2 = conv3x3(upsampleNearest2(u1), layer('conv_up2'), pad, 'lrelu')
   const hr = conv3x3(u2, layer('conv_hr'), pad, 'lrelu')
   const out = conv3x3(hr, layer('conv_last'), pad, 'none') // 4 channels, the 4th is padding
-  // Crop the context (×4) and produce the requested factor (x2 = 2x2 box of the clamped x4).
+  // Crop the context (×4) and produce the requested factor (x2 = 2x2 box of the clamped x4, x1 = 4x4).
   const outW = w * factor
   const outH = h * factor
   const result = new Uint8ClampedArray(outW * outH * 4)
@@ -168,13 +169,13 @@ export function runRrdbReference(weights: SrvggWeights, rgba: Uint8ClampedArray,
   return result
 }
 
-type Runner = (rgba: Uint8ClampedArray, w: number, h: number, factor: 2 | 4) => Uint8ClampedArray
+type Runner = (rgba: Uint8ClampedArray, w: number, h: number, factor: EsrganFactor) => Uint8ClampedArray
 
 /**
  * Geometric self-ensemble of a reference network: it runs on each transformed copy of the image,
  * the outputs are mapped back and averaged. What the GPU path computes for `ensemble > 1`.
  */
-export function runEnsembleReference(run: Runner, rgba: Uint8ClampedArray, w: number, h: number, factor: 2 | 4, transforms: readonly Dihedral[]): Uint8ClampedArray {
+export function runEnsembleReference(run: Runner, rgba: Uint8ClampedArray, w: number, h: number, factor: EsrganFactor, transforms: readonly Dihedral[]): Uint8ClampedArray {
   const outW = w * factor
   const outH = h * factor
   const sum = new Float64Array(outW * outH * 4)
@@ -194,7 +195,7 @@ export function runSrvggEnsembleReference(
   rgba: Uint8ClampedArray,
   w: number,
   h: number,
-  factor: 2 | 4,
+  factor: EsrganFactor,
   transforms: readonly Dihedral[],
 ): Uint8ClampedArray {
   return runEnsembleReference((img, iw, ih, f) => runSrvggReference(weights, img, iw, ih, f), rgba, w, h, factor, transforms)
@@ -206,7 +207,7 @@ export function runSrvggEnsembleReference(
  * before the network runs and the output is cropped back, so border pixels match a page processed
  * whole. Far too slow for real pages; only for tests on tiny images.
  */
-export function runSrvggReference(weights: SrvggWeights, rgba: Uint8ClampedArray, w: number, h: number, factor: 2 | 4): Uint8ClampedArray {
+export function runSrvggReference(weights: SrvggWeights, rgba: Uint8ClampedArray, w: number, h: number, factor: EsrganFactor): Uint8ClampedArray {
   const pad = RECEPTIVE_FIELD
   const pw = w + 2 * pad
   const ph = h + 2 * pad
@@ -256,7 +257,7 @@ export function runSrvggReference(weights: SrvggWeights, rgba: Uint8ClampedArray
     }
     act = out
   }
-  // Pixel shuffle (x4) plus the nearest-neighbour residual, clamped; x2 is a 2x2 box of the x4 output.
+  // Pixel shuffle (x4) plus the nearest-neighbour residual, clamped; x2 is a 2x2 box of the x4 output, x1 a 4x4 one.
   const up = weights.header.upscale
   const outW = w * factor
   const outH = h * factor

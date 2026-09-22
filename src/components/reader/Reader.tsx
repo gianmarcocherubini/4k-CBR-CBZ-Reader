@@ -1020,13 +1020,20 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
         const shown = spreadPages.map((i) => displayed.get(i)).find((r) => r?.level === heavyLabel)
         const passes = shown?.ensemble ?? heavyEnsembleSize
         if (heavySkip === null && passes > 1) parts.push(`self-ensemble ×${passes} (${passes} passaggi mediati, più pulito)`)
+        // Pages whose x4 would exceed the 16 MP canvas cap come out at x2 or, larger still, at their own size.
+        const factor = heavySkip === null ? Math.min(...visibleSizes.map((s) => engine.factorFor(s) ?? 4)) : 4
+        if (factor === 2) parts.push('uscita ×2: il ×4 supererebbe i 16 MP del canvas')
+        else if (factor === 1) parts.push('pagina grande, restaurata alla sua risoluzione (×1): anche il ×2 supererebbe i 16 MP del canvas')
         const est = engine.estimateMs(visibleSizes, heavySkip === null ? heavyEnsembleSize : 1)
         if (est !== undefined && visibleSizes.length > 0) {
           parts.push(`stimati ${(est / 1000).toFixed(1)} s per ${visibleSizes.length > 1 ? 'la coppia' : 'la pagina'} sullo schermo`)
         }
         if (shown && shown.ms > 0) parts.push(`ultima pagina ${(shown.ms / 1000).toFixed(1)} s`)
         if (heavySkip === 'slow') parts.push(`oltre ${Math.round(heavyBudgetMs / 1000)} s per queste pagine: restano in HD`)
-        else if (heavySkip === 'too-big') parts.push('pagina troppo grande per il modello: resta in HD')
+        else if (heavySkip === 'too-big') {
+          const big = visibleSizes.find((s) => engine.factorFor(s) === null)
+          parts.push(`pagina ${big ? `${big.w}×${big.h} ` : ''}troppo grande per il modello (oltre 16 MP con il margine, o troppo larga per le bande): resta in HD`)
+        }
         else if (heavySkip === 'error') parts.push(`errore (${heavyError ?? 'sconosciuto'}): resta in HD`)
         return parts.join(' · ')
       }

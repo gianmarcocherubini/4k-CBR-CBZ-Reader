@@ -1,6 +1,6 @@
 /// <reference types="@webgpu/types" />
 import type { PageSize } from '../../../types'
-import { MAX_OUTPUT_PIXELS, type UpscaleResult } from '../backend'
+import { adapterName, MAX_OUTPUT_PIXELS, type UpscaleResult } from '../backend'
 import { canvasMatrix, type Dihedral, type EnsembleSize, ensembleTransforms, IDENTITY, transformedSize } from './transforms'
 import { CONTEXT, f16ArrayToF32, type Layer, type ModelWeights } from './weights'
 import {
@@ -33,7 +33,8 @@ import {
 } from './wgsl'
 import { f32ToF16, winogradWeights } from './winograd'
 
-export type EsrganFactor = 2 | 4
+/** Size of the result relative to the page: x4 is the network's own output, x2 and x1 box averages of it. */
+export type EsrganFactor = 1 | 2 | 4
 
 export interface EsrganInfo {
   adapter: string
@@ -64,10 +65,27 @@ export class EsrganAborted extends Error {
   }
 }
 
-/** Factor of the result for a page: x4 (native) when it stays within the canvas cap, else x2, else none. */
+/**
+ * Width of the padded copy of a page the network runs on: CONTEXT on both sides, rounded up to a
+ * multiple of 4 so that plane-sized sub-ranges of the activation buffers stay 256-byte aligned
+ * (the extra columns replicate the right edge).
+ */
+export function paddedWidth(w: number): number {
+  return Math.ceil((w + 2 * CONTEXT) / 4) * 4
+}
+
+/**
+ * Factor of the result for a page: x4 (native) when it stays within the canvas cap, else x2, else
+ * x1. A page too large even for x2 is already larger than any screen, so the x4 output is averaged
+ * back to the page's own size (a 4x4 box, like x2 is a 2x2 one): the network's restoration is kept,
+ * and the page no longer falls back to the lighter tier. None when even the padded copy of the page
+ * the run starts from (see `padPage`) exceeds the cap.
+ */
 export function esrganFactor(size: PageSize): EsrganFactor | null {
-  if (size.w * size.h * 16 <= MAX_OUTPUT_PIXELS) return 4
-  if (size.w * size.h * 4 <= MAX_OUTPUT_PIXELS) return 2
+  const px = size.w * size.h
+  if (px * 16 <= MAX_OUTPUT_PIXELS) return 4
+  if (px * 4 <= MAX_OUTPUT_PIXELS) return 2
+  if (paddedWidth(size.w) * (size.h + 2 * CONTEXT) <= MAX_OUTPUT_PIXELS) return 1
   return null
 }
 
@@ -81,11 +99,10 @@ export interface BandPlan {
 
 /**
  * How a page is cut into bands under the activation-memory limit; null when even one band is too
- * wide. The band width is rounded up to a multiple of 4 so that plane-sized sub-ranges of the
- * activation buffers stay 256-byte aligned (extra columns replicate the right edge).
+ * wide.
  */
 export function planBands(size: PageSize, bytesPerPixel: number, maxActBytes: number): BandPlan | null {
-  const bw = Math.ceil((size.w + 2 * CONTEXT) / 4) * 4
+  const bw = paddedWidth(size.w)
   const maxPaddedRows = Math.floor(maxActBytes / (bytesPerPixel * bw))
   const coreRows = Math.min(MAX_BAND_ROWS, maxPaddedRows - 2 * CONTEXT, size.h)
   if (coreRows < Math.min(MIN_BAND_ROWS, size.h)) return null
@@ -204,9 +221,7 @@ async function requestDevice(): Promise<DeviceInfo | null> {
       maxBufferSize: Math.min(512 * 1024 * 1024, adapter.limits.maxBufferSize),
     },
   })
-  const adapterInfo = (adapter as GPUAdapter & { info?: GPUAdapterInfo }).info
-  const name = adapterInfo ? [adapterInfo.vendor, adapterInfo.architecture, adapterInfo.description].filter(Boolean).join(' ') : ''
-  return { device, f16, name: name || 'WebGPU' }
+  return { device, f16, name: adapterName((adapter as GPUAdapter & { info?: GPUAdapterInfo }).info) }
 }
 
 /**

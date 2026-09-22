@@ -56,6 +56,25 @@ export interface BackendInfo {
   maxTextureDimension: number
 }
 
+/**
+ * Human-readable name of a WebGPU adapter: vendor, architecture and description, each word once
+ * (Safari reports "apple" for all three, which read as "apple apple apple").
+ */
+export function adapterName(info: Pick<GPUAdapterInfo, 'vendor' | 'architecture' | 'description'> | undefined, fallback = 'WebGPU'): string {
+  if (!info) return fallback
+  const seen = new Set<string>()
+  const words: string[] = []
+  for (const part of [info.vendor, info.architecture, info.description]) {
+    for (const word of (part ?? '').split(/\s+/)) {
+      const key = word.toLowerCase()
+      if (!key || seen.has(key)) continue
+      seen.add(key)
+      words.push(word)
+    }
+  }
+  return words.join(' ') || fallback
+}
+
 /** A 2x Anime4K upscaler on some GPU API. Implementations process the page in strips. */
 export interface UpscaleBackend {
   readonly kind: 'webgpu' | 'webgl2'

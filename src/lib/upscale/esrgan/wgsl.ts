@@ -293,9 +293,9 @@ export const SHUFFLE_STRUCT = `struct Shuffle {
  * nearest-neighbour residual, clamp. A thread handles one core source pixel of the band in
  * *original* orientation; the network ran on the band transformed by (swap, flipX, flipY), so
  * activations, base colour and the 4x4 sub-pixel grid are read at the transformed position. x2
- * output is a 2x2 box of the clamped x4 pixels. Direct mode writes RGBA8 into the page;
- * accumulate mode sums float colours into the band accumulator (self-ensemble), `first` starting
- * a fresh sum.
+ * output is a 2x2 box of the clamped x4 pixels, x1 the 4x4 box (one pixel per source pixel).
+ * Direct mode writes RGBA8 into the page; accumulate mode sums float colours into the band
+ * accumulator (self-ensemble), `first` starting a fresh sum.
  */
 export function shuffleWgsl(o: KernelOptions, accumulate: boolean): string {
   const { enable, F4 } = types(o)
@@ -331,6 +331,12 @@ export function shuffleWgsl(o: KernelOptions, accumulate: boolean): string {
       x2.push(store(`${row(`${by}u`, 2)} + px * 2u + ${bx}u`, avg(0), avg(1), avg(2)))
     }
   }
+  const box16 = (c: number) => {
+    const terms: string[] = []
+    for (let dy = 0; dy < 4; dy++) for (let dx = 0; dx < 4; dx++) terms.push(px(c, dy, dx))
+    return `0.0625 * (${terms.join(' + ')})`
+  }
+  const x1 = store(`${row('0u', 1)} + px`, box16(0), box16(1), box16(2))
   return `${enable}${SHUFFLE_STRUCT}
 @group(0) @binding(0) var<storage, read> act: array<${F4}>;
 @group(0) @binding(1) var src: texture_2d<f32>;
@@ -357,8 +363,10 @@ ${sub.join('\n')}
   let py = sp.bandY0 + gid.y;
   if (sp.factor == 4u) {
 ${x4.join('\n')}
-  } else {
+  } else if (sp.factor == 2u) {
 ${x2.join('\n')}
+  } else {
+${x1}
   }
 }
 `
@@ -426,9 +434,9 @@ export const RGB_OUT_STRUCT = `struct RgbOut {
 /**
  * RRDB conv_last: 64 input channels at 4x → RGB (the 4th output channel is padding), clamped.
  * The dispatch covers one tail strip of the band (its rows in band 4x coordinates start at
- * outY0); only core pixels are written; x2 output averages 2x2. Direct mode writes RGBA8 into the
- * page (identity transform); buffer mode writes float colours into the transformed core buffer
- * for the self-ensemble (`untransformWgsl` puts them back).
+ * outY0); only core pixels are written; x2 output averages 2x2 network pixels, x1 4x4. Direct mode
+ * writes RGBA8 into the page (identity transform); buffer mode writes float colours into the
+ * transformed core buffer for the self-ensemble (`untransformWgsl` puts them back).
  */
 export function rgbOutWgsl(o: KernelOptions, toBuffer: boolean): string {
   const { enable, F4 } = types(o)
