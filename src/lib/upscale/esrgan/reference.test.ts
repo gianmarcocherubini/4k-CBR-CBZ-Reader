@@ -23,8 +23,11 @@ describe('SRVGG weight file', () => {
     expect(w.layers[17]).toMatchObject({ name: 'conv_last', cin: 64, cout: 48, prelu: null })
     for (const l of w.layers.slice(1, 17)) expect(l).toMatchObject({ cin: 64, cout: 64 })
     expect(w.layers[1]!.prelu).not.toBeNull()
-    // Every value is a finite half: no overflow happened while converting.
-    for (const l of w.layers) for (const v of l.weight) expect(Number.isFinite(f16ToF32(v))).toBe(true)
+    // Every value is a finite half: no overflow happened while converting. Counted in one pass:
+    // an expect() per value (621k of them) took seconds and timed out on a busy CI runner.
+    let nonFinite = 0
+    for (const l of w.layers) for (const v of l.weight) if (!Number.isFinite(f16ToF32(v))) nonFinite++
+    expect(nonFinite).toBe(0)
   })
 
   it('decodes binary16', () => {
@@ -37,7 +40,7 @@ describe('SRVGG weight file', () => {
   })
 })
 
-describe('SRVGG reference implementation', () => {
+describe('SRVGG reference implementation', { timeout: 60_000 }, () => {
   // Fixture produced with PyTorch (torch.nn Conv2d/PReLU/PixelShuffle) from the same f16 weights:
   // a 32x24 synthetic image, replicate-padded by 24 px, run through the network, cropped back.
   it('matches the PyTorch output of the same network', () => {
@@ -94,7 +97,7 @@ describe('SRVGG reference implementation', () => {
   })
 })
 
-describe('RRDB (x4plus anime 6B) weight file and reference implementation', () => {
+describe('RRDB (x4plus anime 6B) weight file and reference implementation', { timeout: 60_000 }, () => {
   it('parses the shipped 6B weights: 6 blocks x 15 convolutions plus the six head/tail layers', () => {
     const w = parseWeights(load('realesrgan-x4plus-anime-6b.f16.bin'))
     expect(w.header.arch).toBe('rrdb')

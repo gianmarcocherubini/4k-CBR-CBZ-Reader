@@ -85,10 +85,12 @@ describe('Winograd F(2x2, 3x3)', () => {
     const u = winogradWeights(layer)
     expect(u.length).toBe(16 * layer.cin * layer.cout)
     let maxAbs = 0
+    let nonFinite = 0
     for (const v of u) {
-      expect(Number.isFinite(v)).toBe(true)
+      if (!Number.isFinite(v)) nonFinite++
       maxAbs = Math.max(maxAbs, Math.abs(v))
     }
+    expect(nonFinite).toBe(0)
     expect(maxAbs).toBeLessThan(200) // every value also fits a half when the kernels run in f16
     // Position 0 of the transform is the top-left tap itself.
     const ci = 3
