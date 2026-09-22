@@ -122,6 +122,34 @@ Il file viene validato campo per campo (formato e versione, tipi, riferimenti al
 JPEG/PNG/WebP fino a 2 MB, al massimo 50.000 voci); un file che non è un backup viene rifiutato con un messaggio
 chiaro. Serve anche per cambiare iPad o per seguire l'app dal vecchio indirizzo github.io al dominio.
 
+### Cataloghi web (sperimentale)
+
+Il pulsante **Cataloghi** nella barra apre un pannello in cui aggiungere l'indirizzo di un sito che pubblica serie a
+capitoli (o a volumi) come pagine di immagini. Nessun sito è incorporato nell'app: il catalogo lo indica l'utente, e
+resta memorizzato solo sul dispositivo (`reader.catalogs.v1`). Mangadana legge le pagine del sito **come farebbe
+Safari** (stesse richieste, senza cookie né credenziali, `referrer` omesso) e riconosce una struttura generica:
+
+- nella pagina iniziale, i link a un solo segmento di percorso (`/nome-serie`) con un'immagine e un titolo sono le
+  **serie** (titolo, autore, riga descrittiva, copertina);
+- nella pagina di una serie, i link `/nome-serie/chapter/N` o `/nome-serie/volume/N` sono i **capitoli o volumi**
+  (numero, titolo, numero di pagine, edizione «colore parziale» / «bianco e nero» quando il sito la indica);
+- nella pagina di un capitolo, le `<img>` grandi dentro `<main>` sono le **pagine**, nell'ordine in cui compaiono.
+
+Si sceglie un intervallo (al massimo **10 capitoli o 2 volumi** per volta) e l'app scarica le pagine, poche alla
+volta, le impacchetta in un CBZ (`Serie — Cap. 001-010.cbz`, una cartella per capitolo così l'ordine naturale
+resta quello giusto) e lo importa come un volume qualsiasi, in una **collezione con il nome della serie**, creata se
+manca. Ogni immagine viene verificata (formato reale, dimensioni) prima di entrare nell'archivio; limiti su byte per
+pagina e per pagina HTML; una pausa tra un capitolo e l'altro; nessuna scansione in sottofondo. Il sito deve
+permettere la lettura dal browser (intestazioni CORS): altrimenti l'app lo dice e non c'è niente da fare senza un
+server, che Mangadana non ha.
+
+Perché tutto questo funzioni, la Content Security Policy dell'app permette connessioni e immagini verso qualunque
+origine `https:` (prima erano elencate una per una); il codice eseguibile resta solo quello dell'app.
+
+**Responsabilità.** I cataloghi sono siti di terzi: i contenuti sono responsabilità loro e di chi li scarica.
+L'app avvisa di verificare di avere il diritto di scaricare e di rispettare le condizioni d'uso del sito, e si
+comporta come un lettore (pochi capitoli, su richiesta), non come un crawler.
+
 ## Come si usa il lettore
 
 - **Tocco ai lati**: in modalità manga (destra → sinistra) il tocco a sinistra va avanti, a destra indietro. Tocco al

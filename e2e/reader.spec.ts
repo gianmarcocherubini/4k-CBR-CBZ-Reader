@@ -677,6 +677,70 @@ test.describe('library', () => {
     rmSync(backupPath, { force: true })
   })
 
+  test('web catalogue: add a site, browse its series, download a chapter range into a CBZ in the series collection', async ({ page }) => {
+    const pagePng = readFileSync(fx('cover.png'))
+    const cors = { 'access-control-allow-origin': '*' }
+    const card = (slug: string, title: string, author: string, blurb: string) =>
+      `<a href="/${slug}"><img src="/covers/${slug}.jpg" alt=""/><h3>${title}</h3><span>${author}</span><span>·</span><span>${blurb}</span><span>Read →</span></a>`
+    const chapterRow = (n: number, name: string, pages: number, extra = '') =>
+      `<li><a href="/demo-series/chapter/${n}"><span>Chapter</span><span>${n}</span>${extra}<span>${name}</span><span>${pages}</span><span>pages ·</span><span>Arc</span><span>Read →</span></a></li>`
+    await page.route('https://catalog.test/**', (route) => {
+      const url = new URL(route.request().url())
+      if (url.pathname === '/') {
+        return route.fulfill({ status: 200, contentType: 'text/html', headers: cors, body: `<html><body><header><a href="/"><img src="/logo-mark.png" width="32" height="32"/></a></header><main>${card('demo-series', 'Demo Series', 'Ada Autrice', '3 colored chapters')}${card('other-series', 'Other Series', 'Bo Autore', '12 chapters in full color')}</main></body></html>` })
+      }
+      if (url.pathname === '/demo-series') {
+        return route.fulfill({ status: 200, contentType: 'text/html', headers: cors, body: `<html><body><main><a href="/demo-series/chapter/1">Start · Chapter 1 →</a><ul>${chapterRow(1, 'Primo', 3)}${chapterRow(2, 'Secondo', 3, '<span>Partial color</span>')}${chapterRow(3, 'Terzo', 3)}</ul></main></body></html>` })
+      }
+      const chapter = /^\/demo-series\/chapter\/(\d+)$/.exec(url.pathname)
+      if (chapter) {
+        const imgs = [1, 2, 3].map((i) => `<img src="https://pages.test/ch${chapter[1]}/${i}.png" alt="page ${i}" width="800" height="1200"/>`).join('')
+        return route.fulfill({ status: 200, contentType: 'text/html', headers: cors, body: `<html><body><header><img src="/logo-mark.png" width="32" height="32"/></header><main>${imgs}</main></body></html>` })
+      }
+      if (url.pathname.startsWith('/covers/')) return route.fulfill({ status: 200, contentType: 'image/png', headers: cors, body: pagePng })
+      return route.fulfill({ status: 404, headers: cors, body: 'no' })
+    })
+    await page.route('https://pages.test/**', (route) => route.fulfill({ status: 200, contentType: 'image/png', headers: cors, body: pagePng }))
+
+    await page.goto('/')
+    await page.getByTestId('catalogs').click()
+    const dialog = page.getByTestId('catalog-dialog')
+    await dialog.getByTestId('catalog-url').fill('catalog.test')
+    await dialog.getByTestId('catalog-add').click()
+    await expect(dialog.getByTestId('catalog-list')).toContainText('catalog.test')
+    expect(JSON.parse(await page.evaluate(() => localStorage.getItem('reader.catalogs.v1') ?? '[]'))).toMatchObject([{ url: 'https://catalog.test', name: 'catalog.test' }])
+
+    await dialog.getByTestId('catalog-open').click()
+    await expect(dialog.getByTestId('catalog-series-card')).toHaveCount(2)
+    await dialog.getByTestId('catalog-series-card').filter({ hasText: 'Demo Series' }).click()
+    const rows = dialog.getByTestId('catalog-units').locator('li')
+    await expect(rows).toHaveCount(3)
+    await expect(rows.nth(1)).toContainText('Colore parziale')
+    await expect(rows.nth(0)).toContainText('3 pagine')
+    // The range defaults to everything the limit allows; narrow it to chapters 1-2.
+    await dialog.getByTestId('catalog-to').selectOption('2')
+    await expect(dialog.getByTestId('catalog-download')).toHaveText('Scarica 2 capitoli')
+    await dialog.getByTestId('catalog-download').click()
+
+    // The CBZ goes through the normal import, into a collection named after the series.
+    const overlay = page.getByTestId('import-overlay')
+    await expect(overlay.getByText('Importazione completata')).toBeVisible({ timeout: 30_000 })
+    await expect(overlay).toContainText('Demo Series — Cap. 001-002.cbz')
+    await overlay.getByTestId('import-close').click()
+    const declineOnline = page.getByRole('button', { name: 'Non ora' })
+    if (await declineOnline.isVisible()) await declineOnline.click()
+    await expect(page.getByRole('heading', { name: 'Demo Series' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Apri Demo Series — Cap. 001-002' })).toBeVisible()
+    await expect(page.getByTestId('book-progress')).toContainText('6 pagine')
+    await expect(page.getByTestId('collection-tabs').getByRole('button', { name: /Demo Series/ }).first()).toContainText('1')
+
+    // Pages read in order: chapter 1 first, then chapter 2 (folders "Cap. 001", "Cap. 002").
+    await openBook(page, 'Demo Series — Cap. 001-002')
+    await expect(label(page)).toHaveText('1')
+    await page.keyboard.press('End')
+    await expect(label(page)).toHaveText('6')
+  })
+
   test('a file that is not a backup is refused with a clear message', async ({ page }) => {
     await page.goto('/')
     await page.setInputFiles('[data-testid=restore-input]', { name: 'note.json', mimeType: 'application/json', buffer: Buffer.from('{"hello":1}') })
