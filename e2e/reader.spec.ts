@@ -66,7 +66,7 @@ test.describe('library', () => {
     expect(statuses.slice(0, 3)).toEqual(['Importato', 'Importato', 'Importato'])
     expect(statuses[3]).toContain('non contiene immagini')
     expect(statuses[4]).toContain('danneggiato')
-    expect(statuses[5]).toContain('non è un archivio CBZ')
+    expect(statuses[5]).toContain('non è un formato supportato')
 
     await expect(page.getByTestId('book-card')).toHaveCount(3)
     await expect(page.locator('[data-testid=book-card] img')).toHaveCount(3)
