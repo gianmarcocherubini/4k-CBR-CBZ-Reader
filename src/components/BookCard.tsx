@@ -26,9 +26,16 @@ const Placeholder = (
 )
 
 export function Cover({ url, alt = '', className = '' }: { url: string | null; alt?: string; className?: string }) {
+  // An image that fails to decode shows the placeholder, never the browser's broken-image glyph.
+  const [failed, setFailed] = useState<string | null>(null)
+  const broken = url !== null && failed === url
   return (
     <div className={`tile ${className}`}>
-      {url ? <img src={url} alt={alt} className="h-full w-full object-cover" draggable={false} /> : <div className="flex h-full w-full items-center justify-center">{Placeholder}</div>}
+      {url && !broken ? (
+        <img src={url} alt={alt} className="h-full w-full object-cover" draggable={false} onError={() => setFailed(url)} />
+      ) : (
+        <div className="flex h-full w-full items-center justify-center">{Placeholder}</div>
+      )}
     </div>
   )
 }

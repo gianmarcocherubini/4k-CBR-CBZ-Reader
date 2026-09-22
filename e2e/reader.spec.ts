@@ -113,7 +113,7 @@ test.describe('library', () => {
               resolve({
                 passwordProtected: book.passwordProtected === true,
                 hasPassword: Object.hasOwn(book, 'archivePassword'),
-                hasCover: book.cover instanceof Blob,
+                hasCover: 'coverData' in book || 'cover' in book,
               })
             }
           }
@@ -366,7 +366,7 @@ test.describe('library', () => {
           open.onsuccess = () => {
             const get = open.result.transaction('books').objectStore('books').getAll()
             get.onerror = () => reject(get.error)
-            get.onsuccess = () => resolve((get.result[0].cover as Blob).size)
+            get.onsuccess = () => resolve((get.result[0].coverData as { bytes: ArrayBuffer }).bytes.byteLength)
           }
         }),
     )
@@ -386,7 +386,7 @@ test.describe('library', () => {
           open.onsuccess = () => {
             const get = open.result.transaction('books').objectStore('books').getAll()
             get.onerror = () => reject(get.error)
-            get.onsuccess = () => resolve((get.result[0].cover as Blob).size)
+            get.onsuccess = () => resolve((get.result[0].coverData as { bytes: ArrayBuffer }).bytes.byteLength)
           }
         }),
     )
@@ -464,7 +464,7 @@ test.describe('library', () => {
             open.onsuccess = () => {
               const get = open.result.transaction('books').objectStore('books').getAll()
               get.onerror = () => reject(get.error)
-              get.onsuccess = () => resolve((get.result[0].cover as Blob).size)
+              get.onsuccess = () => resolve((get.result[0].coverData as { bytes: ArrayBuffer }).bytes.byteLength)
             }
           }),
       )
@@ -739,6 +739,66 @@ test.describe('library', () => {
     await expect(label(page)).toHaveText('1')
     await page.keyboard.press('End')
     await expect(label(page)).toHaveText('6')
+  })
+
+  test('covers live as bytes in the record: legacy Blob covers are converted, a missing cover is rebuilt from the first page', async ({ page }) => {
+    await page.goto('/')
+    await importBooks(page, ['short-book.cbz', 'manga-vol-01.cbz'])
+    await expect(page.locator('[data-testid=book-card] img')).toHaveCount(2)
+    // Rewrite the records the way earlier versions stored them: one with a Blob cover, one with none.
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve, reject) => {
+          const open = indexedDB.open('cbz-reader')
+          open.onerror = () => reject(open.error)
+          open.onsuccess = () => {
+            const tx = open.result.transaction('books', 'readwrite')
+            const store = tx.objectStore('books')
+            const all = store.getAll()
+            all.onsuccess = () => {
+              for (const record of all.result as Array<Record<string, unknown>>) {
+                const data = record.coverData as { bytes: ArrayBuffer; type: string } | undefined
+                if (record.fileName === 'short-book.cbz' && data) record.cover = new Blob([data.bytes], { type: data.type })
+                delete record.coverData
+                if (record.fileName === 'manga-vol-01.cbz') delete record.coverSource
+                store.put(record)
+              }
+            }
+            tx.oncomplete = () => resolve()
+            tx.onerror = () => reject(tx.error)
+          }
+        }),
+    )
+    await page.reload()
+    // Both covers are back: the legacy Blob converted, the missing one rebuilt from page 1.
+    await expect(page.locator('[data-testid=book-card] img')).toHaveCount(2, { timeout: 20_000 })
+    const stored = await page.evaluate(
+      () =>
+        new Promise<Array<{ fileName: string; hasBlob: boolean; bytes: number; type: string; source: string }>>((resolve, reject) => {
+          const open = indexedDB.open('cbz-reader')
+          open.onerror = () => reject(open.error)
+          open.onsuccess = () => {
+            const get = open.result.transaction('books').objectStore('books').getAll()
+            get.onerror = () => reject(get.error)
+            get.onsuccess = () =>
+              resolve(
+                (get.result as Array<Record<string, unknown>>)
+                  .map((record) => ({
+                    fileName: record.fileName as string,
+                    hasBlob: 'cover' in record,
+                    bytes: (record.coverData as { bytes: ArrayBuffer } | undefined)?.bytes.byteLength ?? 0,
+                    type: (record.coverData as { type: string } | undefined)?.type ?? '',
+                    source: record.coverSource as string,
+                  }))
+                  .sort((a, b) => a.fileName.localeCompare(b.fileName)),
+              )
+          }
+        }),
+    )
+    expect(stored.map((s) => [s.fileName, s.hasBlob, s.bytes > 1000, s.type, s.source])).toEqual([
+      ['manga-vol-01.cbz', false, true, 'image/jpeg', 'archive'],
+      ['short-book.cbz', false, true, 'image/jpeg', 'archive'],
+    ])
   })
 
   test('a file that is not a backup is refused with a clear message', async ({ page }) => {

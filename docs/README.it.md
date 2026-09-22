@@ -90,6 +90,12 @@ essere Default (grigio caldo o nero a seconda dell'aspetto), Nero o Bianco.
   La ricerca **Iconify** è incorporata nel dialogo (set moderni Lucide, Tabler, Phosphor e Material): non si lascia
   l'app; l'SVG scelto viene validato e copiato nel database locale. Un PNG/JPEG personale viene limitato a 2 MB /
   4 MP, ridotto a 128×128 e salvato localmente. “Tutti i libri” usa un'icona libreria dedicata.
+- **Copertine e icone sono salvate come byte dentro il record** di IndexedDB, non come Blob: WebKit tiene i Blob
+  di IndexedDB in file separati che una web app installata può perdere dopo un riavvio o una pulizia del sistema
+  (il record resta, l'immagine diventa illeggibile e la copertina appare rotta). I record delle versioni
+  precedenti vengono convertiti alla prima lettura; un Blob non più leggibile viene scartato e la libreria
+  **ricostruisce la copertina dalla prima pagina** del volume (la copertina predefinita), un paio di volumi per
+  volta. Un'immagine che comunque non si decodifica mostra il segnaposto, mai l'icona rotta del browser.
 - Il pulsante `…` di un volume apre **Modifica volume**: rinomina il titolo, lo sposta in una collezione, cerca una
   nuova copertina o lo elimina. Eliminare una collezione riporta i suoi volumi in Senza collezione.
 - Dopo un import l'app propone la ricerca copertine, ma prima chiede un consenso esplicito: interroga insieme **Open

@@ -3,10 +3,27 @@ import type { Book, Collection, PageSize, PendingRestore, Progress } from '../..
 import { normalizeCollectionGlyph } from '../collections'
 import { pendingRestoreKey } from './backup'
 
+/**
+ * Small images (covers, collection icons) are stored as bytes inside the record, not as Blobs.
+ * WebKit keeps IndexedDB Blobs as separate files that a home-screen web app can lose after a
+ * restart or a purge: the record survives, the Blob becomes unreadable and the cover shows as a
+ * broken image. Bytes live in the record itself and come back as an in-memory Blob every time.
+ * Records written by earlier versions still carry Blobs and are converted the first time they
+ * are read; a Blob that cannot be read any more is dropped, and the library rebuilds the cover
+ * from the first page.
+ */
+interface StoredImage {
+  bytes: ArrayBuffer
+  type: string
+}
+type StoredBook = Omit<Book, 'cover'> & { cover?: Blob; coverData?: StoredImage }
+type StoredCollection = Omit<Collection, 'iconImage'> & { iconImage?: Blob; iconData?: StoredImage }
+type StoredPendingRestore = Omit<PendingRestore, 'cover'> & { cover?: Blob; coverData?: StoredImage }
+
 interface ReaderDB extends DBSchema {
   books: {
     key: string
-    value: Book
+    value: StoredBook
     indexes: { byAdded: number }
   }
   progress: {
@@ -23,14 +40,80 @@ interface ReaderDB extends DBSchema {
   }
   collections: {
     key: string
-    value: Collection
+    value: StoredCollection
     indexes: { byCreated: number }
   }
   /** Books of a restored backup whose file is not in the library yet, keyed by file name and size. */
   pendingRestores: {
     key: string
-    value: PendingRestore
+    value: StoredPendingRestore
   }
+}
+
+/** A dead IndexedDB Blob may reject or never answer: either way the image is gone. */
+const BLOB_READ_TIMEOUT_MS = 8000
+
+async function packImage(blob: Blob | undefined): Promise<StoredImage | undefined> {
+  if (!blob) return undefined
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    const bytes = await Promise.race([
+      blob.arrayBuffer(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('Blob non leggibile')), BLOB_READ_TIMEOUT_MS)
+      }),
+    ])
+    return { bytes, type: blob.type }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+const unpackImage = (image: StoredImage | undefined): Blob | undefined => (image ? new Blob([image.bytes], { type: image.type }) : undefined)
+
+/** Reads a legacy Blob field; `undefined` (and `changed`) when it is unreadable. */
+async function migrateBlob(blob: Blob): Promise<StoredImage | undefined> {
+  try {
+    return await packImage(blob)
+  } catch {
+    return undefined
+  }
+}
+
+async function toStoredBook(book: Book): Promise<StoredBook> {
+  const { cover, ...rest } = book
+  const coverData = await packImage(cover)
+  return coverData ? { ...rest, coverData } : rest
+}
+
+function fromStoredBook(stored: StoredBook): Book {
+  const { coverData, cover, ...rest } = stored
+  const blob = unpackImage(coverData) ?? cover
+  return blob ? { ...rest, cover: blob } : rest
+}
+
+async function toStoredCollection(collection: Collection): Promise<StoredCollection> {
+  const { iconImage, ...rest } = collection
+  const iconData = await packImage(iconImage)
+  return iconData ? { ...rest, iconData } : rest
+}
+
+function fromStoredCollection(stored: StoredCollection): Collection {
+  const { iconData, iconImage, ...rest } = stored
+  const blob = unpackImage(iconData) ?? iconImage
+  return blob ? { ...rest, iconImage: blob } : rest
+}
+
+async function toStoredPendingRestore(item: PendingRestore): Promise<StoredPendingRestore> {
+  const { cover, ...rest } = item
+  const coverData = await packImage(cover)
+  return coverData ? { ...rest, coverData } : rest
+}
+
+function fromStoredPendingRestore(stored: StoredPendingRestore): PendingRestore {
+  const { coverData, cover, ...rest } = stored
+  const blob = unpackImage(coverData) ?? cover
+  return blob ? { ...rest, cover: blob } : rest
 }
 
 let dbPromise: Promise<IDBPDatabase<ReaderDB>> | null = null
@@ -96,59 +179,85 @@ export function getDB(): Promise<IDBPDatabase<ReaderDB>> {
   return dbPromise
 }
 
+/**
+ * Brings a stored book record up to date: scrubs fields that early builds briefly persisted (ZIP
+ * passwords, decrypted covers of protected books) and moves a legacy Blob cover into the record.
+ * Returns the record to write back, or null when nothing changed.
+ */
+async function upgradeStoredBook(stored: StoredBook): Promise<StoredBook | null> {
+  const legacy = stored as StoredBook & { archivePassword?: unknown }
+  const hasLegacyBlob = legacy.cover instanceof Blob
+  const scrub = Object.hasOwn(legacy, 'archivePassword') || (legacy.passwordProtected && (legacy.cover || legacy.coverData) && legacy.coverSource !== 'remote')
+  if (!hasLegacyBlob && !scrub) return null
+  const next = { ...legacy } as StoredBook & { archivePassword?: unknown }
+  if (Object.hasOwn(next, 'archivePassword')) {
+    delete next.archivePassword
+    next.passwordProtected = true
+  }
+  if (next.passwordProtected && next.coverSource !== 'remote') {
+    delete next.cover
+    delete next.coverData
+    delete next.coverSource
+  }
+  if (next.cover instanceof Blob) {
+    const packed = await migrateBlob(next.cover)
+    delete next.cover
+    if (packed) next.coverData = packed
+    else delete next.coverSource
+  }
+  return next
+}
+
 export async function listBooks(): Promise<Book[]> {
   const db = await getDB()
   const stored = await db.getAllFromIndex('books', 'byAdded')
   const books = await Promise.all(
-    stored.map(async (book) => {
-      const legacy = book as Book & { archivePassword?: unknown }
-      if (
-        !Object.hasOwn(legacy, 'archivePassword') &&
-        !(legacy.passwordProtected && legacy.cover && legacy.coverSource !== 'remote')
-      ) {
-        return book
-      }
-      // One-time scrub for local/dev builds that briefly persisted ZIP passwords or decrypted
-      // covers. Unknown fields survive IndexedDB unless explicitly removed.
-      const cleaned = { ...legacy } as Book & { archivePassword?: unknown }
-      const wasEncrypted = Object.hasOwn(cleaned, 'archivePassword')
-      delete cleaned.archivePassword
-      if (wasEncrypted) cleaned.passwordProtected = true
-      if (cleaned.passwordProtected && cleaned.coverSource !== 'remote') {
-        delete cleaned.cover
-        delete cleaned.coverSource
-      }
-      await db.put('books', cleaned)
-      return cleaned
+    stored.map(async (record) => {
+      const upgraded = await upgradeStoredBook(record)
+      if (upgraded) await db.put('books', upgraded)
+      return fromStoredBook(upgraded ?? record)
     }),
   )
   return books.sort((a, b) => b.lastReadAt - a.lastReadAt || b.addedAt - a.addedAt)
 }
 
 export async function getBook(id: string): Promise<Book | undefined> {
-  return (await getDB()).get('books', id)
+  const db = await getDB()
+  const stored = await db.get('books', id)
+  if (!stored) return undefined
+  const upgraded = await upgradeStoredBook(stored)
+  if (upgraded) await db.put('books', upgraded)
+  return fromStoredBook(upgraded ?? stored)
 }
 
 export async function putBook(book: Book): Promise<void> {
-  await (await getDB()).put('books', book)
+  const stored = await toStoredBook(book)
+  await (await getDB()).put('books', stored)
 }
 
 export async function listCollections(): Promise<Collection[]> {
   const db = await getDB()
   const collections = await db.getAllFromIndex('collections', 'byCreated')
   return Promise.all(
-    collections.map(async (collection) => {
-      const icon = normalizeCollectionGlyph(collection.icon)
-      if (icon === collection.icon) return collection
-      const migrated = { ...collection, icon }
+    collections.map(async (stored) => {
+      const icon = normalizeCollectionGlyph(stored.icon)
+      const hasLegacyBlob = stored.iconImage instanceof Blob
+      if (icon === stored.icon && !hasLegacyBlob) return fromStoredCollection(stored)
+      const migrated: StoredCollection = { ...stored, icon }
+      if (hasLegacyBlob) {
+        const packed = await migrateBlob(stored.iconImage!)
+        delete migrated.iconImage
+        if (packed) migrated.iconData = packed
+      }
       await db.put('collections', migrated)
-      return migrated
+      return fromStoredCollection(migrated)
     }),
   )
 }
 
 export async function putCollection(collection: Collection): Promise<void> {
-  await (await getDB()).put('collections', collection)
+  const stored = await toStoredCollection(collection)
+  await (await getDB()).put('collections', stored)
 }
 
 /** Deleting a collection moves its books back to the built-in default collection. */
@@ -199,8 +308,10 @@ export async function putPageSizes(bookId: string, sizes: Array<PageSize | null>
 /** Commits the IDB fallback bytes and their visible book record atomically. */
 export async function putFileAndBook(book: Book, file: Blob): Promise<void> {
   const db = await getDB()
+  // Packed before the transaction: an await with no request in flight would auto-commit it.
+  const stored = await toStoredBook(book)
   const tx = db.transaction(['files', 'books'], 'readwrite')
-  await Promise.all([tx.objectStore('files').put({ bookId: book.id, file }), tx.objectStore('books').put(book), tx.done])
+  await Promise.all([tx.objectStore('files').put({ bookId: book.id, file }), tx.objectStore('books').put(stored), tx.done])
 }
 
 export async function getFile(bookId: string): Promise<Blob | undefined> {
@@ -213,18 +324,20 @@ export async function deleteFile(bookId: string): Promise<void> {
 
 export async function listPendingRestores(): Promise<PendingRestore[]> {
   const all = await (await getDB()).getAll('pendingRestores')
-  return all.sort((a, b) => a.fileName.localeCompare(b.fileName, 'it', { numeric: true, sensitivity: 'base' }))
+  return all.map(fromStoredPendingRestore).sort((a, b) => a.fileName.localeCompare(b.fileName, 'it', { numeric: true, sensitivity: 'base' }))
 }
 
 export async function getPendingRestore(fileName: string, fileSize: number): Promise<PendingRestore | undefined> {
-  return (await getDB()).get('pendingRestores', pendingRestoreKey(fileName, fileSize))
+  const stored = await (await getDB()).get('pendingRestores', pendingRestoreKey(fileName, fileSize))
+  return stored ? fromStoredPendingRestore(stored) : undefined
 }
 
 export async function putPendingRestores(items: readonly PendingRestore[]): Promise<void> {
   if (items.length === 0) return
   const db = await getDB()
+  const stored = await Promise.all(items.map(toStoredPendingRestore))
   const tx = db.transaction('pendingRestores', 'readwrite')
-  await Promise.all([...items.map((item) => tx.store.put(item)), tx.done])
+  await Promise.all([...stored.map((item) => tx.store.put(item)), tx.done])
 }
 
 export async function deletePendingRestore(key: string): Promise<void> {
@@ -238,10 +351,11 @@ export async function clearPendingRestores(): Promise<void> {
 /** Applies a restored backup in one transaction: collections, merged books and their bookmarks. */
 export async function applyRestore(collections: readonly Collection[], books: readonly Book[], progress: readonly Progress[]): Promise<void> {
   const db = await getDB()
+  const [storedCollections, storedBooks] = await Promise.all([Promise.all(collections.map(toStoredCollection)), Promise.all(books.map(toStoredBook))])
   const tx = db.transaction(['collections', 'books', 'progress'], 'readwrite')
   await Promise.all([
-    ...collections.map((collection) => tx.objectStore('collections').put(collection)),
-    ...books.map((book) => tx.objectStore('books').put(book)),
+    ...storedCollections.map((collection) => tx.objectStore('collections').put(collection)),
+    ...storedBooks.map((book) => tx.objectStore('books').put(book)),
     ...progress.map((p) => tx.objectStore('progress').put(p)),
     tx.done,
   ])
