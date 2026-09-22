@@ -1,7 +1,10 @@
 import type { BookFormat } from '../../types'
 import { detectBlob } from '../detect'
 import { type ArchiveEntry, pageEntries } from '../entries'
+import { epubPages, isEpub } from './epub'
+import { PdfArchiveReader } from './pdfReader'
 import { RarArchiveReader } from './rarReader'
+import { TarArchiveReader } from './tarReader'
 import { ArchiveError, type ArchiveReader } from './types'
 import { ZipArchiveReader } from './zipReader'
 
@@ -16,6 +19,11 @@ export interface OpenedArchive {
   pages: ArchiveEntry[]
 }
 
+/** Containers whose password prompt is worth showing: the reader can retry them with one. */
+export function supportsPassword(format: BookFormat): boolean {
+  return format === 'cbz' || format === 'epub' || format === 'pdf'
+}
+
 /** Detects the container, opens it and lists its pages. Throws ArchiveError. */
 export async function openArchive(blob: Blob, password?: string, signal?: AbortSignal): Promise<OpenedArchive> {
   const kind = await detectBlob(blob)
@@ -28,12 +36,26 @@ export async function openArchive(blob: Blob, password?: string, signal?: AbortS
     case 'rar5':
       reader = new RarArchiveReader(blob)
       break
+    case 'tar':
+      reader = new TarArchiveReader(blob)
+      break
+    case 'pdf':
+      // Opening validates the password: pdf.js rejects with encrypted / invalid-password.
+      reader = await PdfArchiveReader.open(blob, password, signal)
+      break
     default:
       throw new ArchiveError('unsupported', `Contenitore: ${kind}`)
   }
   try {
     const entries = await reader.entries()
-    const pages = pageEntries(entries)
+    let format: BookFormat = reader.format
+    let pages: ArchiveEntry[]
+    if (kind === 'zip' && isEpub(entries)) {
+      format = 'epub'
+      pages = await epubPages(reader, entries, signal)
+    } else {
+      pages = pageEntries(entries)
+    }
     if (pages.length === 0) {
       if (entries.some((e) => e.encrypted)) throw new ArchiveError('encrypted')
       throw new ArchiveError('empty')
@@ -52,7 +74,7 @@ export async function openArchive(blob: Blob, password?: string, signal?: AbortS
     if (pages.some((p) => p.encrypted) && password === undefined) throw new ArchiveError('encrypted')
     const encryptedPage = pages.find((page) => page.encrypted)
     if (encryptedPage && password !== undefined) await reader.validatePassword?.(encryptedPage.name, signal)
-    return { reader, format: reader.format, pages }
+    return { reader, format, pages }
   } catch (e) {
     await reader.close()
     throw e

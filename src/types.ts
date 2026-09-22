@@ -1,8 +1,8 @@
 /** Archive container detected from magic bytes. */
-export type ContainerKind = 'zip' | 'rar4' | 'rar5' | '7z' | 'pdf' | 'unknown'
+export type ContainerKind = 'zip' | 'rar4' | 'rar5' | 'tar' | '7z' | 'pdf' | 'unknown'
 
-/** Formats the reader can open. */
-export type BookFormat = 'cbz' | 'cbr'
+/** Formats the reader can open: ZIP and RAR comic archives, tar (CBT), PDF, fixed-layout EPUB. */
+export type BookFormat = 'cbz' | 'cbr' | 'cbt' | 'pdf' | 'epub'
 
 /** Where the archive bytes live. */
 export type StorageKind = 'opfs' | 'idb' | 'session'

@@ -9,7 +9,7 @@
 
 <p align="center">
   <strong>A high-resolution manga reader for iPad. Runs in your browser, upscales with AI on your GPU.</strong><br>
-  Import CBZ/CBR files, read offline, and watch every page get sharper as you read — no App Store, no account, no server.
+  Import CBZ, CBR, PDF or EPUB files, read offline, and watch every page get sharper as you read — no App Store, no account, no server.
 </p>
 
 <p align="center">
@@ -78,8 +78,11 @@ The numbers above are measurements on an iPad with an M-series chip; older iPads
 | Password-protected ZIP | Yes: AES and ZipCrypto. The app asks for the password and asks again if it is wrong. |
 | CBR / RAR 4 and RAR 5 | Yes, through unrar (WebAssembly) in a worker with windowed reads. |
 | Solid or multi-volume RAR | No, with a clear message. Re-pack without the solid option. |
+| CBT / tar | Yes: uncompressed tar, each page a slice of the file (ustar, GNU long names, pax). |
+| PDF | Yes, including password-protected files. Each page is rendered with pdf.js at the resolution of the largest image it contains (a comic PDF is one image per page), so nothing is lost or invented; pages with no image render at 144 dpi. The file is read in ranges, never loaded whole. |
+| EPUB (fixed layout) | Yes: the images of the spine pages, in reading order; text-only pages are skipped. Password-protected (ZIP-encrypted) EPUBs work like CBZ. |
 | Encrypted RAR, ZIP with an encrypted central directory | No, with a clear message. |
-| 7z, PDF | No. |
+| CB7 / 7z | No: 7z comics are almost always "solid" (one stream), which rules out reading page by page. |
 | Page images | JPEG, PNG, GIF, WebP, BMP, AVIF, HEIC: whatever the browser can decode. |
 
 Pages are sorted naturally (`2.jpg` before `10.jpg`), skipping `__MACOSX`, hidden files and `ComicInfo.xml`. Files up to 10 GB are supported: the import copies them into the Origin Private File System in 4 MB slices from a worker, checks the available quota first, and cleans up after itself.
@@ -100,7 +103,7 @@ npm run dev          # http://127.0.0.1:4877
 npm run build        # production build with the service worker, in dist/
 npm run preview      # serves dist/ on http://127.0.0.1:4878
 npm test             # unit tests (Vitest)
-npm run fixtures     # generates the test CBZ/CBR files in e2e/fixtures
+npm run fixtures     # generates the test CBZ/CBR/CBT/PDF/EPUB files in e2e/fixtures
 npm run test:e2e     # end-to-end tests (Playwright; first time: npx playwright install chromium)
 npm run check        # lint + typecheck + unit tests + build
 ```
@@ -108,7 +111,8 @@ npm run check        # lint + typecheck + unit tests + build
 Node 20 or later. No setup step: the Real-ESRGAN weights are in the repository (1.2 MB precached, 8.9 MB downloaded the first time *Slow* is chosen). Pushing to `main` builds, tests and deploys to GitHub Pages.
 
 ```
-src/lib/archive/      format detection, ZIP reader (zip.js), RAR reader (worker + Blob-backed extractor)
+src/lib/archive/      format detection, ZIP reader (zip.js), RAR reader (worker + Blob-backed extractor), tar reader,
+                      PDF reader (pdf.js, pages rendered on demand), EPUB spine
 src/lib/storage/      IndexedDB, OPFS, copy worker, import, thumbnails, library backup
 src/lib/reader/       spread layout, LRU page cache
 src/lib/catalog/      web catalogues: page parsing, bounded downloads, CBZ packing
@@ -128,7 +132,7 @@ Mangadana stands on the work of others:
 
 - [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN) by Xintao Wang et al. (BSD-3-Clause): the `realesr-animevideov3` and `RealESRGAN_x4plus_anime_6B` models, converted to f16 and executed in WebGPU shaders written for this app.
 - [Anime4K](https://github.com/bloc97/Anime4K) by bloc97 (MIT), through [anime4k-webgpu](https://github.com/Anime4KWebBoost/Anime4K-WebGPU) and the official GLSL shaders on WebGL2.
-- [zip.js](https://github.com/gildas-lormeau/zip.js), [node-unrar-js](https://github.com/YuJianrong/node-unrar.js), [idb](https://github.com/jakearchibald/idb), [Workbox](https://github.com/GoogleChrome/workbox), [Vite](https://vite.dev), [React](https://react.dev), [Tailwind CSS](https://tailwindcss.com), [Playwright](https://playwright.dev).
+- [zip.js](https://github.com/gildas-lormeau/zip.js), [node-unrar-js](https://github.com/YuJianrong/node-unrar.js), [pdf.js](https://github.com/mozilla/pdf.js) (Apache-2.0), [idb](https://github.com/jakearchibald/idb), [Workbox](https://github.com/GoogleChrome/workbox), [Vite](https://vite.dev), [React](https://react.dev), [Tailwind CSS](https://tailwindcss.com), [Playwright](https://playwright.dev).
 - The crown mark comes from the *Extras* face of [Sprite Graffiti](https://www.fontfabric.com/fonts/sprite-graffiti/) by Fontfabric, whose free-font licence permits logos and static images; the font itself is not embedded.
 - The name: 漫画 *manga* + 棚 *dana* (from 本棚 *hondana*, a bookshelf). The manga shelf.
 

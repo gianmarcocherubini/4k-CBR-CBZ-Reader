@@ -123,9 +123,9 @@ async function inspectWithPassword(
       return { info: await inspect(file, password, opts.signal), password }
     } catch (e) {
       const err = toArchiveError(e)
-      // Password support is implemented for ZIP/CBZ only; encrypted RAR errors keep their
+      // Passwords can be retried for ZIP (CBZ, EPUB) and PDF; encrypted RAR errors keep their
       // existing message instead of opening a prompt that can never succeed.
-      const canRetry = kind === 'zip' && (err.code === 'invalid-password' || (err.code === 'encrypted' && password === undefined))
+      const canRetry = (kind === 'zip' || kind === 'pdf') && (err.code === 'invalid-password' || (err.code === 'encrypted' && password === undefined))
       if (!canRetry || !opts.requestPassword) throw err
       const entered = await opts.requestPassword({ fileName: file.name, invalid: err.code === 'invalid-password', signal: opts.signal })
       throwIfAborted(opts.signal)

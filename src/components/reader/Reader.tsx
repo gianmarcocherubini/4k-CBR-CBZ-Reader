@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { openArchive, type OpenedArchive } from '../../lib/archive/openArchive'
+import { openArchive, type OpenedArchive, supportsPassword } from '../../lib/archive/openArchive'
 import { ArchiveError, describeError, isArchiveError } from '../../lib/archive/types'
 import { clampOffset, clampZoom, layoutSpread, type Size, zoomAround } from '../../lib/reader/layout'
 import { PageCache } from '../../lib/reader/pageCache'
@@ -133,7 +133,7 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
           break
         } catch (e) {
           const err = toArchiveError(e)
-          const canRetry = b.format === 'cbz' && (err.code === 'encrypted' || err.code === 'invalid-password')
+          const canRetry = supportsPassword(b.format) && (err.code === 'encrypted' || err.code === 'invalid-password')
           if (!canRetry) throw err
           const entered = await requestPassword({
             fileName: b.fileName,

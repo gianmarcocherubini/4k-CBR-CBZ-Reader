@@ -21,6 +21,7 @@
     "anime4k-webgpu": "^1.0.0",
     "idb": "^8.0.3",
     "node-unrar-js": "^2.0.2",
+    "pdfjs-dist": "^6.3.289",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "workbox-core": "^7.4.1",

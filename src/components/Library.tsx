@@ -56,7 +56,7 @@ declare global {
   }
 }
 
-const ACCEPT = isIOS() ? undefined : '.cbz,.cbr,.zip,.rar,application/zip,application/vnd.rar,application/x-rar-compressed'
+const ACCEPT = isIOS() ? undefined : '.cbz,.cbr,.cbt,.zip,.rar,.tar,.pdf,.epub,application/zip,application/vnd.rar,application/x-rar-compressed,application/x-tar,application/pdf,application/epub+zip'
 const COVER_CONSENT_KEY = 'reader.cover-search-consent-v4'
 
 const PlusIcon = (
@@ -709,8 +709,8 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
             </div>
             <h2 className="mt-8 text-large-title">La tua libreria è vuota</h2>
             <p className="mt-3 max-w-md text-subhead text-label-2">
-              Importa file CBZ o CBR, fino a 10 GB ciascuno: vengono copiati nell’archiviazione dell’app e restano disponibili
-              anche offline. Oppure trascinali qui.
+              Importa file CBZ, CBR, CBT, PDF o EPUB, fino a 10 GB ciascuno: vengono copiati nell’archiviazione dell’app e
+              restano disponibili anche offline. Oppure trascinali qui.
             </p>
             <div className="mt-8 flex flex-wrap justify-center gap-3">
               <button type="button" className="btn-primary" onClick={() => importInput.current?.click()}>
