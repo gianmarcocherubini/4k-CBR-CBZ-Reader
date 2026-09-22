@@ -329,6 +329,27 @@ export async function resolveBookBlob(book: Book): Promise<Blob> {
   }
 }
 
+/**
+ * Rebuilds the default cover of a library volume, the thumbnail of its first page, when the stored
+ * one is missing or was lost (an unreadable Blob of an earlier version). Protected archives keep
+ * no persisted cover; session books have no record to update.
+ */
+export async function regenerateCover(book: Book): Promise<Book | null> {
+  if (book.storage === 'session' || book.passwordProtected) return null
+  const blob = await resolveBookBlob(book)
+  const opened = await openArchive(blob, undefined)
+  try {
+    const first = opened.pages[0]
+    if (!first) return null
+    const { thumb } = await makeThumbnail(await opened.reader.extract(first.name))
+    const updated: Book = { ...book, cover: thumb, coverSource: 'archive' }
+    await putBook(updated)
+    return updated
+  } finally {
+    await opened.reader.close()
+  }
+}
+
 export async function deleteBook(book: Book): Promise<void> {
   if (book.storage === 'opfs') await deleteOpfsFile(book.id).catch(() => undefined)
   if (book.storage === 'session') sessionFiles.delete(book.id)
