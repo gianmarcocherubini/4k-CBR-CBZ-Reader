@@ -26,6 +26,13 @@ describe('layoutStrip', () => {
     expect(layout.boxes[0]!.height).toBe(840)
   })
 
+  it('zoomed beyond the viewport, the strip is flush left and wider than the viewport', () => {
+    const layout = layoutStrip(1, [portrait], viewport, 2.5, 0)
+    expect(layout.pageWidth).toBe(2500)
+    expect(layout.left).toBe(0)
+    expect(layout.boxes[0]!.height).toBe(3750)
+  })
+
   it('gives unknown pages the median ratio of the known ones, or a manga page’s', () => {
     expect(fallbackRatio([])).toBeCloseTo(2000 / 1400, 5)
     expect(fallbackRatio([portrait, wide, portrait])).toBe(1.5)

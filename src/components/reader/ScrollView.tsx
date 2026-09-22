@@ -1,6 +1,6 @@
 import { type MutableRefObject, type RefObject, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { Size } from '../../lib/reader/layout'
-import { anchorAt, currentPageAt, pagesInRange, scrollTopFor, type StripLayout } from '../../lib/reader/scrollLayout'
+import { anchorAt, currentPageAt, MAX_STRIP_ZOOM, MIN_STRIP_ZOOM, pagesInRange, scrollTopFor, type StripLayout } from '../../lib/reader/scrollLayout'
 import type { SrResult } from '../../lib/upscale/srEngine'
 import type { StageBackground } from '../../types'
 import { PageContent, type PageState } from './PageContent'
@@ -21,6 +21,9 @@ interface ScrollViewProps {
   api: MutableRefObject<ScrollApi | null>
   layout: StripLayout
   viewport: Size
+  /** Current zoom (a multiplier of the chosen width, baked into `layout`) and how to change it. */
+  zoom: number
+  onZoom: (zoom: number) => void
   pages: ReadonlyMap<number, PageState>
   enhanced?: ReadonlyMap<number, SrResult>
   background: StageBackground
@@ -37,8 +40,18 @@ interface ScrollViewProps {
 
 /** Pages kept in the DOM beyond the viewport, in viewport heights, so a flick never meets an empty strip. */
 const RENDER_MARGIN_SCREENS = 1.5
+/** Share of the viewport a tap in the upper or lower zone scrolls by. */
+const TAP_SCROLL_SCREENS = 0.85
 /** Duration of a programmatic scroll (tap zones, keys). */
 const GLIDE_MS = 320
+const DOUBLE_TAP_MS = 300
+const DOUBLE_TAP_DIST = 40
+/** A single tap waits this long for a possible second one. */
+const SINGLE_TAP_DELAY = 250
+const DOUBLE_TAP_ZOOM = 2.5
+
+const sameList = (a: readonly number[], b: readonly number[]) => a.length === b.length && a.every((v, i) => v === b[i])
+const clampZoom = (z: number) => Math.min(MAX_STRIP_ZOOM, Math.max(MIN_STRIP_ZOOM, z))
 
 /**
  * Scrolls `el` to `to` with an ease-out over GLIDE_MS, one animation per element; a new glide,
@@ -70,20 +83,46 @@ function stopGlide(el: HTMLElement): void {
     glides.delete(el)
   }
 }
-/** Share of the viewport a tap in the upper or lower zone scrolls by. */
-const TAP_SCROLL_SCREENS = 0.85
 
-const sameList = (a: readonly number[], b: readonly number[]) => a.length === b.length && a.every((v, i) => v === b[i])
+/** A point of the content, as the page under it and the position inside that page (0..1 on both axes). */
+interface ContentAnchor {
+  index: number
+  fraction: number
+  xFraction: number
+  /** Where that point was in the viewport. */
+  focal: { x: number; y: number }
+}
+
+function anchorAtFocal(layout: StripLayout, el: HTMLElement, focal: { x: number; y: number }): ContentAnchor {
+  const { index, fraction } = anchorAt(layout, el.scrollTop + focal.y)
+  const xFraction = Math.min(1.5, Math.max(-0.5, (el.scrollLeft + focal.x - layout.left) / Math.max(1, layout.pageWidth)))
+  return { index, fraction, xFraction, focal }
+}
+
+function restoreAnchor(layout: StripLayout, el: HTMLElement, anchor: ContentAnchor): void {
+  el.scrollTop = scrollTopFor(layout, { index: anchor.index, fraction: anchor.fraction }) - anchor.focal.y
+  el.scrollLeft = layout.left + anchor.xFraction * layout.pageWidth - anchor.focal.x
+}
+
+interface Pinch {
+  startDist: number
+  startZoom: number
+  mid: { x: number; y: number }
+  scale: number
+}
 
 /**
  * Webtoon-style reading: one vertical strip, native scrolling (momentum, rubber band, the scroll
  * bar), pages fitted to a common width. Only the pages near the viewport are in the DOM; the
  * others are empty space of the right height. The page under the upper third of the viewport is
  * the one being read; sizes discovered while reading re-flow the strip without moving what the
- * reader is looking at.
+ * reader is looking at. Pinch, double tap or Ctrl+wheel zoom the strip: the gesture scales the
+ * content as a transient transform, then the zoom is baked into the layout (wider pages, the
+ * strip scrolls sideways too) with the point under the fingers kept in place.
  */
-export function ScrollView({ stageRef, api, layout, viewport, pages, enhanced, background, currentPage, onCurrentPage, onVisibleChange, onTap, onRetry, blurred, revealing }: ScrollViewProps) {
+export function ScrollView({ stageRef, api, layout, viewport, zoom, onZoom, pages, enhanced, background, currentPage, onCurrentPage, onVisibleChange, onTap, onRetry, blurred, revealing }: ScrollViewProps) {
   const [range, setRange] = useState<number[]>([])
+  const stripRef = useRef<HTMLDivElement>(null)
   const reported = useRef<number>(currentPage)
   const visible = useRef<number[]>([])
   const prevLayout = useRef<StripLayout | null>(null)
@@ -91,11 +130,19 @@ export function ScrollView({ stageRef, api, layout, viewport, pages, enhanced, b
   const frame = useRef<number | null>(null)
   const layoutRef = useRef(layout)
   const viewportRef = useRef(viewport)
-  const callbacks = useRef({ onCurrentPage, onVisibleChange })
+  const zoomRef = useRef(zoom)
+  const callbacks = useRef({ onCurrentPage, onVisibleChange, onTap, onZoom })
+  /** Set when a zoom is committed: the next layout is placed so this content point stays under the focal. */
+  const pendingAnchor = useRef<ContentAnchor | null>(null)
+  const pointers = useRef(new Map<number, { x: number; y: number }>())
+  const pinch = useRef<Pinch | null>(null)
+  const lastTap = useRef<{ t: number; x: number; y: number } | null>(null)
+  const tapTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   useLayoutEffect(() => {
     layoutRef.current = layout
     viewportRef.current = viewport
-    callbacks.current = { onCurrentPage, onVisibleChange }
+    zoomRef.current = zoom
+    callbacks.current = { onCurrentPage, onVisibleChange, onTap, onZoom }
   })
 
   /** Reads the scroll position and updates: rendered window, visible pages, page being read. */
@@ -128,6 +175,7 @@ export function ScrollView({ stageRef, api, layout, viewport, pages, enhanced, b
     () => () => {
       if (frame.current !== null) cancelAnimationFrame(frame.current)
       frame.current = null
+      if (tapTimer.current) clearTimeout(tapTimer.current)
     },
     [],
   )
@@ -161,8 +209,8 @@ export function ScrollView({ stageRef, api, layout, viewport, pages, enhanced, b
     }
   }, [api, scrollToPage, stageRef])
 
-  // Layout changes (sizes decoded, width setting, rotation): keep the reader's place, or take the
-  // bookmark's on the first usable layout.
+  // Layout changes (sizes decoded, width setting, zoom, rotation): keep the reader's place, or
+  // take the bookmark's on the first usable layout. A committed zoom keeps the pinched point.
   useLayoutEffect(() => {
     const el = stageRef.current
     if (!el || layout.boxes.length === 0) return
@@ -173,7 +221,11 @@ export function ScrollView({ stageRef, api, layout, viewport, pages, enhanced, b
       scrollToPage(currentPage)
       return
     }
-    if (prev && prev !== layout && (prev.height !== layout.height || prev.pageWidth !== layout.pageWidth)) {
+    if (pendingAnchor.current) {
+      restoreAnchor(layout, el, pendingAnchor.current)
+      pendingAnchor.current = null
+      if (stripRef.current) stripRef.current.style.transform = ''
+    } else if (prev && prev !== layout && (prev.height !== layout.height || prev.pageWidth !== layout.pageWidth)) {
       el.scrollTop = scrollTopFor(layout, anchorAt(prev, el.scrollTop))
     }
     schedule()
@@ -185,29 +237,145 @@ export function ScrollView({ stageRef, api, layout, viewport, pages, enhanced, b
     if (restored.current && currentPage !== reported.current) scrollToPage(currentPage)
   }, [currentPage, scrollToPage])
 
-  const onClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    if ((e.target as HTMLElement).closest('button')) return
-    const rect = e.currentTarget.getBoundingClientRect()
-    const y = (e.clientY - rect.top) / Math.max(1, rect.height)
-    const zone: ScrollTapZone = y < 0.3 ? 'up' : y > 0.7 ? 'down' : 'center'
-    if (zone !== 'center') api.current?.scrollByScreens(zone === 'up' ? -TAP_SCROLL_SCREENS : TAP_SCROLL_SCREENS)
-    onTap(zone)
+  // ---- zoom -----------------------------------------------------------------------------------
+  /** Commits a zoom around a viewport point: the layout follows, and the anchor puts that point back. */
+  const commitZoom = useCallback(
+    (next: number, focal: { x: number; y: number }) => {
+      const el = stageRef.current
+      if (!el) return
+      const target = clampZoom(next)
+      if (Math.abs(target - zoomRef.current) < 0.001) {
+        if (stripRef.current) stripRef.current.style.transform = ''
+        return
+      }
+      stopGlide(el)
+      pendingAnchor.current = anchorAtFocal(layoutRef.current, el, focal)
+      callbacks.current.onZoom(target)
+    },
+    [stageRef],
+  )
+
+  const local = (e: { clientX: number; clientY: number }) => {
+    const r = stageRef.current!.getBoundingClientRect()
+    return { x: e.clientX - r.left, y: e.clientY - r.top }
   }
 
+  const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    stopGlide(e.currentTarget)
+    if (e.pointerType !== 'touch') return
+    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
+    if (pointers.current.size === 2) {
+      const [a, b] = [...pointers.current.values()]
+      const p1 = local({ clientX: a!.x, clientY: a!.y })
+      const p2 = local({ clientX: b!.x, clientY: b!.y })
+      pinch.current = {
+        startDist: Math.max(1, Math.hypot(p2.x - p1.x, p2.y - p1.y)),
+        startZoom: zoomRef.current,
+        mid: { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 },
+        scale: 1,
+      }
+      if (tapTimer.current) {
+        clearTimeout(tapTimer.current)
+        tapTimer.current = null
+      }
+    }
+  }
+
+  const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!pointers.current.has(e.pointerId)) return
+    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
+    const p = pinch.current
+    if (!p || pointers.current.size < 2) return
+    const [a, b] = [...pointers.current.values()]
+    const p1 = local({ clientX: a!.x, clientY: a!.y })
+    const p2 = local({ clientX: b!.x, clientY: b!.y })
+    const dist = Math.max(1, Math.hypot(p2.x - p1.x, p2.y - p1.y))
+    // The scale is bounded so the transient view never shows more than the committed zoom will.
+    p.scale = clampZoom(p.startZoom * (dist / p.startDist)) / p.startZoom
+    const el = e.currentTarget
+    const strip = stripRef.current
+    if (strip) {
+      strip.style.transformOrigin = `${el.scrollLeft + p.mid.x}px ${el.scrollTop + p.mid.y}px`
+      strip.style.transform = `scale(${p.scale})`
+    }
+  }
+
+  const endPointer = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!pointers.current.has(e.pointerId)) return
+    pointers.current.delete(e.pointerId)
+    const p = pinch.current
+    if (p && pointers.current.size < 2) {
+      pinch.current = null
+      commitZoom(p.startZoom * p.scale, p.mid)
+    }
+  }
+
+  const onWheel = (e: React.WheelEvent<HTMLDivElement>) => {
+    stopGlide(e.currentTarget)
+    if (!e.ctrlKey) return
+    // Ctrl+wheel (or a trackpad pinch, which browsers report the same way): zoom around the cursor.
+    e.preventDefault()
+    const factor = Math.exp(-e.deltaY * 0.0022)
+    commitZoom(zoomRef.current * factor, local(e))
+  }
+
+  const onClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if ((e.target as HTMLElement).closest('button')) return
+    const point = local(e)
+    const now = performance.now()
+    const previous = lastTap.current
+    lastTap.current = { t: now, x: point.x, y: point.y }
+    if (previous && now - previous.t < DOUBLE_TAP_MS && Math.hypot(point.x - previous.x, point.y - previous.y) < DOUBLE_TAP_DIST) {
+      // Double tap: zoom in around the point, or back to the chosen width.
+      if (tapTimer.current) {
+        clearTimeout(tapTimer.current)
+        tapTimer.current = null
+      }
+      lastTap.current = null
+      commitZoom(zoomRef.current > 1.01 ? 1 : DOUBLE_TAP_ZOOM, point)
+      return
+    }
+    const rect = e.currentTarget.getBoundingClientRect()
+    const y = point.y / Math.max(1, rect.height)
+    const zone: ScrollTapZone = y < 0.3 ? 'up' : y > 0.7 ? 'down' : 'center'
+    if (tapTimer.current) clearTimeout(tapTimer.current)
+    tapTimer.current = setTimeout(() => {
+      tapTimer.current = null
+      if (zone !== 'center') api.current?.scrollByScreens(zone === 'up' ? -TAP_SCROLL_SCREENS : TAP_SCROLL_SCREENS)
+      callbacks.current.onTap(zone)
+    }, SINGLE_TAP_DELAY)
+  }
+
+  // Wheel zoom must be able to preventDefault: React registers wheel listeners as passive.
+  useEffect(() => {
+    const el = stageRef.current
+    if (!el) return
+    const block = (e: WheelEvent) => {
+      if (e.ctrlKey) e.preventDefault()
+    }
+    el.addEventListener('wheel', block, { passive: false })
+    return () => el.removeEventListener('wheel', block)
+  }, [stageRef])
+
+  const stripWidth = Math.max(viewport.w, layout.pageWidth)
   return (
     <div
       ref={stageRef}
-      className="reader-stage absolute inset-0 overflow-x-hidden overflow-y-auto bg-stage select-none"
-      style={{ touchAction: 'pan-y', overscrollBehavior: 'contain', background: STAGE_BG[background] }}
+      className="reader-stage absolute inset-0 overflow-auto bg-stage select-none"
+      style={{ touchAction: 'pan-x pan-y', overscrollBehavior: 'contain', background: STAGE_BG[background] }}
       onScroll={schedule}
-      onPointerDown={(e) => stopGlide(e.currentTarget)}
-      onWheel={(e) => stopGlide(e.currentTarget)}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={endPointer}
+      onPointerCancel={endPointer}
+      onWheel={onWheel}
       onClick={onClick}
       data-testid="stage"
-      data-background={background}
       data-mode="scroll"
+      data-zoom={zoom.toFixed(2)}
+      data-background={background}
     >
-      <div className="relative" style={{ height: layout.height, width: '100%' }} data-testid="scroll-strip">
+      <div ref={stripRef} className="relative will-change-transform" style={{ height: layout.height, width: stripWidth }} data-testid="scroll-strip">
         {range.map((index) => {
           const box = layout.boxes[index]
           if (!box) return null
