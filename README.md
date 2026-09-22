@@ -62,7 +62,7 @@ Everything happens in the browser, on your device. There is no server: your file
 | **4K · Medium** | Real-ESRGAN anime video v3, 4-pass self-ensemble | 4 | ~4 s |
 | **4K · Slow · best** | Real-ESRGAN x4plus anime 6B | 1 | ~7 s |
 
-Both networks are implemented directly in WGSL and run through WebGPU (no ONNX runtime, no WebAssembly). Pages are upscaled at a fixed factor (×4, or ×2 when the result would exceed Safari's canvas limits) and then fitted to the screen with a Lanczos resampler, so zooming never recomputes anything and downscaling a ×4 result to screen pixels is what makes the lines look clean. On first use the app measures your GPU and picks the fastest convolution kernel for it. In 4K mode an *anti-spoiler* blur can hide the plain page until its enhanced version is ready.
+Both networks are implemented directly in WGSL and run through WebGPU (no ONNX runtime, no WebAssembly). Pages are upscaled at a fixed factor (×4; ×2 when the result would exceed Safari's canvas limits; pages above 4 MP, already larger than any screen, are restored at their own size) and then fitted to the screen with a Lanczos resampler, so zooming never recomputes anything and downscaling a ×4 result to screen pixels is what makes the lines look clean. On first use the app measures your GPU and picks the fastest convolution kernel for it. In 4K mode an *anti-spoiler* blur can hide the plain page until its enhanced version is ready.
 
 <p align="center">
   <img src="media/readme/demon-slayer-cover-before-after.jpg" alt="The whole cover, standard upscaling on the left and Mangadana 4K on the right." width="900">
