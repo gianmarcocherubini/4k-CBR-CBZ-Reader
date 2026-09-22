@@ -17,7 +17,7 @@ import {
   putBook,
   putCollection,
 } from '../lib/storage/db'
-import { type ArchivePasswordRequest, deleteBook, importFile, newId, openSessionBook } from '../lib/storage/importer'
+import { type ArchivePasswordRequest, deleteBook, importFile, newId, openSessionBook, regenerateCover } from '../lib/storage/importer'
 import { cleanupOrphanedBookFiles, estimateStorage, formatBytes, ORPHAN_RETRY_MS, type StorageEstimate } from '../lib/storage/opfs'
 import type { Book, Collection, PendingRestore, Progress, ReaderSettings } from '../types'
 import { BookCard, ContinueCard } from './BookCard'
@@ -130,6 +130,8 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
   const orphanCleanupDone = useRef(false)
   const initialCollectionSelected = useRef(false)
   const refreshGeneration = useRef(0)
+  /** Volumes whose missing cover was already rebuilt (or could not be) in this session. */
+  const coverRebuilds = useRef(new Set<string>())
 
   const refresh = useCallback(async () => {
     const generation = ++refreshGeneration.current
@@ -180,6 +182,30 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
       reportOperationError(reason, 'Impossibile aprire la libreria')
     })
   }, [refresh, reportOperationError])
+
+  // The default cover is the first page of the volume: a library book without one (never made,
+  // or lost with an unreadable Blob of an earlier version) gets it back, a couple at a time.
+  useEffect(() => {
+    if (!books) return
+    const missing = books.filter((book) => !book.cover && book.storage !== 'session' && !book.passwordProtected && !coverRebuilds.current.has(book.id)).slice(0, 2)
+    if (missing.length === 0) return
+    let cancelled = false
+    void (async () => {
+      let rebuilt = 0
+      for (const book of missing) {
+        coverRebuilds.current.add(book.id)
+        try {
+          if ((await regenerateCover(book)) && !cancelled) rebuilt++
+        } catch {
+          // A broken or missing file: the placeholder stays.
+        }
+      }
+      if (rebuilt > 0 && !cancelled) await refresh().catch(() => undefined)
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [books, refresh])
 
   useEffect(() => {
     const timer = setInterval(() => {
