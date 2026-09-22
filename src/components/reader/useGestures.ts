@@ -54,6 +54,8 @@ export function useGestures(
   content: Size,
   viewport: Size,
   callbacks: GestureCallbacks,
+  /** Off in scroll mode, where the strip scrolls natively; the listeners re-attach when it comes back. */
+  enabled = true,
 ): void {
   const viewRef = useRef(view)
   const contentRef = useRef(content)
@@ -68,7 +70,7 @@ export function useGestures(
 
   useEffect(() => {
     const stage = stageRef.current
-    if (!stage) return
+    if (!stage || !enabled) return
     const pointers = new Map<number, TrackedPointer>()
     let pinch: { startDist: number; startMid: Point; startView: ViewState; scale: number; mid: Point } | null = null
     let pan: { startOffset: Point; offset: Point; moved: boolean } | null = null
@@ -327,5 +329,5 @@ export function useGestures(
       document.removeEventListener('gesturechange', preventGesture)
       if (tapTimer) clearTimeout(tapTimer)
     }
-  }, [stageRef, canvasRef])
+  }, [stageRef, canvasRef, enabled])
 }

@@ -1,16 +1,12 @@
 import type { RefObject } from 'react'
 import type { SpreadLayout } from '../../lib/reader/layout'
-import type { LoadedPage } from '../../lib/reader/pageCache'
 import { isBlank } from '../../lib/spread'
 import type { SrResult } from '../../lib/upscale/srEngine'
 import type { GutterColor, StageBackground } from '../../types'
-import { EnhancedCanvas } from './EnhancedCanvas'
+import { PageContent, type PageState } from './PageContent'
 import { transformFor, type ViewState } from './useGestures'
 
-export type PageState =
-  | { status: 'loading' }
-  | { status: 'ready'; page: LoadedPage }
-  | { status: 'error'; message: string }
+export type { PageState } from './PageContent'
 
 /** A snapshot of the spread that is leaving the screen, animated out during a page turn. */
 export interface SpreadGhost {
@@ -110,37 +106,7 @@ function SpreadCanvas({ canvasRef, layout, view, pages, enhanced, gutterColor, o
             data-sr={sr ? sr.level : undefined}
             data-blurred={isBlurred || undefined}
           >
-            {state?.status === 'ready' && sr ? (
-              <EnhancedCanvas bitmap={sr.bitmap} width={box.w * z} height={box.h * z} alt={`Pagina ${box.index + 1}`} />
-            ) : state?.status === 'ready' ? (
-              <img
-                src={state.page.url}
-                alt={`Pagina ${box.index + 1}`}
-                width={Math.round(box.w * z)}
-                height={Math.round(box.h * z)}
-                className={`block h-full w-full ${isBlurred ? 'antispoiler' : ''}`}
-                decoding="async"
-                draggable={false}
-              />
-            ) : state?.status === 'error' ? (
-              <div className="flex h-full w-full flex-col items-center justify-center gap-3 bg-card p-4 text-center shadow-[inset_0_0_0_1px_var(--line)]">
-                <p className="text-footnote text-label-2">Pagina {box.index + 1}: {state.message}</p>
-                {onRetry && (
-                  <button
-                    type="button"
-                    className="btn-ghost pointer-events-auto !min-h-[36px] !text-[13px]"
-                    onPointerDown={(e) => e.stopPropagation()}
-                    onClick={() => onRetry(box.index)}
-                  >
-                    Riprova
-                  </button>
-                )}
-              </div>
-            ) : (
-              <div className="flex h-full w-full items-center justify-center bg-card/70">
-                <div className="spinner" aria-label="Caricamento pagina" />
-              </div>
-            )}
+            <PageContent index={box.index} state={state} sr={sr} width={box.w * z} height={box.h * z} blurred={isBlurred} onRetry={onRetry} />
           </div>
         )
       })}

@@ -77,6 +77,14 @@ export interface PendingRestore {
 
 export type Direction = 'rtl' | 'ltr'
 export type PageMode = 'single' | 'double' | 'auto'
+/** pages = turn them like a book (one or two at a time); scroll = a vertical strip, webtoon style. */
+export type ReadingMode = 'pages' | 'scroll'
+/** Width of the strip in scroll mode, as a share of the reading area (on a landscape iPad the full width is a lot). */
+export type ScrollWidth = 'full' | 'medium' | 'narrow'
+export const SCROLL_WIDTH_FRACTION: Record<ScrollWidth, number> = { full: 1, medium: 0.74, narrow: 0.56 }
+/** Space between two consecutive pages in scroll mode (none: webtoons drawn as one continuous strip). */
+export type ScrollGap = 'none' | 's' | 'm'
+export const SCROLL_GAP_PX: Record<ScrollGap, number> = { none: 0, s: 8, m: 24 }
 /** Appearance: follow the system, or force light/dark like Apple Books' themes. */
 export type Theme = 'system' | 'light' | 'dark'
 /** Gap between the two pages of a spread, as a fraction of the page height. */
@@ -109,6 +117,9 @@ export type Resolution = 'hd' | '4k'
 export type Rendering = 'fast' | 'medium' | 'slow'
 
 export interface ReaderSettings {
+  readingMode: ReadingMode
+  scrollWidth: ScrollWidth
+  scrollGap: ScrollGap
   direction: Direction
   pageMode: PageMode
   fit: FitMode
@@ -137,6 +148,9 @@ export interface ReaderSettings {
 }
 
 export const DEFAULT_SETTINGS: ReaderSettings = {
+  readingMode: 'pages',
+  scrollWidth: 'full',
+  scrollGap: 's',
   direction: 'rtl',
   pageMode: 'auto',
   fit: 'screen',

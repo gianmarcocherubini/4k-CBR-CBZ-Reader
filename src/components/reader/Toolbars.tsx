@@ -9,6 +9,8 @@ interface ToolbarsProps {
   spreadIndex: number
   spreadCount: number
   direction: Direction
+  /** Scroll mode: the slider counts pages top to bottom and the spread controls are hidden. */
+  scroll?: boolean
   double: boolean
   /** The current spread contains a user-inserted blank page. */
   blankHere: boolean
@@ -46,6 +48,7 @@ export function Toolbars({
   spreadIndex,
   spreadCount,
   direction,
+  scroll = false,
   double,
   blankHere,
   badge,
@@ -112,6 +115,9 @@ export function Toolbars({
         <div className="-mt-1 text-center text-caption text-label-2 tabular-nums">
           Pagina <span data-testid="page-label">{label}</span> di {pageCount}
         </div>
+        {scroll ? (
+          <div className="pb-3" />
+        ) : (
         <div className="flex flex-wrap items-center justify-center gap-2 px-5 pt-2.5 pb-3.5">
           <button type="button" className="btn-pill" onClick={onToggleDouble} aria-pressed={double} data-testid="toggle-double">
             Doppia pagina
@@ -129,6 +135,7 @@ export function Toolbars({
             </button>
           )}
         </div>
+        )}
       </div>
     </>
   )

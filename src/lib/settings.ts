@@ -32,6 +32,9 @@ export function normalizeSettings(stored: unknown): ReaderSettings {
   const bool = (value: unknown, fallback: boolean) => (typeof value === 'boolean' ? value : fallback)
   const d = DEFAULT_SETTINGS
   return {
+    readingMode: pick(rest.readingMode, ['pages', 'scroll'], d.readingMode),
+    scrollWidth: pick(rest.scrollWidth, ['full', 'medium', 'narrow'], d.scrollWidth),
+    scrollGap: pick(rest.scrollGap, ['none', 's', 'm'], d.scrollGap),
     direction: pick(rest.direction, ['rtl', 'ltr'], d.direction),
     pageMode: pick(rest.pageMode, ['single', 'double', 'auto'], d.pageMode),
     fit: pick(rest.fit, ['screen', 'height', 'width', 'original'], d.fit),
