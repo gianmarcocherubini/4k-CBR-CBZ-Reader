@@ -72,7 +72,7 @@ describe('SRVGG reference implementation', { timeout: 60_000 }, () => {
     expect(psnr).toBeGreaterThan(55)
   })
 
-  it('produces the x2 result as a 2x2 box of the x4 one', () => {
+  it('produces the x2 result as a 2x2 box of the x4 one, and x1 as a 4x4 box', () => {
     const weights = parseWeights(load('realesr-animevideov3.f16.bin'))
     const w = 8
     const h = 6
@@ -84,13 +84,17 @@ describe('SRVGG reference implementation', { timeout: 60_000 }, () => {
       rgba[i * 4 + 3] = 255
     }
     const x4 = runSrvggReference(weights, rgba, w, h, 4)
-    const x2 = runSrvggReference(weights, rgba, w, h, 2)
-    for (let y = 0; y < h * 2; y++) {
-      for (let x = 0; x < w * 2; x++) {
-        for (let c = 0; c < 3; c++) {
-          let sum = 0
-          for (let by = 0; by < 2; by++) for (let bx = 0; bx < 2; bx++) sum += x4[((y * 2 + by) * w * 4 + x * 2 + bx) * 4 + c]!
-          expect(Math.abs(x2[(y * w * 2 + x) * 4 + c]! - sum / 4)).toBeLessThanOrEqual(2)
+    for (const factor of [2, 1] as const) {
+      const out = runSrvggReference(weights, rgba, w, h, factor)
+      const sub = 4 / factor
+      expect(out.length).toBe(w * factor * h * factor * 4)
+      for (let y = 0; y < h * factor; y++) {
+        for (let x = 0; x < w * factor; x++) {
+          for (let c = 0; c < 3; c++) {
+            let sum = 0
+            for (let by = 0; by < sub; by++) for (let bx = 0; bx < sub; bx++) sum += x4[((y * sub + by) * w * 4 + x * sub + bx) * 4 + c]!
+            expect(Math.abs(out[(y * w * factor + x) * 4 + c]! - sum / (sub * sub))).toBeLessThanOrEqual(2)
+          }
         }
       }
     }

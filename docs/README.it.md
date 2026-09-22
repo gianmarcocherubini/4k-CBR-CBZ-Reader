@@ -310,8 +310,9 @@ WebAssembly), scelte dal **Rendering**:
 - **Coda ×4 del 6B a strisce di 16 righe** (+2 di contesto per lato, esatte): 25% di contesto ricalcolato invece
   del 50% delle strisce da 8, a risultato identico.
 - La pagina resta com'è finché il risultato non è pronto, poi cambia una volta sola; in doppia pagina le due pagine
-  passano a HD insieme. Risultato a fattore fisso (×4; ×2 come media 2×2 del ×4 solo se il ×4 supererebbe i 16 MP),
-  poi adattato allo schermo come per Anime4K.
+  passano a HD insieme. Risultato a fattore fisso (×4; ×2 come media 2×2 del ×4 se il ×4 supererebbe i 16 MP; ×1,
+  media 4×4, per le pagine oltre i 4 MP, già più grandi di qualsiasi schermo: il modello le restaura alla loro
+  risoluzione invece di lasciarle in HD), poi adattato allo schermo come per Anime4K.
 - **Implementazione**: pesi FP16 (1,2 MB) nel bundle, quindi disponibili anche offline; kernel `conv3x3` con
   register blocking (un thread calcola 4 pixel × 16 canali, i 32 thread di un wavefront leggono gli stessi pesi),
   attivazioni e aritmetica in `f16` dove la GPU espone `shader-f16` (altrimenti `f32`, con fallback automatico se i

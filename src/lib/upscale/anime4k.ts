@@ -2,6 +2,7 @@
 import type { Anime4KPipeline, Anime4KPipelineDescriptor } from 'anime4k-webgpu'
 import type { PageSize } from '../../types'
 import {
+  adapterName,
   type Anime4KLevel,
   type BackendInfo,
   COMPOSITE_WGSL,
@@ -99,10 +100,9 @@ export class Anime4KUpscaler implements UpscaleBackend {
           maxStorageBufferBindingSize: Math.min(1024 * 1024 * 1024, adapter.limits.maxStorageBufferBindingSize),
         },
       })
-      const adapterInfo = (adapter as GPUAdapter & { info?: GPUAdapterInfo }).info
-      const name = adapterInfo ? [adapterInfo.vendor, adapterInfo.architecture, adapterInfo.description].filter(Boolean).join(' ') : 'WebGPU'
+      const name = adapterName((adapter as GPUAdapter & { info?: GPUAdapterInfo }).info)
       const lib = (await import('anime4k-webgpu')) as unknown as Anime4KModule
-      return new Anime4KUpscaler(device, { adapter: name || 'WebGPU', maxTextureDimension: device.limits.maxTextureDimension2D }, lib)
+      return new Anime4KUpscaler(device, { adapter: name, maxTextureDimension: device.limits.maxTextureDimension2D }, lib)
     } catch {
       return null
     }

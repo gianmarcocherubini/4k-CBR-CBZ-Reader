@@ -291,7 +291,8 @@ test('Real-ESRGAN WebGPU kernels match the float32 reference, band seams include
       }) => Promise<SelfTest>
     }
   }
-  type SelfTest = { precision: 'f16' | 'f32'; bands: number; x4: { psnr: number; maxDiff: number }; x2: { psnr: number; maxDiff: number } }
+  type Match = { psnr: number; maxDiff: number }
+  type SelfTest = { precision: 'f16' | 'f32'; bands: number; x4: Match; x2: Match; x1: Match }
   await page.waitForFunction(() => !!(window as unknown as Hooks).__reader)
   // A 40x56 image cut into 8-row bands: every seam of the tiled path is exercised.
   const result = await page.evaluate(() => (window as unknown as Hooks).__reader!.esrganSelfTest({ width: 40, height: 56, smallBands: true }))
@@ -304,6 +305,9 @@ test('Real-ESRGAN WebGPU kernels match the float32 reference, band seams include
   expect(result.x4.maxDiff).toBeLessThanOrEqual(maxDiff)
   expect(result.x2.psnr).toBeGreaterThan(minPsnr)
   expect(result.x2.maxDiff).toBeLessThanOrEqual(maxDiff)
+  // x1 (pages too large even for x2): the 4x4 box of the network output, one pixel per source pixel.
+  expect(result.x1.psnr).toBeGreaterThan(minPsnr)
+  expect(result.x1.maxDiff).toBeLessThanOrEqual(maxDiff)
 
   // Self-ensemble: the GPU averages the passes over transformed copies exactly like the CPU does
   // (the CPU rounds each pass to 8 bits first, hence the looser bound).
@@ -312,6 +316,7 @@ test('Real-ESRGAN WebGPU kernels match the float32 reference, band seams include
   expect(ensemble.x4.psnr).toBeGreaterThan(result.precision === 'f16' ? 38 : 50)
   expect(ensemble.x4.maxDiff).toBeLessThanOrEqual(result.precision === 'f16' ? 12 : 2)
   expect(ensemble.x2.maxDiff).toBeLessThanOrEqual(result.precision === 'f16' ? 12 : 2)
+  expect(ensemble.x1.maxDiff).toBeLessThanOrEqual(result.precision === 'f16' ? 12 : 2)
 
   // Winograd F(2x2, 3x3) kernels (input transform, shared-memory multiply, fused output transform)
   // on the same bands: the same maths through transforms, exact to f32 rounding.
@@ -328,6 +333,7 @@ test('Real-ESRGAN WebGPU kernels match the float32 reference, band seams include
   expect(rrdb.x4.psnr).toBeGreaterThan(result.precision === 'f16' ? 38 : 60)
   expect(rrdb.x4.maxDiff).toBeLessThanOrEqual(result.precision === 'f16' ? 12 : 1)
   expect(rrdb.x2.maxDiff).toBeLessThanOrEqual(result.precision === 'f16' ? 12 : 1)
+  expect(rrdb.x1.maxDiff).toBeLessThanOrEqual(result.precision === 'f16' ? 12 : 1)
 
   // Winograd on the 6B: dense concatenations, residual epilogues and the upsampling tail, bit-exact in f32.
   const rrdbWino = await page.evaluate(() => (window as unknown as Hooks).__reader!.esrganSelfTest({ width: 16, height: 12, model: '6b', variant: 'w' }))
@@ -346,6 +352,7 @@ test('Real-ESRGAN WebGPU kernels match the float32 reference, band seams include
   expect(rrdbEnsemble.x4.psnr).toBeGreaterThan(result.precision === 'f16' ? 38 : 50)
   expect(rrdbEnsemble.x4.maxDiff).toBeLessThanOrEqual(result.precision === 'f16' ? 12 : 2)
   expect(rrdbEnsemble.x2.maxDiff).toBeLessThanOrEqual(result.precision === 'f16' ? 12 : 2)
+  expect(rrdbEnsemble.x1.maxDiff).toBeLessThanOrEqual(result.precision === 'f16' ? 12 : 2)
 })
 
 test('Qualità massima: Real-ESRGAN x4 on the visible page only, time budget falls back to Anime4K', async ({ page }) => {

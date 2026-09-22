@@ -33,6 +33,7 @@ export interface SelfTestResult {
   ensemble: EnsembleSize
   x4: { psnr: number; maxDiff: number; ms: number }
   x2: { psnr: number; maxDiff: number; ms: number }
+  x1: { psnr: number; maxDiff: number; ms: number }
 }
 
 function synthetic(w: number, h: number): Uint8ClampedArray<ArrayBuffer> {
@@ -146,7 +147,8 @@ export async function esrganSelfTest(opts: SelfTestOptions = {}): Promise<SelfTe
     }
     const x4 = await run(4)
     const x2 = await run(2)
-    return { model, variant: upscaler.variant, adapter: upscaler.info.adapter, precision: upscaler.info.precision, bands: x4.bands, ensemble, x4, x2 }
+    const x1 = await run(1)
+    return { model, variant: upscaler.variant, adapter: upscaler.info.adapter, precision: upscaler.info.precision, bands: x4.bands, ensemble, x4, x2, x1 }
   } finally {
     upscaler.dispose()
   }
