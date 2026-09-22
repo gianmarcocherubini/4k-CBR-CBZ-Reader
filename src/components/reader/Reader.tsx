@@ -3,6 +3,7 @@ import { openArchive, type OpenedArchive, supportsPassword } from '../../lib/arc
 import { ArchiveError, describeError, isArchiveError } from '../../lib/archive/types'
 import { clampOffset, clampZoom, layoutSpread, type Size, zoomAround } from '../../lib/reader/layout'
 import { PageCache } from '../../lib/reader/pageCache'
+import { layoutStrip } from '../../lib/reader/scrollLayout'
 import { blankBefore, firstPage, isBlank, layoutSpreads, realPages, spreadIndexOf, spreadLabel } from '../../lib/spread'
 import { getBook, getPageSizes, getProgress, putBook, putPageSizes, putProgress } from '../../lib/storage/db'
 import {
@@ -14,10 +15,11 @@ import {
 import { flags } from '../../lib/flags'
 import { type EnsembleSize, EsrganAborted, MODELS } from '../../lib/upscale/esrgan/esrganEngine'
 import { SrAborted, type SrOptions, type SrPlan, type SrResult } from '../../lib/upscale/srEngine'
-import { type Book, GUTTER_FRACTION, type MaxQualityModel, type PageSize, type ReaderSettings } from '../../types'
+import { type Book, GUTTER_FRACTION, type MaxQualityModel, type PageSize, type ReaderSettings, SCROLL_GAP_PX, SCROLL_WIDTH_FRACTION } from '../../types'
 import { QualityControls } from './QualityControls'
 import { enterFullscreen, isFullscreen } from '../../lib/fullscreen'
 import { HdBadge } from './HdBadge'
+import { type ScrollApi, ScrollView } from './ScrollView'
 import { SettingsPanel } from './SettingsPanel'
 import { type PageState, type SpreadGhost, SpreadView, STAGE_BG } from './SpreadView'
 import { Toolbars } from './Toolbars'
@@ -99,6 +101,10 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
   const canvasRef = useRef<HTMLDivElement>(null)
   const sizesDirty = useRef(false)
   const dpr = window.devicePixelRatio || 1
+  /** Scroll mode: the strip reports which pages intersect the viewport; the reader loads and enhances those. */
+  const scroll = settings.readingMode === 'scroll'
+  const [scrollVisible, setScrollVisible] = useState<number[]>([])
+  const scrollApi = useRef<ScrollApi | null>(null)
 
   // ---- open the book -------------------------------------------------------------------------
   useEffect(() => {
@@ -225,7 +231,7 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
       window.removeEventListener('orientationchange', update)
       window.visualViewport?.removeEventListener('resize', update)
     }
-  }, [status])
+  }, [status, scroll])
 
   // ---- layout --------------------------------------------------------------------------------
   const double = settings.pageMode === 'double' || (settings.pageMode === 'auto' && viewport.w > viewport.h)
@@ -235,8 +241,13 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
   )
   const spreadIndex = spreadIndexOf(spreads, currentPage)
   const spread = spreads[spreadIndex] ?? []
-  const spreadPages = useMemo(() => realPages(spread), [spread])
-  const spreadKey = spread.join(',')
+  /** The pages on screen: the current spread, or, in scroll mode, whatever intersects the viewport. */
+  const spreadPages = useMemo(() => (scroll ? scrollVisible : realPages(spread)), [scroll, scrollVisible, spread])
+  const spreadKey = scroll ? `scroll:${scrollVisible.join(',')}` : spread.join(',')
+  const strip = useMemo(
+    () => layoutStrip(pageCount, sizes, viewport, SCROLL_WIDTH_FRACTION[settings.scrollWidth], SCROLL_GAP_PX[settings.scrollGap]),
+    [pageCount, sizes, viewport, settings.scrollWidth, settings.scrollGap],
+  )
   const spreadHasBlank = spread.some(isBlank)
   /** Insert a blank before the first page of the current spread, or remove the one shown. */
   const toggleBlankHere = useCallback(() => {
@@ -271,6 +282,10 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
   // Reset zoom when the spread changes; re-clamp the offset when the layout/viewport change.
   const lastSpreadKey = useRef(spreadKey)
   useEffect(() => {
+    if (scroll) {
+      lastSpreadKey.current = spreadKey
+      return
+    }
     if (lastSpreadKey.current !== spreadKey) {
       lastSpreadKey.current = spreadKey
       setView({ zoom: 1, offset: clampOffset({ x: 0, y: 0 }, { w: layout.w, h: layout.h }, viewport) })
@@ -305,7 +320,7 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
       const next = clampOffset(v.offset, { w: layout.w * v.zoom, h: layout.h * v.zoom }, viewport)
       return next.x === v.offset.x && next.y === v.offset.y ? v : { ...v, offset: next }
     })
-  }, [spreadKey, layout.w, layout.h, viewport, status, spreadIndex, settings.transition, settings.direction])
+  }, [spreadKey, layout.w, layout.h, viewport, status, spreadIndex, settings.transition, settings.direction, scroll])
   useEffect(
     () => () => {
       if (ghostTimer.current) clearTimeout(ghostTimer.current)
@@ -318,8 +333,15 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
     const cache = cacheRef.current
     if (status !== 'ready' || !cache) return
     const wanted = new Set<number>(spreadPages)
-    for (let k = 1; k <= PRELOAD_AHEAD; k++) for (const p of realPages(spreads[spreadIndex + k] ?? [])) wanted.add(p)
-    for (let k = 1; k <= PRELOAD_BEHIND; k++) for (const p of realPages(spreads[spreadIndex - k] ?? [])) wanted.add(p)
+    if (scroll) {
+      const last = spreadPages[spreadPages.length - 1] ?? currentPage
+      const first = spreadPages[0] ?? currentPage
+      for (let k = 1; k <= PRELOAD_AHEAD; k++) if (last + k < pageCount) wanted.add(last + k)
+      for (let k = 1; k <= PRELOAD_BEHIND; k++) if (first - k >= 0) wanted.add(first - k)
+    } else {
+      for (let k = 1; k <= PRELOAD_AHEAD; k++) for (const p of realPages(spreads[spreadIndex + k] ?? [])) wanted.add(p)
+      for (let k = 1; k <= PRELOAD_BEHIND; k++) for (const p of realPages(spreads[spreadIndex - k] ?? [])) wanted.add(p)
+    }
     // Only pages currently on screen are unevictable. Read-ahead pages are opportunistic and must
     // never override the PageCache byte budget (two 32 MP pages already occupy ~256 MiB).
     cache.protect(spreadPages)
@@ -365,7 +387,7 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
       cancelled = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, spreadKey, spreadIndex, spreads])
+  }, [status, spreadKey, spreadIndex, spreads, scroll])
 
   const retryPage = useCallback((index: number) => {
     setPageStates((prev) => {
@@ -493,19 +515,76 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
   )
   const onWheelNav = useCallback((d: 1 | -1) => (d > 0 ? goNext() : goPrev()), [goNext, goPrev])
   const onView = useCallback((next: ViewState) => setView(next), [])
-  useGestures(stageRef, canvasRef, view, content, viewport, {
-    onTap,
-    onDoubleTap,
-    onSwipe,
-    onWheelNav,
-    onView,
-    onActivity: showBars,
-  })
+  useGestures(
+    stageRef,
+    canvasRef,
+    view,
+    content,
+    viewport,
+    {
+      onTap,
+      onDoubleTap,
+      onSwipe,
+      onWheelNav,
+      onView,
+      onActivity: showBars,
+    },
+    !scroll,
+  )
+  /** Strip: the centre toggles the bars; the upper and lower zones scroll (done by the view). */
+  const onScrollTap = useCallback(
+    (zone: 'up' | 'center' | 'down') => {
+      if (settingsOpen) {
+        setSettingsOpen(false)
+        return
+      }
+      if (zone === 'center') {
+        if (barsVisible) setBarsVisible(false)
+        else showBars()
+      } else if (barsVisible) setBarsVisible(false)
+    },
+    [settingsOpen, barsVisible, showBars],
+  )
+  const goToPage = useCallback((index: number) => setCurrentPage(Math.min(Math.max(0, index), Math.max(0, pageCount - 1))), [pageCount])
 
   // ---- keyboard ------------------------------------------------------------------------------
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement)?.tagName === 'INPUT') return
+      if (scroll) {
+        switch (e.key) {
+          case ' ':
+          case 'PageDown':
+          case 'ArrowDown':
+            scrollApi.current?.scrollByScreens(0.85)
+            break
+          case 'Backspace':
+          case 'PageUp':
+          case 'ArrowUp':
+            scrollApi.current?.scrollByScreens(-0.85)
+            break
+          case 'ArrowRight':
+            goToPage(currentPage + 1)
+            break
+          case 'ArrowLeft':
+            goToPage(currentPage - 1)
+            break
+          case 'Home':
+            goToPage(0)
+            break
+          case 'End':
+            goToPage(pageCount - 1)
+            break
+          case 'Escape':
+            if (settingsOpen) setSettingsOpen(false)
+            else onClose()
+            break
+          default:
+            return
+        }
+        e.preventDefault()
+        return
+      }
       switch (e.key) {
         case 'ArrowLeft':
           sideAction('left')
@@ -540,7 +619,7 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [sideAction, goNext, goPrev, goToSpread, spreads.length, settingsOpen, onClose])
+  }, [sideAction, goNext, goPrev, goToSpread, spreads.length, settingsOpen, onClose, scroll, goToPage, currentPage, pageCount])
 
   useWakeLock(status === 'ready')
 
@@ -582,12 +661,28 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
   /** Pages whose HD version just landed: the canvas sharpens in. */
   const [revealing, setRevealing] = useState<Set<number>>(() => new Set())
   const revealTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const revealTimers = useRef(new Set<ReturnType<typeof setTimeout>>())
   useEffect(
     () => () => {
       if (revealTimer.current) clearTimeout(revealTimer.current)
+      for (const t of revealTimers.current) clearTimeout(t)
     },
     [],
   )
+  /** Scroll mode: a page's HD canvas sharpens in on its own when it lands. */
+  const revealPage = useCallback((index: number) => {
+    setRevealing((s) => new Set(s).add(index))
+    const t = setTimeout(() => {
+      revealTimers.current.delete(t)
+      setRevealing((s) => {
+        if (!s.has(index)) return s
+        const n = new Set(s)
+        n.delete(index)
+        return n
+      })
+    }, 700)
+    revealTimers.current.add(t)
+  }, [])
   useEffect(() => {
     heavyDecision.current = null
     setHeavyError(null)
@@ -649,11 +744,49 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
       heavy.setWanted(pages.map(heavyKey))
       setSrNative(new Set())
       const hits = pages.map((i) => heavy.peek(heavyKey(i)))
+      const dropPending = (index: number) => (s: Set<number>) => {
+        if (!s.has(index)) return s
+        const n = new Set(s)
+        n.delete(index)
+        return n
+      }
       if (hits.every((h) => h)) {
         pages.forEach((i, k) => initial.set(i, hits[k]!))
         setEnhanced((m) => (sameMap(m, initial) ? m : initial))
         setSrPending((s) => (s.size ? new Set() : s))
         setHeavyPending((s) => (s.size ? new Set() : s))
+      } else if (scroll) {
+        // In the strip the pages are independent: each one turns to 4K as soon as it is ready,
+        // what is already shown stays, and a page that scrolled away keeps its place in the cache.
+        const missing = pages.filter((_, k) => !hits[k])
+        setEnhanced((m) => {
+          const next = new Map<number, SrResult>()
+          pages.forEach((i, k) => {
+            const r = hits[k] ?? m.get(i)
+            if (r) next.set(i, r)
+          })
+          return sameMap(m, next) ? m : next
+        })
+        setSrPending(new Set(missing))
+        setHeavyPending(new Set(missing))
+        for (const index of missing) {
+          heavy
+            .enhance(heavyKey(index), sizes[index]!, () => bitmapOf(index), ensemble)
+            .then((result) => {
+              if (cancelled) return
+              setEnhanced((m) => (m.get(index) === result ? m : new Map(m).set(index, result)))
+              setSrPending(dropPending(index))
+              setHeavyPending(dropPending(index))
+              revealPage(index)
+            })
+            .catch((e: unknown) => {
+              if (cancelled || e instanceof EsrganAborted) return
+              console.warn('Real-ESRGAN fallito', e)
+              setHeavyError(e instanceof Error ? e.message : String(e))
+              setSrPending(dropPending(index))
+              setHeavyPending(dropPending(index))
+            })
+        }
       } else {
         // Both pages of a spread turn to HD together: nothing is shown until all are done.
         setEnhanced((m) => (m.size ? new Map() : m))
@@ -714,6 +847,8 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
     // appear at once and its neighbour a few hundred milliseconds later, which reads as flicker.
     // The gate remembers, per spread, the pages that had to be computed and holds the finished
     // ones back until none is missing.
+    // In scroll mode there is no pair to keep in step: every page shows its HD version as it lands.
+    const together = !scroll
     const gate = spreadGate.current
     if (gate.key !== visibleKey) {
       gate.key = visibleKey
@@ -721,7 +856,7 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
     }
     for (const index of pendingNow) gate.waiting.add(index)
     for (const index of gate.waiting) if (!plans.has(index)) gate.waiting.delete(index)
-    const spreadReady = () => [...gate.waiting].every((index) => light.peek(index, plans.get(index)!))
+    const spreadReady = () => !together || [...gate.waiting].every((index) => light.peek(index, plans.get(index)!))
     const held = new Set<number>()
     if (!spreadReady()) {
       for (const index of gate.waiting) {
@@ -740,7 +875,28 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
     })
     const visuallyPending = new Set([...pendingNow, ...held])
     setSrPending((s) => (s.size === visuallyPending.size && [...visuallyPending].every((i) => s.has(i)) ? s : visuallyPending))
-    if (pendingNow.size > 0) {
+    if (pendingNow.size > 0 && !together) {
+      for (const index of pendingNow) {
+        light
+          .enhance(index, plans.get(index)!, () => bitmapOf(index))
+          .then((result) => {
+            if (cancelled) return
+            setEnhanced((m) => (m.get(index) === result ? m : new Map(m).set(index, result)))
+          })
+          .catch((e: unknown) => {
+            if (!(e instanceof SrAborted) && !cancelled) console.warn('SR fallita', e)
+          })
+          .finally(() => {
+            if (cancelled) return
+            setSrPending((s) => {
+              if (!s.has(index)) return s
+              const n = new Set(s)
+              n.delete(index)
+              return n
+            })
+          })
+      }
+    } else if (pendingNow.size > 0) {
       const requested = [...pendingNow]
       void Promise.allSettled(requested.map((index) => light.enhance(index, plans.get(index)!, () => bitmapOf(index)))).then((outcomes) => {
         // A page that failed must not keep the rest of the spread waiting.
@@ -769,7 +925,7 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
       cancelled = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sr.engine, sr.tick, mq.engine, status, book, visibleKey, srOptions, heavyOn, heavyEnsemble, heavyBudgetMs, heavyError])
+  }, [sr.engine, sr.tick, mq.engine, status, book, visibleKey, srOptions, heavyOn, heavyEnsemble, heavyBudgetMs, heavyError, scroll])
 
   const heavyLabel = 'GAN'
   const displayed = enhanced
@@ -879,7 +1035,7 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
 
   /** Seconds for people: "meno di un secondo", "1,5 s", "7 s". */
   const seconds = (ms: number) => (ms < 950 ? 'meno di un secondo' : ms < 9950 ? `${(ms / 1000).toLocaleString('it-IT', { maximumFractionDigits: 1 })} s` : `${Math.round(ms / 1000)} s`)
-  const onScreenLabel = visibleSizes.length > 1 ? 'le due pagine sullo schermo' : 'la pagina sullo schermo'
+  const onScreenLabel = visibleSizes.length > 1 ? (scroll ? 'le pagine sullo schermo' : 'le due pagine sullo schermo') : 'la pagina sullo schermo'
   /** One plain sentence for the settings footer; the technical line stays under "Dettagli tecnici". */
   const srSummary = (() => {
     if (sr.status === 'init') return 'Avvio…'
@@ -934,9 +1090,9 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
     )
   }
 
-  const label = spread.length ? spreadLabel(spread) : '–'
+  const label = scroll ? (pageCount > 0 ? String(currentPage + 1) : '–') : spread.length ? spreadLabel(spread) : '–'
   /** Where the pixels go: measured stage vs. screen, window and safe areas (to read a black band). */
-  const viewportDiagnostics = settingsOpen ? describeViewport(viewport, layout) : ''
+  const viewportDiagnostics = settingsOpen ? describeViewport(viewport, scroll ? { w: strip.pageWidth, h: strip.height } : layout) : ''
   /** HD indicator: filled "HD" when the enhancement is on the page, dimmed while it works, struck when n/d. */
   const hdState: 'applied' | 'pending' | 'na' | null = !srBadge
     ? null
@@ -953,22 +1109,41 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
       data-testid="reader"
       data-status={status}
     >
-      <SpreadView
-        stageRef={stageRef}
-        canvasRef={canvasRef}
-        layout={layout}
-        view={view}
-        pages={pageStates}
-        enhanced={showEnhanced ? displayed : undefined}
-        gutterColor={settings.gutterColor}
-        background={settings.stageBackground}
-        spreadKey={spreadKey}
-        enterClass={enterClass}
-        ghost={ghost}
-        onRetry={retryPage}
-        blurred={heavyOn && settings.antiSpoiler ? heavyPending : undefined}
-        revealing={heavyOn && settings.antiSpoiler ? revealing : undefined}
-      />
+      {scroll ? (
+        <ScrollView
+          stageRef={stageRef}
+          api={scrollApi}
+          layout={strip}
+          viewport={viewport}
+          pages={pageStates}
+          enhanced={showEnhanced ? displayed : undefined}
+          background={settings.stageBackground}
+          currentPage={currentPage}
+          onCurrentPage={setCurrentPage}
+          onVisibleChange={setScrollVisible}
+          onTap={onScrollTap}
+          onRetry={retryPage}
+          blurred={heavyOn && settings.antiSpoiler ? heavyPending : undefined}
+          revealing={heavyOn && settings.antiSpoiler ? revealing : undefined}
+        />
+      ) : (
+        <SpreadView
+          stageRef={stageRef}
+          canvasRef={canvasRef}
+          layout={layout}
+          view={view}
+          pages={pageStates}
+          enhanced={showEnhanced ? displayed : undefined}
+          gutterColor={settings.gutterColor}
+          background={settings.stageBackground}
+          spreadKey={spreadKey}
+          enterClass={enterClass}
+          ghost={ghost}
+          onRetry={retryPage}
+          blurred={heavyOn && settings.antiSpoiler ? heavyPending : undefined}
+          revealing={heavyOn && settings.antiSpoiler ? revealing : undefined}
+        />
+      )}
       {settings.srIndicator && hdState && !barsVisible && (
         <div className="pointer-events-none absolute right-2 z-10" style={{ top: 'calc(env(safe-area-inset-top, 0px) + 6px)' }}>
           <HdBadge state={hdState} label={srBadge!} testId="sr-mini" floating />
@@ -984,16 +1159,17 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
         title={book?.title ?? ''}
         label={label}
         pageCount={pageCount}
-        spreadIndex={spreadIndex}
-        spreadCount={spreads.length}
-        direction={settings.direction}
+        spreadIndex={scroll ? currentPage : spreadIndex}
+        spreadCount={scroll ? pageCount : spreads.length}
+        direction={scroll ? 'ltr' : settings.direction}
+        scroll={scroll}
         double={double}
         blankHere={spreadHasBlank}
         badge={srBadge}
         badgeState={hdState}
         onBack={onClose}
         onSettings={() => setSettingsOpen((o) => !o)}
-        onSeek={goToSpread}
+        onSeek={scroll ? goToPage : goToSpread}
         onToggleDouble={() => updateSettings({ pageMode: double ? 'single' : 'double' })}
         onToggleBlank={toggleBlankHere}
         onHoverChange={setHoveringBars}

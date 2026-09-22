@@ -953,6 +953,93 @@ test.describe('reader', () => {
     await expect(lbl).toHaveText('2-3')
   })
 
+  test('vertical scroll mode: one strip, native scrolling, bookmark by position, width setting, back to pages', async ({ page }) => {
+    await page.goto('/')
+    await importBooks(page, ['manga-vol-01.cbz'])
+    await openBook(page, 'manga-vol-01')
+    await expect(label(page)).toHaveText('1')
+
+    // Settings → Modalità → Scorrimento: the paged controls go, the strip comes.
+    await page.mouse.move(CENTER.x, CENTER.y)
+    await page.getByTestId('settings').click()
+    await expect(page.getByTestId('mode-pages')).toHaveAttribute('aria-pressed', 'true')
+    await expect(page.getByTestId('fit-screen')).toBeVisible()
+    await page.getByTestId('mode-scroll').click()
+    await expect(page.getByTestId('mode-scroll')).toHaveAttribute('aria-pressed', 'true')
+    await expect(page.getByTestId('fit-screen')).toHaveCount(0)
+    await expect(page.getByTestId('sw-full')).toHaveAttribute('aria-pressed', 'true')
+    await page.getByRole('button', { name: 'Chiudi impostazioni' }).click()
+    const stage = page.getByTestId('stage')
+    await expect(stage).toHaveAttribute('data-mode', 'scroll')
+    await expect(page.getByTestId('toggle-double')).toHaveCount(0)
+    await expect(label(page)).toHaveText('1')
+
+    // Pages fitted to the full width, stacked with a small gap; the wide page 12 is shorter.
+    const strip = page.getByTestId('scroll-strip')
+    const p1 = (await page.locator('[data-testid=page][data-page="1"]').boundingBox())!
+    const p2 = (await page.locator('[data-testid=page][data-page="2"]').boundingBox())!
+    expect(p1.width).toBeCloseTo(1180, 0)
+    expect(p1.height).toBeCloseTo(1770, 0)
+    expect(p2.x).toBeCloseTo(p1.x, 0)
+    expect(p2.y).toBeCloseTo(p1.y + p1.height + 8, 0)
+    await expect(page.locator('[data-testid=page][data-page="1"] img')).toBeVisible()
+
+    // Scrolling moves the bookmark; End jumps to the last page; the position survives a reload.
+    await page.mouse.move(CENTER.x, CENTER.y)
+    await page.mouse.wheel(0, 3000)
+    await expect(label(page)).toHaveText('2')
+    await page.keyboard.press('End')
+    await expect(label(page)).toHaveText('19')
+    await expect.poll(() => stage.evaluate((el) => el.scrollTop)).toBeGreaterThan(20_000)
+    await page.waitForTimeout(500)
+    await page.reload()
+    await expect(page.getByTestId('reader')).toHaveAttribute('data-status', 'ready', { timeout: 20_000 })
+    await expect(stage).toHaveAttribute('data-mode', 'scroll')
+    await expect(label(page)).toHaveText('19')
+    await expect(page.locator('[data-testid=page][data-page="19"] img')).toBeVisible()
+    // Only the pages near the viewport are in the DOM; the slider brings the wide page 12 in.
+    await expect(page.locator('[data-testid=page][data-page="5"]')).toHaveCount(0)
+    await page.mouse.move(CENTER.x, CENTER.y)
+    await page.getByTestId('slider').fill('11')
+    await expect(label(page)).toHaveText('12')
+    // Until it is decoded its box has the estimated height; then the strip reflows to the real one.
+    await expect.poll(async () => (await page.locator('[data-testid=page][data-page="12"]').boundingBox())?.height).toBeCloseTo(1180 * 0.75, 0)
+    await expect(label(page)).toHaveText('12')
+    await page.keyboard.press('Home')
+    await expect(label(page)).toHaveText('1')
+    await expect.poll(() => stage.evaluate((el) => el.scrollTop)).toBe(0)
+
+    // With the bars hidden, a tap in the lower zone scrolls by most of a screen (not a page); the centre brings the bars back.
+    if (await page.getByTestId('toolbar-top').evaluate((el) => el.classList.contains('opacity-100'))) await page.mouse.click(CENTER.x, CENTER.y)
+    await expect(page.getByTestId('toolbar-top')).toHaveClass(/opacity-0/)
+    await page.mouse.click(CENTER.x, 760)
+    await expect.poll(() => stage.evaluate((el) => el.scrollTop)).toBeGreaterThan(500)
+    expect(await stage.evaluate((el) => el.scrollTop)).toBeLessThan(1000)
+    await expect(label(page)).toHaveText('1')
+    await page.mouse.click(CENTER.x, CENTER.y)
+    await expect(page.getByTestId('toolbar-top')).toHaveClass(/opacity-100/)
+
+    // Larghezza Stretta: a centred 56% strip, the reader's place kept (same share of page 1).
+    await page.getByTestId('settings').click()
+    await page.getByTestId('sw-narrow').click()
+    await page.getByRole('button', { name: 'Chiudi impostazioni' }).click()
+    const narrow = (await page.locator('[data-testid=page][data-page="1"]').boundingBox())!
+    expect(narrow.width).toBeCloseTo(Math.floor(1180 * 0.56), 0)
+    expect(narrow.x).toBeCloseTo(Math.floor((1180 - Math.floor(1180 * 0.56)) / 2), 0)
+    expect(await stage.evaluate((el) => el.scrollTop)).toBeGreaterThan(200)
+    await expect(label(page)).toHaveText('1')
+    await expect(strip).toBeVisible()
+
+    // Back to pages: spreads, double-page control, RTL taps.
+    await page.getByTestId('settings').click()
+    await page.getByTestId('mode-pages').click()
+    await page.getByRole('button', { name: 'Chiudi impostazioni' }).click()
+    await expect(stage).not.toHaveAttribute('data-mode', 'scroll')
+    await expect(page.getByTestId('toggle-double')).toBeVisible()
+    await page.mouse.click(LEFT.x, LEFT.y)
+    await expect(label(page)).toHaveText('2-3')
+  })
+
   test('a user-inserted blank page re-aligns the following pairs and persists', async ({ page }) => {
     await page.goto('/')
     await importBooks(page, ['manga-vol-01.cbz'])

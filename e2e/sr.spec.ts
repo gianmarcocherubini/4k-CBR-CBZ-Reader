@@ -472,6 +472,26 @@ test('HD in double page: both pages turn enhanced in the same frame, never one b
   expect(Math.abs(seen['2']! - seen['3']!)).toBeLessThan(20)
 })
 
+test('HD in vertical scroll mode: the pages on screen get their enhanced canvas, each on its own', async ({ page }) => {
+  test.setTimeout(6 * 60_000)
+  await page.goto('/')
+  const hasWebGPU = await page.evaluate(async () => !!(navigator as Navigator & { gpu?: GPU }).gpu && !!(await (navigator as Navigator & { gpu?: GPU }).gpu!.requestAdapter()))
+  test.skip(!hasWebGPU, 'needs WebGPU')
+  // Settings load at start-up: store the mode, then reload before opening the book.
+  await page.evaluate(() => localStorage.setItem('reader.settings.v1', JSON.stringify({ readingMode: 'scroll', fullscreenReading: false })))
+  await page.reload()
+  await expect(page.getByTestId('empty-library')).toBeVisible()
+  await importAndOpen(page, 'manga-vol-01.cbz', 'manga-vol-01')
+  await expect(page.getByTestId('stage')).toHaveAttribute('data-mode', 'scroll')
+  await expect(page.locator('[data-testid=page][data-page="1"] canvas[data-testid=enhanced]')).toBeVisible({ timeout: 90_000 })
+  // Scroll to the seam between pages 1 and 2: both intersect the viewport, both get enhanced.
+  await page.getByTestId('stage').evaluate((el) => el.scrollTo({ top: 1400 }))
+  await expect(page.locator('[data-testid=page][data-page="2"] canvas[data-testid=enhanced]')).toBeVisible({ timeout: 90_000 })
+  await expect(page.locator('[data-testid=page][data-page="1"] canvas[data-testid=enhanced]')).toBeVisible()
+  await page.mouse.move(600, 420)
+  await expect(badge(page)).toHaveAttribute('data-sr-state', 'applied', { timeout: 90_000 })
+})
+
 test('Anime4K engine options (factor, Restore, clean-up) still work when pinned through the stored settings', async ({ page }) => {
   test.setTimeout(6 * 60_000)
   await page.goto('/')

@@ -1,6 +1,62 @@
 import type { ReactNode } from 'react'
-import type { Direction, FitMode, Gutter, GutterColor, PageMode, PageTransition, ReaderSettings, StageBackground, Theme } from '../../types'
+import type { Direction, FitMode, Gutter, GutterColor, PageMode, PageTransition, ReaderSettings, ReadingMode, ScrollGap, ScrollWidth, StageBackground, Theme } from '../../types'
 import { fullscreenSupported, isStandalone } from '../../lib/fullscreen'
+
+/** Pictograms of the two reading modes, drawn in the current colour: an open book, a strip. */
+const ModeArt = {
+  pages: (
+    <svg viewBox="0 0 64 40" width="64" height="40" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <rect x="8" y="4" width="22" height="32" rx="2" fill="currentColor" fillOpacity="0.12" />
+      <rect x="34" y="4" width="22" height="32" rx="2" fill="currentColor" fillOpacity="0.12" />
+      <path d="M14 12h10M14 17h8M40 12h10M40 17h6" strokeOpacity="0.55" />
+      <path d="M5.5 16.5 2 20l3.5 3.5M58.5 16.5 62 20l-3.5 3.5" />
+    </svg>
+  ),
+  scroll: (
+    <svg viewBox="0 0 64 40" width="64" height="40" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <rect x="20" y="-8" width="24" height="18" rx="2" fill="currentColor" fillOpacity="0.12" />
+      <rect x="20" y="12" width="24" height="18" rx="2" fill="currentColor" fillOpacity="0.12" />
+      <rect x="20" y="32" width="24" height="18" rx="2" fill="currentColor" fillOpacity="0.12" />
+      <path d="M26 18h12M26 23h8" strokeOpacity="0.55" />
+      <path d="M54 10v20" />
+      <path d="M50.5 26.5 54 30l3.5-3.5" />
+    </svg>
+  ),
+}
+
+/**
+ * The one choice that changes how a volume is read, as two illustrated cards: turning pages
+ * (one or two at a time) or one vertical strip. Selected = ink on bone, like every other control.
+ */
+function ReadingModePicker({ value, onChange }: { value: ReadingMode; onChange: (mode: ReadingMode) => void }) {
+  const options: Array<{ value: ReadingMode; title: string; detail: string }> = [
+    { value: 'pages', title: 'Pagine', detail: 'Si sfoglia a destra e sinistra, una o due pagine per volta, come un libro.' },
+    { value: 'scroll', title: 'Scorrimento', detail: 'Le pagine scorrono in verticale, una dopo l’altra: per webtoon e lettura continua.' },
+  ]
+  return (
+    <div className="grid grid-cols-2 gap-2" role="group" aria-label="Modalità di lettura">
+      {options.map((option) => {
+        const selected = value === option.value
+        return (
+          <button
+            key={option.value}
+            type="button"
+            aria-pressed={selected}
+            onClick={() => onChange(option.value)}
+            className={`flex flex-col items-start gap-2 rounded-[12px] p-3 text-left transition-colors ${
+              selected ? 'bg-invert text-invert-fg' : 'bg-fill text-label hover:bg-fill-2'
+            }`}
+            data-testid={`mode-${option.value}`}
+          >
+            <div className="h-10 w-16 overflow-hidden">{ModeArt[option.value]}</div>
+            <div className="text-[14px] leading-[18px] font-semibold">{option.title}</div>
+            <div className={`text-caption ${selected ? 'opacity-70' : 'text-label-2'}`}>{option.detail}</div>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
 
 interface SettingsPanelProps {
   settings: ReaderSettings
@@ -100,6 +156,12 @@ export function Group({ title, footer, children, testId }: { title?: string; foo
 }
 
 export function SettingsPanel({ settings, blankCount, onClearBlanks, onChange, onClose, quality, viewportInfo }: SettingsPanelProps) {
+  const scroll = settings.readingMode === 'scroll'
+  const diagnostics = viewportInfo ? (
+    <TechnicalDetails>
+      <span data-testid="viewport-info">{viewportInfo}</span>
+    </TechnicalDetails>
+  ) : null
   return (
     <div className="absolute inset-0 z-30 flex justify-end bg-black/20" role="presentation" onClick={onClose}>
       <aside
@@ -119,115 +181,162 @@ export function SettingsPanel({ settings, blankCount, onClearBlanks, onChange, o
         <div className="space-y-8 px-5 pt-6 pb-12">
           {quality}
 
-          <Group title="Lettura" footer="Automatica: due pagine affiancate con l’iPad in orizzontale, una sola in verticale. La copertina e le tavole doppie stanno sempre da sole.">
-            <Row title="Direzione" stacked>
-              <Segmented<Direction>
-                label="Direzione di lettura"
-                idPrefix="dir"
-                value={settings.direction}
-                onChange={(direction) => onChange({ direction })}
-                options={[
-                  { value: 'rtl', label: 'Destra → sinistra' },
-                  { value: 'ltr', label: 'Sinistra → destra' },
-                ]}
-              />
-            </Row>
-            <Row title="Pagine" stacked>
-              <Segmented<PageMode>
-                label="Modalità pagine"
-                value={settings.pageMode}
-                onChange={(pageMode) => onChange({ pageMode })}
-                options={[
-                  { value: 'single', label: 'Singola' },
-                  { value: 'double', label: 'Doppia' },
-                  { value: 'auto', label: 'Automatica' },
-                ]}
-              />
-            </Row>
-            <Row title="Transizione" stacked>
-              <Segmented<PageTransition>
-                label="Transizione tra le pagine"
-                idPrefix="tr"
-                value={settings.transition}
-                onChange={(transition) => onChange({ transition })}
-                options={[
-                  { value: 'none', label: 'Nessuna' },
-                  { value: 'fade', label: 'Dissolvenza' },
-                  { value: 'slide', label: 'Scorrimento' },
-                ]}
-              />
-            </Row>
-            <Row
-              title="Pagine bianche inserite"
-              hint={
-                blankCount > 0
-                  ? `${blankCount} in questo volume. Se due pagine affiancate non combaciano, usa “Pagina bianca qui” nella barra in basso.`
-                  : 'Se due pagine affiancate non combaciano, usa “Pagina bianca qui” nella barra in basso: da lì in avanti le coppie si spostano di una pagina.'
-              }
-            >
-              {blankCount > 0 && (
-                <button type="button" className="btn-pill shrink-0" onClick={onClearBlanks} data-testid="clear-blanks">
-                  Rimuovi
-                </button>
-              )}
-            </Row>
-          </Group>
-
           <Group
-            title="Adattamento"
+            title="Lettura"
             footer={
-              <>
-                Pizzica per ingrandire, doppio tocco al centro per lo zoom rapido. 1:1 mostra la pagina alla sua dimensione reale.
-                {viewportInfo && (
-                  <TechnicalDetails>
-                    <span data-testid="viewport-info">{viewportInfo}</span>
-                  </TechnicalDetails>
-                )}
-              </>
+              scroll ? (
+                <>
+                  Tocca la parte alta o bassa dello schermo per scorrere di una schermata, il centro per le barre. Larghezza Intera riempie lo
+                  schermo; Media e Stretta sono comode con l’iPad in orizzontale. Spazio Nessuno per i webtoon disegnati come un’unica striscia.
+                  {diagnostics}
+                </>
+              ) : (
+                'Automatica: due pagine affiancate con l’iPad in orizzontale, una sola in verticale. La copertina e le tavole doppie stanno sempre da sole.'
+              )
             }
           >
-            <Row title="Adattamento" stacked>
-              <Segmented<FitMode>
-                label="Adattamento"
-                idPrefix="fit"
-                value={settings.fit}
-                onChange={(fit) => onChange({ fit })}
-                options={[
-                  { value: 'screen', label: 'Schermo' },
-                  { value: 'height', label: 'Altezza' },
-                  { value: 'width', label: 'Larghezza' },
-                  { value: 'original', label: '1:1' },
-                ]}
-              />
+            <Row title="Modalità" stacked>
+              <ReadingModePicker value={settings.readingMode} onChange={(readingMode) => onChange({ readingMode })} />
             </Row>
-            <Row title="Spazio centrale" hint="Il margine tra le due pagine affiancate, come la piega di un libro." stacked>
-              <Segmented<Gutter>
-                label="Spazio centrale"
-                idPrefix="gutter"
-                value={settings.gutter}
-                onChange={(gutter) => onChange({ gutter })}
-                options={[
-                  { value: 'none', label: 'Nessuno' },
-                  { value: 's', label: 'Stretto' },
-                  { value: 'm', label: 'Medio' },
-                  { value: 'l', label: 'Largo' },
-                ]}
-              />
-            </Row>
-            <Row title="Colore dello spazio">
-              <Segmented<GutterColor>
-                label="Colore dello spazio centrale"
-                idPrefix="gc"
-                value={settings.gutterColor}
-                onChange={(gutterColor) => onChange({ gutterColor })}
-                options={[
-                  { value: 'white', label: 'Bianco' },
-                  { value: 'paper', label: 'Carta' },
-                  { value: 'dark', label: 'Sfondo' },
-                ]}
-              />
-            </Row>
+            {scroll ? (
+              <>
+                <Row title="Larghezza" stacked>
+                  <Segmented<ScrollWidth>
+                    label="Larghezza della striscia"
+                    idPrefix="sw"
+                    value={settings.scrollWidth}
+                    onChange={(scrollWidth) => onChange({ scrollWidth })}
+                    options={[
+                      { value: 'full', label: 'Intera' },
+                      { value: 'medium', label: 'Media' },
+                      { value: 'narrow', label: 'Stretta' },
+                    ]}
+                  />
+                </Row>
+                <Row title="Spazio tra le pagine" stacked>
+                  <Segmented<ScrollGap>
+                    label="Spazio tra le pagine"
+                    idPrefix="sg"
+                    value={settings.scrollGap}
+                    onChange={(scrollGap) => onChange({ scrollGap })}
+                    options={[
+                      { value: 'none', label: 'Nessuno' },
+                      { value: 's', label: 'Piccolo' },
+                      { value: 'm', label: 'Medio' },
+                    ]}
+                  />
+                </Row>
+              </>
+            ) : (
+              <>
+                <Row title="Direzione" stacked>
+                  <Segmented<Direction>
+                    label="Direzione di lettura"
+                    idPrefix="dir"
+                    value={settings.direction}
+                    onChange={(direction) => onChange({ direction })}
+                    options={[
+                      { value: 'rtl', label: 'Destra → sinistra' },
+                      { value: 'ltr', label: 'Sinistra → destra' },
+                    ]}
+                  />
+                </Row>
+                <Row title="Pagine" stacked>
+                  <Segmented<PageMode>
+                    label="Modalità pagine"
+                    value={settings.pageMode}
+                    onChange={(pageMode) => onChange({ pageMode })}
+                    options={[
+                      { value: 'single', label: 'Singola' },
+                      { value: 'double', label: 'Doppia' },
+                      { value: 'auto', label: 'Automatica' },
+                    ]}
+                  />
+                </Row>
+                <Row title="Transizione" stacked>
+                  <Segmented<PageTransition>
+                    label="Transizione tra le pagine"
+                    idPrefix="tr"
+                    value={settings.transition}
+                    onChange={(transition) => onChange({ transition })}
+                    options={[
+                      { value: 'none', label: 'Nessuna' },
+                      { value: 'fade', label: 'Dissolvenza' },
+                      { value: 'slide', label: 'Scorrimento' },
+                    ]}
+                  />
+                </Row>
+                <Row
+                  title="Pagine bianche inserite"
+                  hint={
+                    blankCount > 0
+                      ? `${blankCount} in questo volume. Se due pagine affiancate non combaciano, usa “Pagina bianca qui” nella barra in basso.`
+                      : 'Se due pagine affiancate non combaciano, usa “Pagina bianca qui” nella barra in basso: da lì in avanti le coppie si spostano di una pagina.'
+                  }
+                >
+                  {blankCount > 0 && (
+                    <button type="button" className="btn-pill shrink-0" onClick={onClearBlanks} data-testid="clear-blanks">
+                      Rimuovi
+                    </button>
+                  )}
+                </Row>
+              </>
+            )}
           </Group>
+
+          {!scroll && (
+            <Group
+              title="Adattamento"
+              footer={
+                <>
+                  Pizzica per ingrandire, doppio tocco al centro per lo zoom rapido. 1:1 mostra la pagina alla sua dimensione reale.
+                  {diagnostics}
+                </>
+              }
+            >
+              <Row title="Adattamento" stacked>
+                <Segmented<FitMode>
+                  label="Adattamento"
+                  idPrefix="fit"
+                  value={settings.fit}
+                  onChange={(fit) => onChange({ fit })}
+                  options={[
+                    { value: 'screen', label: 'Schermo' },
+                    { value: 'height', label: 'Altezza' },
+                    { value: 'width', label: 'Larghezza' },
+                    { value: 'original', label: '1:1' },
+                  ]}
+                />
+              </Row>
+              <Row title="Spazio centrale" hint="Il margine tra le due pagine affiancate, come la piega di un libro." stacked>
+                <Segmented<Gutter>
+                  label="Spazio centrale"
+                  idPrefix="gutter"
+                  value={settings.gutter}
+                  onChange={(gutter) => onChange({ gutter })}
+                  options={[
+                    { value: 'none', label: 'Nessuno' },
+                    { value: 's', label: 'Stretto' },
+                    { value: 'm', label: 'Medio' },
+                    { value: 'l', label: 'Largo' },
+                  ]}
+                />
+              </Row>
+              <Row title="Colore dello spazio">
+                <Segmented<GutterColor>
+                  label="Colore dello spazio centrale"
+                  idPrefix="gc"
+                  value={settings.gutterColor}
+                  onChange={(gutterColor) => onChange({ gutterColor })}
+                  options={[
+                    { value: 'white', label: 'Bianco' },
+                    { value: 'paper', label: 'Carta' },
+                    { value: 'dark', label: 'Sfondo' },
+                  ]}
+                />
+              </Row>
+            </Group>
+          )}
 
           <Group title="Aspetto" footer="Sfondo di lettura: Default segue il tema (grigio caldo di giorno, nero di notte); Nero e Bianco lo fissano.">
             <Row title="Tema" stacked>

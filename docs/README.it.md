@@ -159,6 +159,19 @@ comporta come un lettore (pochi capitoli, su richiesta), non come un crawler.
 
 ## Come si usa il lettore
 
+- **Modalità di lettura** (Impostazioni → Lettura → Modalità, due schede illustrate): **Pagine**, si sfoglia a destra e
+  sinistra, una o due pagine per volta, come un libro; **Scorrimento**, le pagine scorrono in verticale una dopo
+  l'altra, come nei webtoon. In scorrimento la striscia usa lo scorrimento nativo (inerzia, elastico, barra), le
+  pagine sono adattate a una larghezza comune (**Intera**, **Media** 74 % o **Stretta** 56 %, centrate: le ultime due
+  sono comode con l'iPad in orizzontale) con uno **spazio tra le pagine** a scelta (Nessuno per i webtoon disegnati
+  come un'unica striscia). Un tocco nella parte alta o bassa dello schermo scorre di quasi una schermata, al centro
+  mostra o nasconde le barre; frecce e PagSu/PagGiù scorrono, ← → saltano di una pagina, Home/Fine all'inizio e alla
+  fine; il cursore in basso salta alla pagina. La **pagina corrente** (segnalibro) è quella sotto il terzo superiore
+  dello schermo (l'ultima, quando si è in fondo). Solo le pagine vicine allo schermo sono nel DOM (le altre sono
+  spazio dell'altezza giusta, stimata dal rapporto mediano delle pagine note e corretta man mano che si decodificano,
+  senza spostare ciò che si sta leggendo). La super risoluzione lavora sulle pagine che intersecano lo schermo, ognuna
+  per conto suo (in scorrimento non c'è una coppia da tenere in passo). Direzione, doppia pagina, transizioni,
+  adattamento e spazio centrale riguardano solo la modalità Pagine e in scorrimento non compaiono.
 - **Tocco ai lati**: in modalità manga (destra → sinistra) il tocco a sinistra va avanti, a destra indietro. Tocco al
   centro: mostra/nasconde le barre. Funzionano anche scorrimento orizzontale, frecce, spazio, PagSu/PagGiù, Home/Fine.
 - **Doppia pagina intelligente**: le pagine verticali vengono accoppiate, le tavole doppie (orizzontali) restano da sole
@@ -433,7 +446,7 @@ src/
                    lettore PDF (pdf.js, pagine rese a richiesta), spine EPUB
   lib/storage/     IndexedDB (idb), OPFS, worker di copia, import, miniature, backup della libreria
                    (backup.ts: formato, validazione e piano di ripristino; backupActions.ts: file, condivisione)
-  lib/reader/      layout delle tavole (con spazio centrale), cache LRU delle pagine
+  lib/reader/      layout delle tavole (con spazio centrale), striscia verticale (scrollLayout.ts), cache LRU delle pagine
   lib/libraryView.ts  stato di lettura, filtro e ordinamento della griglia
   lib/relocation.ts   avviso «nuovo indirizzo» per le installazioni fuori dal dominio
   lib/spread.ts    accoppiamento intelligente delle pagine e pagine bianche inserite
