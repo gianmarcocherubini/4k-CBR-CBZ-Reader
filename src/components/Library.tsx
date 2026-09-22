@@ -18,12 +18,14 @@ import {
   putBook,
   putCollection,
 } from '../lib/storage/db'
+import { type Catalog, loadCatalogs, saveCatalogs } from '../lib/catalog/catalogs'
 import { type ArchivePasswordRequest, deleteBook, importFile, newId, openSessionBook, regenerateCover } from '../lib/storage/importer'
 import { cleanupOrphanedBookFiles, estimateStorage, formatBytes, ORPHAN_RETRY_MS, type StorageEstimate } from '../lib/storage/opfs'
 import type { Book, Collection, PendingRestore, Progress, ReaderSettings } from '../types'
 import { BookCard, ContinueCard } from './BookCard'
 import { CrownMark, SITE_URL, Wordmark } from './Brand'
 import { BookEditDialog } from './BookEditDialog'
+import { CatalogDialog } from './CatalogDialog'
 import { CollectionDialog } from './CollectionDialog'
 import { CollectionTabs } from './CollectionTabs'
 import { CoverSearchDialog } from './CoverSearchDialog'
@@ -60,6 +62,12 @@ const COVER_CONSENT_KEY = 'reader.cover-search-consent-v4'
 const PlusIcon = (
   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden>
     <path d="M12 5v14M5 12h14" />
+  </svg>
+)
+const GlobeIcon = (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <circle cx="12" cy="12" r="9" />
+    <path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18" />
   </svg>
 )
 const FolderOpenIcon = (
@@ -105,6 +113,8 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
   const [view, setView] = useState<LibraryView>(loadLibraryView)
   const [viewMenu, setViewMenu] = useState(false)
   const [libraryMenu, setLibraryMenu] = useState(false)
+  const [catalogs, setCatalogs] = useState<Catalog[]>(loadCatalogs)
+  const [catalogsOpen, setCatalogsOpen] = useState(false)
   const [backupBusy, setBackupBusy] = useState(false)
   const [restoreResult, setRestoreResult] = useState<RestoreResult | null>(null)
   const [showPending, setShowPending] = useState(false)
@@ -218,7 +228,7 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
   }, [refresh, reportOperationError])
 
   const startImport = useCallback(
-    async (files: File[]) => {
+    async (files: File[], options: { collectionName?: string } = {}) => {
       if (files.length === 0 || abortRef.current) return
       const controller = new AbortController()
       abortRef.current = controller
@@ -232,6 +242,22 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
       setImportItems(items)
       setImporting(true)
       const coverSuggestions: Book[] = []
+      // Volumes from a catalogue go into the collection named after their series, created if needed.
+      let collectionId: string | undefined
+      if (options.collectionName) {
+        const name = options.collectionName.trim()
+        try {
+          const existing = (await listCollections()).find((c) => c.name.localeCompare(name, 'it', { sensitivity: 'base' }) === 0)
+          if (existing) collectionId = existing.id
+          else {
+            const created: Collection = { id: newId(), name, createdAt: Date.now() }
+            await putCollection(created)
+            collectionId = created.id
+          }
+        } catch {
+          // The volume still lands in "Senza collezione".
+        }
+      }
       // Files are imported one at a time to bound memory and I/O.
       for (let i = 0; i < files.length; i++) {
         if (controller.signal.aborted) break
@@ -239,12 +265,16 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
         const update = (patch: Partial<ImportItem>) =>
           setImportItems((prev) => prev?.map((it, j) => (j === i ? { ...it, ...patch } : it)) ?? prev)
         try {
-          const imported = await importFile(file, {
+          let imported = await importFile(file, {
             signal: controller.signal,
             forceIdb: flags.forceIdb,
             requestPassword,
             onStatus: (s) => update({ stage: s.stage, bytes: s.bytes, total: s.total, error: s.error }),
           })
+          if (collectionId && imported.collectionId !== collectionId) {
+            imported = { ...imported, collectionId }
+            await putBook(imported)
+          }
           // An automatic online query for a protected title would disclose metadata; keep that
           // path manual. Unprotected imports are suggested after the result overlay is closed.
           if (!imported.passwordProtected) coverSuggestions.push(imported)
@@ -257,6 +287,7 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
       abortRef.current = null
       setPendingCoverBooks(coverSuggestions)
       await refresh()
+      if (collectionId) setSelectedCollectionId(collectionId)
     },
     [refresh, requestPassword],
   )
@@ -541,6 +572,10 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
               />
             </label>
           )}
+          <button type="button" className="btn-ghost !min-h-[34px] !px-3 !text-[13px]" onClick={() => setCatalogsOpen(true)} data-testid="catalogs" aria-label="Cataloghi">
+            {GlobeIcon}
+            <span className="hidden md:inline">Cataloghi</span>
+          </button>
           <button type="button" className="btn-ghost !min-h-[34px] !px-3 !text-[13px]" onClick={() => sessionInput.current?.click()} data-testid="open-session" aria-label="Apri senza importare">
             {FolderOpenIcon}
             <span className="hidden md:inline">Apri senza importare</span>
@@ -814,6 +849,27 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
             setImportItems(null)
             if (!coverBook) beginCoverSuggestions()
           }}
+        />
+      )}
+
+      {catalogsOpen && (
+        <CatalogDialog
+          catalogs={catalogs}
+          onAddCatalog={(catalog) => {
+            const next = [...catalogs, catalog]
+            setCatalogs(next)
+            saveCatalogs(next)
+          }}
+          onRemoveCatalog={(id) => {
+            const next = catalogs.filter((c) => c.id !== id)
+            setCatalogs(next)
+            saveCatalogs(next)
+          }}
+          onDownloaded={(file, seriesTitle) => {
+            setCatalogsOpen(false)
+            void startImport([file], { collectionName: seriesTitle })
+          }}
+          onClose={() => setCatalogsOpen(false)}
         />
       )}
 

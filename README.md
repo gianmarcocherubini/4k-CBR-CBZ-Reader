@@ -38,6 +38,7 @@ Everything happens in the browser, on your device. There is no server: your file
 - **Made for manga.** Right-to-left by default, smart double pages (wide spreads and the cover stay alone), a *blank page here* fix when a volume's pairs are misaligned, an adjustable gutter, pinch and double-tap zoom, four fit modes, page-turn transitions, full screen while reading.
 - **A real library.** Collections with icons, a *Continue reading* shelf, search, reading-state filters and sorting, cover search on Open Library and AniList (only with your consent), and a one-file backup of everything you have added.
 - **Your files stay yours.** Archives up to 10 GB each are copied into the app's own storage and work offline, with the iPad's full quota. Passwords of protected ZIPs are kept in memory only. No account, no telemetry.
+- **Web catalogues (experimental).** Point the app at a site that publishes series as chapters of page images, and it browses it the way Safari would and saves the chapters you pick as a CBZ in your library, a few at a time. No site is built in; you add the address, and you are responsible for what you download and for the site's terms.
 - **Installable.** Open the site in Safari and *Add to Home Screen*: a full-screen app with its own icon and splash screen that updates itself (and has a *Check for updates* button next to the version, for when it has been open for days).
 
 <p align="center">
@@ -85,7 +86,7 @@ Pages are sorted naturally (`2.jpg` before `10.jpg`), skipping `__MACOSX`, hidde
 
 ## Privacy
 
-Mangadana is a static web app: there is no backend, no account and no analytics. Your files, covers, bookmarks and settings live in the browser storage of the installed app. The only network requests besides loading and updating the app are the ones you start yourself: the optional cover search (the volume title is sent to Open Library and AniList, after an explicit consent) and the icon search for collections (Iconify). Passwords of protected archives are never written to disk.
+Mangadana is a static web app: there is no backend, no account and no analytics. Your files, covers, bookmarks and settings live in the browser storage of the installed app. The only network requests besides loading and updating the app are the ones you start yourself: the optional cover search (the volume title is sent to Open Library and AniList, after an explicit consent), the icon search for collections (Iconify), and the web catalogues you add (read without cookies or credentials). Passwords of protected archives are never written to disk.
 
 ## Backup and moving to a new iPad
 
@@ -110,9 +111,10 @@ Node 20 or later. No setup step: the Real-ESRGAN weights are in the repository (
 src/lib/archive/      format detection, ZIP reader (zip.js), RAR reader (worker + Blob-backed extractor)
 src/lib/storage/      IndexedDB, OPFS, copy worker, import, thumbnails, library backup
 src/lib/reader/       spread layout, LRU page cache
+src/lib/catalog/      web catalogues: page parsing, bounded downloads, CBZ packing
 src/lib/upscale/      Anime4K on WebGPU and WebGL2, Real-ESRGAN in WGSL (weights, kernel generator,
                       banded runner, timing model, float32 reference and self-test)
-src/components/       library, reader (gestures, toolbars, settings), brand
+src/components/       library, catalogues, reader (gestures, toolbars, settings), brand
 scripts/              test fixtures, weight conversion (PyTorch checkpoint → f16), brand assets
 e2e/                  Playwright tests (chromium and webgpu projects)
 docs/                 detailed documentation (Italian), feasibility study, deployment and domain notes
