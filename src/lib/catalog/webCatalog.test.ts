@@ -109,7 +109,10 @@ describe('normalizeCatalogUrl and downloadFileName', () => {
   })
   it('normalises the stored catalogue list', () => {
     expect(normalizeCatalogs([{ url: 'manga.example', name: ' Manga ', addedAt: 5 }, { url: 'https://manga.example/x' }, { url: 'ftp://x' }, 'junk'])).toEqual([
-      { id: 'https://manga.example', name: 'Manga', url: 'https://manga.example', addedAt: 5 },
+      { id: 'https://manga.example', name: 'Manga', url: 'https://manga.example', kind: 'site', addedAt: 5 },
+    ])
+    expect(normalizeCatalogs([{ url: 'https://archive.org', name: 'whatever', kind: 'archive', addedAt: 1 }, { url: 'archive.org/details/x' }])).toEqual([
+      { id: 'archive.org', name: 'Internet Archive', url: 'https://archive.org', kind: 'archive', addedAt: 1 },
     ])
     expect(normalizeCatalogs(null)).toEqual([])
   })

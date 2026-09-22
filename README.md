@@ -38,7 +38,7 @@ Everything happens in the browser, on your device. There is no server: your file
 - **Made for manga, and for webtoons.** Right-to-left by default, smart double pages (wide spreads and the cover stay alone), a *blank page here* fix when a volume's pairs are misaligned, an adjustable gutter, pinch and double-tap zoom, four fit modes, page-turn transitions, full screen while reading. Or switch to **vertical scrolling**: one continuous strip with native momentum, pinch and double-tap zoom, three widths and an optional gap between pages, the bookmark kept by position. Each volume remembers its mode.
 - **A real library.** Collections with icons, a *Continue reading* shelf, search, reading-state filters and sorting, cover search on Open Library and AniList (only with your consent), and a one-file backup of everything you have added.
 - **Your files stay yours.** Archives up to 10 GB each are copied into the app's own storage and work offline, with the iPad's full quota. Passwords of protected ZIPs are kept in memory only. No account, no telemetry.
-- **Web catalogues (experimental).** Point the app at a site that publishes series as chapters of page images, and it browses it the way Safari would and saves the chapters you pick as a CBZ in your library, a few at a time. No site is built in; you add the address, and you are responsible for what you download and for the site's terms.
+- **Catalogues.** **Internet Archive** is built in: browse curated shelves of public-domain and freely licensed comics (Golden Age classics, webcomics), search the whole library, and download a CBZ, CBR or PDF straight into your library. You can also point the app at a site that publishes series as chapters of page images (experimental): it browses it the way Safari would and saves the chapters you pick as a CBZ. You are responsible for what you download and for each source's terms.
 - **Installable.** Open the site in Safari and *Add to Home Screen*: a full-screen app with its own icon and splash screen that updates itself (and has a *Check for updates* button next to the version, for when it has been open for days).
 
 <p align="center">
@@ -115,7 +115,7 @@ src/lib/archive/      format detection, ZIP reader (zip.js), RAR reader (worker 
                       PDF reader (pdf.js, pages rendered on demand), EPUB spine
 src/lib/storage/      IndexedDB, OPFS, copy worker, import, thumbnails, library backup
 src/lib/reader/       spread layout, LRU page cache
-src/lib/catalog/      web catalogues: page parsing, bounded downloads, CBZ packing
+src/lib/catalog/      catalogues: Internet Archive (search, metadata, CORS downloads), generic sites (page parsing, CBZ packing)
 src/lib/upscale/      Anime4K on WebGPU and WebGL2, Real-ESRGAN in WGSL (weights, kernel generator,
                       banded runner, timing model, float32 reference and self-test)
 src/components/       library, catalogues, reader (gestures, toolbars, settings), brand
