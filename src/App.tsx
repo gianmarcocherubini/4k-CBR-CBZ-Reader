@@ -5,7 +5,7 @@ import { Reader } from './components/reader/Reader'
 import { enterFullscreen, exitFullscreen } from './lib/fullscreen'
 import { navigateTo, parseRoute, type Route } from './lib/router'
 import { useSettings } from './lib/settings'
-import { useServiceWorkerUpdate } from './lib/swUpdate'
+import { useServiceWorkerUpdate, useUpdateChecksOnForeground } from './lib/swUpdate'
 import type { ArchivePasswordRequest } from './lib/storage/importer'
 import type { Book } from './types'
 
@@ -18,6 +18,7 @@ export default function App() {
   const passwordResolver = useRef<((password: string | null) => void) | null>(null)
   const passwordAbortCleanup = useRef<(() => void) | null>(null)
   const updateReady = useServiceWorkerUpdate()
+  useUpdateChecksOnForeground()
 
   useEffect(() => {
     const onHash = () => setRoute(parseRoute(location.hash))

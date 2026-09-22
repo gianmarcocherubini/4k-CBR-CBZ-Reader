@@ -378,8 +378,12 @@ apertura tutto funziona offline. Non servono intestazioni COOP/COEP: non c'è pi
 **Aggiornamenti**: il piè di pagina della libreria mostra versione, commit e data della build in uso. L'app
 installata si aggiorna da sola. A ogni avvio il service worker controlla se su Pages c'è una
 versione nuova, la scarica in background e la attiva subito; la libreria mostra il banner "Nuova versione dell'app
-pronta · Ricarica", altrimenti la versione nuova è in uso dall'avvio successivo. Non serve rimuovere e ri-aggiungere
-l'app alla schermata Home; libri, segnalibri e cache restano al loro posto.
+pronta · Ricarica", altrimenti la versione nuova è in uso dall'avvio successivo. Una web app su iPad però può
+restare aperta o sospesa per giorni senza mai ricaricare la pagina: per questo il controllo viene ripetuto **ogni
+volta che l'app torna in primo piano** (al più ogni dieci minuti) e c'è **Controlla aggiornamenti** accanto alla
+versione, che interroga il server subito e, se trova una versione nuova, la installa e ricarica da solo («Sei già
+alla versione più recente» altrimenti). Non serve rimuovere e ri-aggiungere l'app alla schermata Home; libri,
+segnalibri e cache restano al loro posto.
 
 ## Flag per i test
 

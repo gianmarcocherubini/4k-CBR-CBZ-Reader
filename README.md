@@ -38,7 +38,7 @@ Everything happens in the browser, on your device. There is no server: your file
 - **Made for manga.** Right-to-left by default, smart double pages (wide spreads and the cover stay alone), a *blank page here* fix when a volume's pairs are misaligned, an adjustable gutter, pinch and double-tap zoom, four fit modes, page-turn transitions, full screen while reading.
 - **A real library.** Collections with icons, a *Continue reading* shelf, search, reading-state filters and sorting, cover search on Open Library and AniList (only with your consent), and a one-file backup of everything you have added.
 - **Your files stay yours.** Archives up to 10 GB each are copied into the app's own storage and work offline, with the iPad's full quota. Passwords of protected ZIPs are kept in memory only. No account, no telemetry.
-- **Installable.** Open the site in Safari and *Add to Home Screen*: a full-screen app with its own icon and splash screen that updates itself.
+- **Installable.** Open the site in Safari and *Add to Home Screen*: a full-screen app with its own icon and splash screen that updates itself (and has a *Check for updates* button next to the version, for when it has been open for days).
 
 <p align="center">
   <img src="media/readme/reader-ipad-demon-slayer.png" alt="The reader on an iPad in landscape: a volume cover on the dark stage, with the title bar and the page slider." width="900">

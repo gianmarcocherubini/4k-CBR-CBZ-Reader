@@ -737,6 +737,13 @@ test.describe('library', () => {
     ])
   })
 
+  test('"Controlla aggiornamenti" says so when no service worker is registered (dev server)', async ({ page }) => {
+    test.skip(PREVIEW, 'the production build has a service worker')
+    await page.goto('/')
+    await page.getByTestId('check-updates').click()
+    await expect(page.getByTestId('check-updates')).toHaveText('Aggiornamenti automatici non attivi in questa modalità')
+  })
+
   test('a file that is not a backup is refused with a clear message', async ({ page }) => {
     await page.goto('/')
     await page.setInputFiles('[data-testid=restore-input]', { name: 'note.json', mimeType: 'application/json', buffer: Buffer.from('{"hello":1}') })
@@ -1080,12 +1087,18 @@ test.describe('pwa (preview build only)', () => {
       await page.waitForFunction(() => navigator.serviceWorker.controller !== null, null, { timeout: 20_000 })
     })
     await importBooks(page, ['short-book.cbz'])
+    // "Controlla aggiornamenti" re-fetches the worker now: same build on the server, nothing to install.
+    await page.getByTestId('check-updates').click()
+    await expect(page.getByTestId('check-updates')).toHaveText('Sei già alla versione più recente', { timeout: 20_000 })
     await context.setOffline(true)
     await page.reload()
     await expect(page.getByRole('heading', { name: 'Mangadana' })).toBeVisible()
     await expect(page.getByTestId('book-card')).toHaveCount(1)
     await openBook(page, 'short-book')
     await expect(label(page)).toHaveText('1')
+    await page.getByTestId('back').click()
+    await page.getByTestId('check-updates').click()
+    await expect(page.getByTestId('check-updates')).toHaveText(/Impossibile raggiungere il server/)
     await context.setOffline(false)
   })
 })

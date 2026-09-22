@@ -4,6 +4,7 @@ import { ALL_COLLECTION_ID, collectionViews, DEFAULT_COLLECTION_ID, effectiveCol
 import { flags, isIOS, isStandalone } from '../lib/flags'
 import { applyLibraryView, LIBRARY_SORTS, type LibrarySort, type LibraryView, loadLibraryView, READING_FILTERS, type ReadingFilter, readingState, saveLibraryView } from '../lib/libraryView'
 import { useRelocationNotice } from '../lib/relocation'
+import { checkForUpdates, type UpdateCheck } from '../lib/swUpdate'
 import { createBackupFile, restoreBackupFile, type RestoreResult, shareOrDownload } from '../lib/storage/backupActions'
 import {
   clearPendingRestores,
@@ -108,6 +109,7 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
   const [restoreResult, setRestoreResult] = useState<RestoreResult | null>(null)
   const [showPending, setShowPending] = useState(false)
   const relocated = useRelocationNotice()
+  const [updateCheck, setUpdateCheck] = useState<'idle' | 'checking' | UpdateCheck>('idle')
   const [estimate, setEstimate] = useState<StorageEstimate | null>(null)
   const [importItems, setImportItems] = useState<ImportItem[] | null>(null)
   const [importing, setImporting] = useState(false)
@@ -462,6 +464,18 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
     }
   }
 
+  /** "Controlla aggiornamenti": asked for explicitly, so a found update is applied with a reload. */
+  const runUpdateCheck = async () => {
+    setUpdateCheck('checking')
+    const outcome = await checkForUpdates().catch((): UpdateCheck => 'offline')
+    setUpdateCheck(outcome)
+    if (outcome === 'updated') {
+      if (!importing && !backupBusy) setTimeout(() => location.reload(), 900)
+      return
+    }
+    setTimeout(() => setUpdateCheck((s) => (s === outcome ? 'idle' : s)), 6000)
+  }
+
   const updateView = (patch: Partial<LibraryView>) => {
     setView((prev) => {
       const next = { ...prev, ...patch }
@@ -764,8 +778,23 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
           <a className="hover:text-label" href={SITE_URL} target="_blank" rel="noopener">
             {new URL(SITE_URL).host}
           </a>
-          <span className="font-mono tabular-nums" data-testid="app-version">
-            Versione {__APP_VERSION__} ({__APP_BUILD__})
+          <span className="flex items-center gap-3">
+            <span className="font-mono tabular-nums" data-testid="app-version">
+              Versione {__APP_VERSION__} ({__APP_BUILD__})
+            </span>
+            <button type="button" className="text-label-2 underline-offset-2 hover:text-label hover:underline disabled:opacity-60" onClick={() => void runUpdateCheck()} disabled={updateCheck === 'checking'} data-testid="check-updates">
+              {updateCheck === 'idle'
+                ? 'Controlla aggiornamenti'
+                : updateCheck === 'checking'
+                  ? 'Controllo…'
+                  : updateCheck === 'updated'
+                    ? 'Nuova versione installata: ricarico…'
+                    : updateCheck === 'current'
+                      ? 'Sei già alla versione più recente'
+                      : updateCheck === 'offline'
+                        ? 'Impossibile raggiungere il server: riprova con la rete'
+                        : 'Aggiornamenti automatici non attivi in questa modalità'}
+            </button>
           </span>
         </div>
         {showInstallHint && (
