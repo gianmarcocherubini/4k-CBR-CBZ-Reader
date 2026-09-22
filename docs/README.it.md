@@ -153,6 +153,22 @@ server, che Mangadana non ha.
 Perché tutto questo funzioni, la Content Security Policy dell'app permette connessioni e immagini verso qualunque
 origine `https:` (prima erano elencate una per una); il codice eseguibile resta solo quello dell'app.
 
+**Internet Archive** è offerto come catalogo pronto («Suggerito», un tocco per aggiungerlo): è la biblioteca digitale
+senza scopo di lucro, letta attraverso le sue API pubbliche con CORS (`advancedsearch.php` per la ricerca,
+`metadata/<id>` per i file di un elemento, `services/img/<id>` per la copertina, `cors/<id>/<file>` per il
+download). Tre raccolte curate in evidenza, ordinate per download: **Classici** (`classiccomics`, Golden Age in
+gran parte CC0), **Webcomic** (`webcomicuniverse`, licenza libera) e **Pubblico dominio** (`comics` con licenza
+dichiarata o anteriori al 1930); la **ricerca** copre tutta la biblioteca (`mediatype:texts` con almeno un file
+CBZ, CBR o PDF), ogni parola richiesta, con in testa i titoli che contengono tutte le parole e poi i più scaricati
+(l'ordinamento per pertinenza di archive.org è troppo debole). La pagina di un elemento mostra autore, anno,
+licenza, download, soggetti e descrizione, poi i file **originali** (le scansioni) e le **versioni derivate** da
+archive.org (PDF ricavati dalle immagini, più leggeri; i PDF di solo testo OCR e gli EPUB testuali sono nascosti).
+Il file scelto viene scaricato **così com'è** (fino a 512 MB dall'app; oltre, con Safari) e passa dal normale
+import: un elemento con più file finisce in una collezione con il suo titolo, un elemento con un solo file prende
+il nome dell'elemento. Le raccolte proposte contengono opere di pubblico dominio o con licenza libera; la ricerca
+raggiunge anche caricamenti degli utenti che possono essere protetti, come sul sito di archive.org, che li rimuove
+su richiesta.
+
 **Responsabilità.** I cataloghi sono siti di terzi: i contenuti sono responsabilità loro e di chi li scarica.
 L'app avvisa di verificare di avere il diritto di scaricare e di rispettare le condizioni d'uso del sito, e si
 comporta come un lettore (pochi capitoli, su richiesta), non come un crawler.
@@ -461,7 +477,8 @@ src/
                    shaders/), motore per le pagine visibili con livello automatico (srEngine.ts), Real-ESRGAN in
                    WGSL (esrgan/: pesi f16, generatore dei kernel, runner a fasce, motore con stima dei tempi,
                    riferimento float32 e self-test)
-  components/      libreria, lettore (gesti, barre, impostazioni raggruppate), Brand.tsx + crown.json (marchio)
+  lib/catalog/     cataloghi: Internet Archive (ricerca, metadati, download CORS), siti generici (parser, CBZ)
+  components/      libreria, cataloghi, lettore (gesti, barre, impostazioni raggruppate), Brand.tsx + crown.json (marchio)
   sw.ts            service worker (precache dell'app, shader e pesi; offline)
 public/            icone e favicon, immagini di avvio iOS (splash/), anteprima social e wordmark (brand/)
 scripts/           make-fixtures.mjs (CBZ e CBR di prova), convert-realesr-weights.py (checkpoint → pesi f16),

@@ -1,5 +1,19 @@
 import { useEffect, useState } from 'react'
-import { type Catalog, catalogNameFor } from '../lib/catalog/catalogs'
+import { ARCHIVE_CATALOG, type Catalog, catalogNameFor } from '../lib/catalog/catalogs'
+import {
+  ARCHIVE_SHELVES,
+  type ArchiveDownloadProgress,
+  type ArchiveFile,
+  type ArchiveItem,
+  type ArchiveItemSummary,
+  type ArchiveShelf,
+  coverUrl,
+  downloadArchiveFile,
+  formatBadge,
+  licenseLabel,
+  loadArchiveItem,
+  searchArchive,
+} from '../lib/catalog/internetArchive'
 import {
   CatalogError,
   type DownloadProgress,
@@ -13,13 +27,14 @@ import {
   type UnitSummary,
 } from '../lib/catalog/webCatalog'
 import { formatBytes } from '../lib/storage/opfs'
+import { Segmented } from './reader/SettingsPanel'
 
 interface CatalogDialogProps {
   catalogs: Catalog[]
   onAddCatalog: (catalog: Catalog) => void
   onRemoveCatalog: (id: string) => void
-  /** A downloaded CBZ, and the series it belongs to (its collection in the library). */
-  onDownloaded: (file: File, seriesTitle: string) => void
+  /** A downloaded file, and the series it belongs to (its collection in the library), when there is one. */
+  onDownloaded: (file: File, seriesTitle?: string) => void
   onClose: () => void
 }
 
@@ -28,6 +43,17 @@ type View =
   | { kind: 'series'; catalog: Catalog }
   | { kind: 'units'; catalog: Catalog; series: SeriesSummary }
   | { kind: 'download'; catalog: Catalog; series: SeriesSummary; units: UnitSummary[] }
+  | { kind: 'archive'; catalog: Catalog }
+  | { kind: 'archive-item'; catalog: Catalog; item: ArchiveItemSummary }
+  | { kind: 'archive-download'; catalog: Catalog; item: ArchiveItem; file: ArchiveFile }
+
+const homeView = (catalog: Catalog): View => (catalog.kind === 'archive' ? { kind: 'archive', catalog } : { kind: 'series', catalog })
+
+const ArchiveMark = (
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <path d="M3 21h18M4 18h16M5 10v8M9 10v8M15 10v8M19 10v8M3 8l9-5 9 5H3z" />
+  </svg>
+)
 
 const EDITION_LABEL: Record<UnitSummary['edition'], string | null> = { color: null, unknown: null, partial: 'Colore parziale', bw: 'Bianco e nero' }
 
@@ -85,7 +111,7 @@ function CatalogsView({ catalogs, onAdd, onRemove, onOpen }: { catalogs: Catalog
     try {
       // One read of the home page: the site must have series to show, or it is not a catalogue.
       const series = await loadSeriesList(origin)
-      onAdd({ id: origin, name: catalogNameFor(origin), url: origin, addedAt: Date.now() })
+      onAdd({ id: origin, name: catalogNameFor(origin), url: origin, kind: 'site', addedAt: Date.now() })
       setUrl('')
       if (series.length === 0) setError('Nessuna serie trovata.')
     } catch (e) {
@@ -94,15 +120,19 @@ function CatalogsView({ catalogs, onAdd, onRemove, onOpen }: { catalogs: Catalog
       setBusy(false)
     }
   }
+  const hasArchive = catalogs.some((c) => c.kind === 'archive')
   return (
     <div className="space-y-6">
       {catalogs.length > 0 && (
         <ul className="group-card" data-testid="catalog-list">
           {catalogs.map((catalog) => (
             <li key={catalog.id} className="row">
-              <button type="button" className="min-w-0 flex-1 text-left" onClick={() => onOpen(catalog)} data-testid="catalog-open">
-                <div className="truncate text-body">{catalog.name}</div>
-                <div className="truncate text-footnote text-label-2">{catalog.url}</div>
+              <button type="button" className="flex min-w-0 flex-1 items-center gap-3 text-left" onClick={() => onOpen(catalog)} data-testid="catalog-open">
+                {catalog.kind === 'archive' && <span className="shrink-0 text-label-2">{ArchiveMark}</span>}
+                <span className="min-w-0">
+                  <span className="block truncate text-body">{catalog.name}</span>
+                  <span className="block truncate text-footnote text-label-2">{catalog.kind === 'archive' ? 'Biblioteca digitale · fumetti di pubblico dominio e con licenza libera' : catalog.url}</span>
+                </span>
               </button>
               <button type="button" className="btn-pill shrink-0 !text-red" onClick={() => onRemove(catalog.id)} aria-label={`Rimuovi ${catalog.name}`}>
                 Rimuovi
@@ -110,6 +140,24 @@ function CatalogsView({ catalogs, onAdd, onRemove, onOpen }: { catalogs: Catalog
             </li>
           ))}
         </ul>
+      )}
+      {!hasArchive && (
+        <section>
+          <h3 className="eyebrow mb-2">Suggerito</h3>
+          <div className="flex items-center gap-4 rounded-[14px] bg-card p-4 shadow-[inset_0_0_0_1px_var(--line)]" data-testid="archive-suggestion">
+            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[10px] bg-fill text-label">{ArchiveMark}</span>
+            <div className="min-w-0 flex-1">
+              <div className="text-body">Internet Archive</div>
+              <div className="text-footnote text-label-2">
+                La biblioteca digitale senza scopo di lucro: decine di migliaia di fumetti in CBZ, CBR e PDF, con raccolte di pubblico dominio e con licenza
+                libera. Si cerca e si scarica direttamente nella libreria.
+              </div>
+            </div>
+            <button type="button" className="btn-primary shrink-0 !min-h-[36px] !px-3.5 !text-[13px]" onClick={() => onAdd({ ...ARCHIVE_CATALOG, addedAt: Date.now() })} data-testid="archive-add">
+              Aggiungi
+            </button>
+          </div>
+        </section>
       )}
       <form
         className="space-y-3"
@@ -119,7 +167,7 @@ function CatalogsView({ catalogs, onAdd, onRemove, onOpen }: { catalogs: Catalog
         }}
       >
         <label className="eyebrow block">
-          {catalogs.length === 0 ? 'Aggiungi un catalogo' : 'Altro catalogo'}
+          {catalogs.length === 0 ? 'Aggiungi un sito' : 'Altro sito'}
           <input
             type="text"
             inputMode="url"
@@ -338,13 +386,267 @@ function DownloadView({ series, units, onDone, onCancel }: { series: SeriesSumma
   )
 }
 
+const formatMB = (bytes: number) => (bytes >= 1048576 ? `${(bytes / 1048576).toLocaleString('it-IT', { maximumFractionDigits: bytes >= 104857600 ? 0 : 1 })} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`)
+const formatCount = (n: number) => n.toLocaleString('it-IT')
+
+function ArchiveCard({ item, onOpen }: { item: ArchiveItemSummary; onOpen: () => void }) {
+  const [broken, setBroken] = useState(false)
+  const licence = licenseLabel(item.licenseUrl)
+  return (
+    <button type="button" className="tile-focus min-w-0 text-left" onClick={onOpen} data-testid="archive-card">
+      <div className="tile aspect-[3/4] w-full">
+        {broken ? <div className="flex h-full w-full items-center justify-center text-label-3">{ArchiveMark}</div> : <img src={coverUrl(item.identifier)} alt="" className="h-full w-full object-cover" loading="lazy" draggable={false} onError={() => setBroken(true)} />}
+      </div>
+      <div className="mt-2 line-clamp-2 text-[13px] leading-[17px] font-medium text-label">{item.title}</div>
+      <div className="truncate text-caption text-label-2">
+        {[item.creator, item.year ? String(item.year) : undefined].filter(Boolean).join(' · ') || '\u00a0'}
+      </div>
+      <div className="truncate text-caption text-label-3">
+        {licence ? `${licence} · ` : ''}
+        {formatCount(item.downloads)} download
+      </div>
+    </button>
+  )
+}
+
+/** Internet Archive: curated shelves, or a free-text search across the whole library. */
+function ArchiveBrowseView({ onOpen }: { onOpen: (item: ArchiveItemSummary) => void }) {
+  const [shelf, setShelf] = useState<ArchiveShelf>(ARCHIVE_SHELVES[0]!)
+  const [query, setQuery] = useState('')
+  const [submitted, setSubmitted] = useState('')
+  const [pages, setPages] = useState<ArchiveItemSummary[][]>([])
+  const [total, setTotal] = useState(0)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  /** The shelf/search the shown results belong to: nothing of a previous one is shown meanwhile. */
+  const [loaded, setLoaded] = useState<string | null>(null)
+  const searching = submitted.trim().length > 0
+  const key = searching ? `q:${submitted}` : `s:${shelf.id}`
+  const current = loaded === key
+  useEffect(() => {
+    const controller = new AbortController()
+    setPages([])
+    setTotal(0)
+    setError(null)
+    setLoading(true)
+    searchArchive(searching ? { text: submitted, page: 1 } : { shelf, page: 1 }, controller.signal).then(
+      (result) => {
+        if (controller.signal.aborted) return
+        setPages([result.items])
+        setTotal(result.total)
+        setLoaded(key)
+        setLoading(false)
+      },
+      (e: unknown) => {
+        if (controller.signal.aborted) return
+        setError(describe(e))
+        setLoading(false)
+      },
+    )
+    return () => controller.abort()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key])
+  const items = pages.flat()
+  const loadMore = async () => {
+    setLoading(true)
+    try {
+      const result = await searchArchive(searching ? { text: submitted, page: pages.length + 1 } : { shelf, page: pages.length + 1 })
+      setPages((p) => [...p, result.items])
+    } catch (e) {
+      setError(describe(e))
+    } finally {
+      setLoading(false)
+    }
+  }
+  return (
+    <div className="space-y-5">
+      <form
+        className="flex gap-2"
+        onSubmit={(e) => {
+          e.preventDefault()
+          setSubmitted(query)
+        }}
+      >
+        <input
+          type="search"
+          value={query}
+          onChange={(e) => {
+            setQuery(e.currentTarget.value)
+            if (!e.currentTarget.value.trim()) setSubmitted('')
+          }}
+          placeholder="Cerca in tutto Internet Archive"
+          aria-label="Cerca in Internet Archive"
+          className="field !rounded-full"
+          data-testid="archive-search"
+        />
+        <button type="submit" className="btn-primary shrink-0 !min-h-[40px] !px-4 !text-[13px]" disabled={!query.trim()} data-testid="archive-search-go">
+          Cerca
+        </button>
+      </form>
+      {!searching && (
+        <div>
+          <Segmented<string> label="Raccolta" idPrefix="shelf" className="w-full" value={shelf.id} options={ARCHIVE_SHELVES.map((s) => ({ value: s.id, label: s.label }))} onChange={(id) => setShelf(ARCHIVE_SHELVES.find((s) => s.id === id) ?? ARCHIVE_SHELVES[0]!)} />
+          <p className="mt-2 text-footnote text-label-2">{shelf.description}</p>
+        </div>
+      )}
+      {searching && current && !loading && (
+        <p className="text-footnote text-label-2" data-testid="archive-result-count">
+          {total === 0 ? 'Nessun risultato.' : `${formatCount(total)} risultati in tutta la biblioteca; prima i titoli che contengono le parole cercate, poi i più scaricati.`}
+        </p>
+      )}
+      {error && (
+        <p className="text-footnote text-red" data-testid="catalog-error">
+          {error}
+        </p>
+      )}
+      {current && items.length > 0 && (
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(120px,1fr))] gap-x-4 gap-y-6 sm:grid-cols-[repeat(auto-fill,minmax(140px,1fr))]" data-testid="archive-grid">
+          {items.map((item) => (
+            <ArchiveCard key={item.identifier} item={item} onOpen={() => onOpen(item)} />
+          ))}
+        </div>
+      )}
+      {(loading || (!current && !error)) && (
+        <div className="flex h-24 items-center justify-center">
+          <div className="spinner" aria-label="Caricamento" />
+        </div>
+      )}
+      {current && !loading && items.length > 0 && items.length < total && (
+        <div className="flex justify-center">
+          <button type="button" className="btn-ghost !min-h-[36px] !px-3.5 !text-[13px]" onClick={() => void loadMore()} data-testid="archive-more">
+            Mostra altri ({formatCount(total - items.length)})
+          </button>
+        </div>
+      )}
+      <p className="text-footnote text-label-3">
+        Internet Archive è una biblioteca digitale senza scopo di lucro. Le raccolte proposte contengono opere di pubblico dominio o con licenza
+        libera; la ricerca copre tutta la biblioteca, dove alcuni caricamenti possono essere protetti da diritto d’autore. Scaricare è una scelta
+        e una responsabilità di chi legge.
+      </p>
+    </div>
+  )
+}
+
+function ArchiveItemView({ summary, onDownload }: { summary: ArchiveItemSummary; onDownload: (item: ArchiveItem, file: ArchiveFile) => void }) {
+  const { data: item, error, loading } = useLoader((signal) => loadArchiveItem(summary.identifier, signal), [summary.identifier])
+  const licence = licenseLabel(summary.licenseUrl)
+  const originals = item?.files.filter((f) => f.source === 'original') ?? []
+  const derivatives = item?.files.filter((f) => f.source === 'derivative') ?? []
+  const fileRow = (file: ArchiveFile) => (
+    <li key={file.name} className="row !min-h-[44px] !py-2">
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-subhead text-label">{file.name.split('/').pop()}</div>
+        <div className="text-caption text-label-3">
+          <span className="font-semibold text-label-2">{formatBadge(file.kind)}</span> · {formatMB(file.size)}
+        </div>
+      </div>
+      <button type="button" className="btn-pill shrink-0 !min-h-[28px] !px-2.5 !text-[12px]" onClick={() => item && onDownload(item, file)} aria-label={`Scarica ${file.name}`} data-testid="archive-file-download">
+        Scarica
+      </button>
+    </li>
+  )
+  return (
+    <div className="space-y-5">
+      <div className="flex gap-4">
+        <div className="tile h-[132px] w-[99px] shrink-0">
+          <img src={coverUrl(summary.identifier)} alt="" className="h-full w-full object-cover" draggable={false} />
+        </div>
+        <div className="min-w-0 flex-1 text-footnote text-label-2">
+          {(summary.creator || summary.year) && <div className="text-subhead text-label">{[summary.creator, summary.year].filter(Boolean).join(' · ')}</div>}
+          {licence && <div className="mt-1">{licence}</div>}
+          <div className="mt-1">{formatCount(summary.downloads)} download su archive.org</div>
+          {item?.subjects.length ? <div className="mt-1 truncate text-label-3">{item.subjects.join(' · ')}</div> : null}
+          <a className="mt-2 inline-block text-label-2 underline-offset-2 hover:text-label hover:underline" href={summary.url} target="_blank" rel="noopener">
+            Apri su archive.org
+          </a>
+        </div>
+      </div>
+      {item?.description && <p className="whitespace-pre-line text-footnote text-label-2">{item.description}</p>}
+      {loading && (
+        <div className="flex h-24 items-center justify-center">
+          <div className="spinner" aria-label="Caricamento" />
+        </div>
+      )}
+      {error && (
+        <p className="text-footnote text-red" data-testid="catalog-error">
+          {error}
+        </p>
+      )}
+      {item && (
+        <>
+          {originals.length > 0 && (
+            <section>
+              <h3 className="eyebrow mb-2">{originals.length === 1 ? 'File' : `${originals.length} file`}</h3>
+              <ul className="group-card" data-testid="archive-files">
+                {originals.map(fileRow)}
+              </ul>
+              {originals.some((f) => f.kind === 'cbr') && (
+                <p className="group-footer">I CBR sono archivi RAR: quelli «solidi» non si aprono pagina per pagina; in quel caso il PDF derivato va bene.</p>
+              )}
+            </section>
+          )}
+          {derivatives.length > 0 && (
+            <section>
+              <h3 className="eyebrow mb-2">Versioni derivate da archive.org</h3>
+              <ul className="group-card" data-testid="archive-derivatives">
+                {derivatives.map(fileRow)}
+              </ul>
+              <p className="group-footer">PDF ricavati dalle scansioni: più leggeri, stesse pagine.</p>
+            </section>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
+function ArchiveDownloadView({ item, file, onDone, onCancel }: { item: ArchiveItem; file: ArchiveFile; onDone: (file: File) => void; onCancel: () => void }) {
+  const [progress, setProgress] = useState<ArchiveDownloadProgress>({ bytes: 0, total: file.size })
+  const [error, setError] = useState<string | null>(null)
+  useEffect(() => {
+    const c = new AbortController()
+    downloadArchiveFile(item, file, setProgress, c.signal).then(
+      (result) => !c.signal.aborted && onDone(result),
+      (e: unknown) => {
+        if (!c.signal.aborted && (e as DOMException)?.name !== 'AbortError') setError(describe(e))
+      },
+    )
+    return () => c.abort()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  const pct = progress.total > 0 ? Math.min(100, (progress.bytes / progress.total) * 100) : 0
+  return (
+    <div className="space-y-5" data-testid="archive-progress">
+      <div>
+        <div className="truncate text-body">{file.name.split('/').pop()}</div>
+        <div className="mt-1 text-footnote text-label-2 tabular-nums">
+          {formatMB(progress.bytes)} di {formatMB(progress.total)}
+        </div>
+        <div className="mt-3 h-[3px] w-full overflow-hidden rounded-full bg-fill-2">
+          <div className="h-full rounded-full bg-invert transition-[width]" style={{ width: `${Math.max(2, pct)}%` }} />
+        </div>
+      </div>
+      {error ? (
+        <p className="text-footnote text-red" data-testid="catalog-error">
+          {error}
+        </p>
+      ) : (
+        <p className="text-footnote text-label-3">Il file viene scaricato così com’è da archive.org e poi importato come un normale volume.</p>
+      )}
+      <button type="button" className="btn-ghost !min-h-[36px] !px-3.5 !text-[13px]" onClick={onCancel}>
+        {error ? 'Indietro' : 'Annulla'}
+      </button>
+    </div>
+  )
+}
+
 export function CatalogDialog({ catalogs, onAddCatalog, onRemoveCatalog, onDownloaded, onClose }: CatalogDialogProps) {
-  const [view, setView] = useState<View>(() => (catalogs.length === 1 ? { kind: 'series', catalog: catalogs[0]! } : { kind: 'catalogs' }))
+  const [view, setView] = useState<View>(() => (catalogs.length === 1 ? homeView(catalogs[0]!) : { kind: 'catalogs' }))
   switch (view.kind) {
     case 'catalogs':
       return (
         <Sheet title="Cataloghi" onClose={onClose}>
-          <CatalogsView catalogs={catalogs} onAdd={onAddCatalog} onRemove={onRemoveCatalog} onOpen={(catalog) => setView({ kind: 'series', catalog })} />
+          <CatalogsView catalogs={catalogs} onAdd={onAddCatalog} onRemove={onRemoveCatalog} onOpen={(catalog) => setView(homeView(catalog))} />
         </Sheet>
       )
     case 'series':
@@ -357,6 +659,29 @@ export function CatalogDialog({ catalogs, onAddCatalog, onRemoveCatalog, onDownl
       return (
         <Sheet title={view.series.title} onBack={() => setView({ kind: 'series', catalog: view.catalog })} onClose={onClose}>
           <UnitsView series={view.series} onDownload={(units) => setView({ kind: 'download', catalog: view.catalog, series: view.series, units })} />
+        </Sheet>
+      )
+    case 'archive':
+      return (
+        <Sheet title="Internet Archive" onBack={() => setView({ kind: 'catalogs' })} onClose={onClose}>
+          <ArchiveBrowseView onOpen={(item) => setView({ kind: 'archive-item', catalog: view.catalog, item })} />
+        </Sheet>
+      )
+    case 'archive-item':
+      return (
+        <Sheet title={view.item.title} onBack={() => setView({ kind: 'archive', catalog: view.catalog })} onClose={onClose}>
+          <ArchiveItemView summary={view.item} onDownload={(item, file) => setView({ kind: 'archive-download', catalog: view.catalog, item, file })} />
+        </Sheet>
+      )
+    case 'archive-download':
+      return (
+        <Sheet title={`Scaricamento · ${view.item.title}`} onClose={onClose}>
+          <ArchiveDownloadView
+            item={view.item}
+            file={view.file}
+            onDone={(file) => onDownloaded(file, view.item.files.length > 1 ? view.item.title : undefined)}
+            onCancel={() => setView({ kind: 'archive-item', catalog: view.catalog, item: view.item })}
+          />
         </Sheet>
       )
     case 'download':

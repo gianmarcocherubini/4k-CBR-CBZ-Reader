@@ -867,7 +867,7 @@ export function Library({ sessionBooks, updateReady = false, onOpen, onSessionBo
           }}
           onDownloaded={(file, seriesTitle) => {
             setCatalogsOpen(false)
-            void startImport([file], { collectionName: seriesTitle })
+            void startImport([file], seriesTitle ? { collectionName: seriesTitle } : {})
           }}
           onClose={() => setCatalogsOpen(false)}
         />

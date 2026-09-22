@@ -867,6 +867,120 @@ test.describe('library', () => {
     await expect.poll(async () => (await storedSizes())['manga-epub.epub']?.[0]).toEqual({ w: 1600, h: 1200 })
   })
 
+  test('Internet Archive catalogue: shelves, search, item files, download of a PDF and a CBZ into the library', async ({ page }) => {
+    const pdf = readFileSync(fx('manga-pdf.pdf'))
+    const cbz = readFileSync(fx('short-book.cbz'))
+    const png = readFileSync(fx('cover.png'))
+    const cors = { 'access-control-allow-origin': '*' }
+    const json = (body: unknown) => ({ status: 200, contentType: 'application/json', headers: cors, body: JSON.stringify(body) })
+    const searches: string[] = []
+    await page.route('https://archive.org/**', (route) => {
+      const url = new URL(route.request().url())
+      if (url.pathname === '/advancedsearch.php') {
+        const q = url.searchParams.get('q') ?? ''
+        searches.push(q)
+        const docs = q.includes('collection:webcomicuniverse')
+          ? [{ identifier: 'AllHumorComics008', title: 'All Humor Comics 008', creator: 'Quality', downloads: 5401, licenseurl: 'http://creativecommons.org/licenses/by/3.0/', format: ['Image Container PDF', 'DjVuTXT'] }]
+          : q.startsWith('(raggedy AND ann)')
+            ? [{ identifier: 'raggedy-ann-and-andy-comics', title: 'Raggedy Ann and Andy Comics', creator: 'Dell', date: '1946-01-01T00:00:00Z', downloads: 12508, format: ['Comic Book RAR', 'Comic Book ZIP', 'Text PDF'] }]
+            : [
+                { identifier: 'batman-1-100', title: 'Batman #1-100 (DC Comics, 1940-1956)', date: '1940-01-01T00:00:00Z', downloads: 19723, format: ['Comic Book ZIP'] },
+                { identifier: 'raggedy-ann-and-andy-comics', title: 'Raggedy Ann and Andy Comics', creator: 'Dell', date: '1946-01-01T00:00:00Z', downloads: 12508, format: ['Comic Book RAR', 'Comic Book ZIP'] },
+              ]
+        return route.fulfill(json({ response: { numFound: docs.length, docs } }))
+      }
+      if (url.pathname === '/metadata/AllHumorComics008') {
+        return route.fulfill(
+          json({
+            metadata: { identifier: 'AllHumorComics008', title: 'All Humor Comics 008', creator: 'Quality', licenseurl: 'http://creativecommons.org/licenses/by/3.0/', description: '<p>Golden Age humor.</p>', subject: ['Comics', 'Humor'] },
+            files: [
+              { name: 'AllH8_52.pdf', format: 'Image Container PDF', source: 'original', size: String(pdf.length) },
+              { name: 'AllH8_52_text.pdf', format: 'Additional Text PDF', source: 'derivative', size: '500' },
+              { name: 'AllH8_52.epub', format: 'EPUB', source: 'derivative', size: '900' },
+            ],
+          }),
+        )
+      }
+      if (url.pathname === '/metadata/raggedy-ann-and-andy-comics') {
+        return route.fulfill(
+          json({
+            metadata: { identifier: 'raggedy-ann-and-andy-comics', title: 'Raggedy Ann and Andy Comics', creator: 'Dell', date: '1946' },
+            files: [
+              { name: 'Raggedy Ann Four Color Comics 005.cbz', format: 'Comic Book ZIP', source: 'original', size: String(cbz.length) },
+              { name: 'Raggedy Ann Four Color Comics 010.cbz', format: 'Comic Book ZIP', source: 'original', size: String(cbz.length) },
+              { name: 'Raggedy Ann Four Color Comics 005.pdf', format: 'Text PDF', source: 'derivative', size: '2200000' },
+            ],
+          }),
+        )
+      }
+      if (url.pathname === '/cors/AllHumorComics008/AllH8_52.pdf') return route.fulfill({ status: 200, contentType: 'application/pdf', headers: { ...cors, 'content-length': String(pdf.length) }, body: pdf })
+      if (url.pathname.startsWith('/cors/raggedy-ann-and-andy-comics/')) return route.fulfill({ status: 200, contentType: 'application/x-cbz', headers: cors, body: cbz })
+      if (url.pathname.startsWith('/services/img/')) return route.fulfill({ status: 200, contentType: 'image/png', body: png })
+      return route.fulfill({ status: 404, headers: cors, body: 'no' })
+    })
+
+    await page.goto('/')
+    await page.getByTestId('catalogs').click()
+    const dialog = page.getByTestId('catalog-dialog')
+    // Offered until added; then listed like any catalogue, and opened straight into its shelves.
+    await dialog.getByTestId('archive-add').click()
+    await expect(dialog.getByTestId('catalog-list')).toContainText('Internet Archive')
+    await expect(dialog.getByTestId('archive-suggestion')).toHaveCount(0)
+    expect(JSON.parse(await page.evaluate(() => localStorage.getItem('reader.catalogs.v1') ?? '[]'))).toMatchObject([{ id: 'archive.org', kind: 'archive', url: 'https://archive.org' }])
+    await dialog.getByTestId('catalog-open').click()
+    await expect(dialog.getByTestId('archive-card')).toHaveCount(2)
+    expect(searches.at(-1)).toContain('collection:classiccomics')
+    expect(searches.at(-1)).toContain('mediatype:texts')
+    await dialog.getByTestId('shelf-webcomics').click()
+    await expect(dialog.getByTestId('archive-card')).toHaveCount(1)
+    await expect(dialog.getByTestId('archive-card')).toContainText('CC BY 3.0')
+    expect(searches.at(-1)).toContain('collection:webcomicuniverse')
+
+    // Free-text search across the whole library, every word required.
+    await dialog.getByTestId('archive-search').fill('raggedy ann')
+    await dialog.getByTestId('archive-search-go').click()
+    await expect(dialog.getByTestId('archive-result-count')).toContainText('1 risultati in tutta la biblioteca')
+    expect(searches.at(-1)!.startsWith('(raggedy AND ann) AND mediatype:texts')).toBe(true)
+    expect(searches.at(-1)).not.toContain('collection:')
+
+    // Item: originals and derivatives listed apart, OCR-only and EPUB files hidden; a CBZ of a multi-file item keeps its name.
+    await dialog.getByTestId('archive-card').click()
+    await expect(dialog.getByTestId('archive-files').locator('li')).toHaveCount(2)
+    await expect(dialog.getByTestId('archive-derivatives').locator('li')).toHaveCount(1)
+    await dialog.getByTestId('archive-file-download').first().click()
+    const overlay = page.getByTestId('import-overlay')
+    await expect(overlay.getByText('Importazione completata')).toBeVisible({ timeout: 30_000 })
+    await expect(overlay).toContainText('Raggedy Ann Four Color Comics 005.cbz')
+    await overlay.getByTestId('import-close').click()
+    const declineOnline = page.getByRole('button', { name: 'Non ora' })
+    if (await declineOnline.isVisible()) await declineOnline.click()
+    await expect(page.getByRole('heading', { name: 'Raggedy Ann and Andy Comics' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Apri Raggedy Ann Four Color Comics 005' })).toBeVisible()
+
+    // A single-file item: the PDF is named after the item and lands in "Senza collezione".
+    await page.getByTestId('catalogs').click()
+    await expect(dialog.getByTestId('archive-card')).toHaveCount(2)
+    await dialog.getByTestId('shelf-webcomics').click()
+    await expect(dialog.getByTestId('archive-card')).toHaveCount(1)
+    await expect(dialog.getByTestId('archive-card')).toContainText('All Humor Comics 008')
+    await dialog.getByTestId('archive-card').click()
+    await expect(dialog).toContainText('Golden Age humor.')
+    await expect(dialog.getByTestId('archive-files').locator('li')).toHaveCount(1)
+    await expect(dialog.getByTestId('archive-derivatives')).toHaveCount(0)
+    await dialog.getByTestId('archive-file-download').click()
+    await expect(overlay.getByText('Importazione completata')).toBeVisible({ timeout: 30_000 })
+    await expect(overlay).toContainText('All Humor Comics 008.pdf')
+    await overlay.getByTestId('import-close').click()
+    if (await declineOnline.isVisible()) await declineOnline.click()
+    await page.getByTestId('collection-all').click()
+    await expect(page.getByRole('button', { name: 'Apri All Humor Comics 008' })).toBeVisible()
+    await expect(page.getByTestId('book-card')).toHaveCount(2)
+    await openBook(page, 'All Humor Comics 008')
+    await expect(label(page)).toHaveText('1')
+    await page.keyboard.press('End')
+    await expect(label(page)).toHaveText('4')
+  })
+
   test('a file that is not a backup is refused with a clear message', async ({ page }) => {
     await page.goto('/')
     await page.setInputFiles('[data-testid=restore-input]', { name: 'note.json', mimeType: 'application/json', buffer: Buffer.from('{"hello":1}') })
