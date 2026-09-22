@@ -170,8 +170,15 @@ comporta come un lettore (pochi capitoli, su richiesta), non come un crawler.
   dello schermo (l'ultima, quando si è in fondo). Solo le pagine vicine allo schermo sono nel DOM (le altre sono
   spazio dell'altezza giusta, stimata dal rapporto mediano delle pagine note e corretta man mano che si decodificano,
   senza spostare ciò che si sta leggendo). La super risoluzione lavora sulle pagine che intersecano lo schermo, ognuna
-  per conto suo (in scorrimento non c'è una coppia da tenere in passo). Direzione, doppia pagina, transizioni,
-  adattamento e spazio centrale riguardano solo la modalità Pagine e in scorrimento non compaiono.
+  per conto suo (in scorrimento non c'è una coppia da tenere in passo). **Zoom nella striscia**: pizzico con due
+  dita, doppio tocco (×2,5 e ritorno) o Ctrl + rotella; durante il gesto la striscia si scala visivamente, al
+  rilascio lo zoom entra nel layout (pagine più larghe dello schermo, la striscia scorre anche in orizzontale) e il
+  punto sotto le dita resta dov'era. Direzione, doppia pagina, transizioni, adattamento e spazio centrale riguardano
+  solo la modalità Pagine e in scorrimento non compaiono.
+- **Ogni volume ricorda la sua modalità**: la scelta fatta nel pannello vale per il volume aperto e viene salvata
+  nel suo segnalibro (`Progress.readingMode`, incluso nel backup); i volumi mai aperti prima si aprono nell'ultima
+  modalità scelta (l'impostazione globale). Così un webtoon resta in scorrimento e un manga a pagine senza doverli
+  rimettere ogni volta.
 - **Tocco ai lati**: in modalità manga (destra → sinistra) il tocco a sinistra va avanti, a destra indietro. Tocco al
   centro: mostra/nasconde le barre. Funzionano anche scorrimento orizzontale, frecce, spazio, PagSu/PagGiù, Home/Fine.
 - **Doppia pagina intelligente**: le pagine verticali vengono accoppiate, le tavole doppie (orizzontali) restano da sole

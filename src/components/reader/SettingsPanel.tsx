@@ -186,8 +186,9 @@ export function SettingsPanel({ settings, blankCount, onClearBlanks, onChange, o
             footer={
               scroll ? (
                 <>
-                  Tocca la parte alta o bassa dello schermo per scorrere di una schermata, il centro per le barre. Larghezza Intera riempie lo
-                  schermo; Media e Stretta sono comode con l’iPad in orizzontale. Spazio Nessuno per i webtoon disegnati come un’unica striscia.
+                  Tocca la parte alta o bassa dello schermo per scorrere di una schermata, il centro per le barre; pizzica o tocca due volte per
+                  ingrandire. Larghezza Intera riempie lo schermo; Media e Stretta sono comode con l’iPad in orizzontale. Spazio Nessuno per i
+                  webtoon disegnati come un’unica striscia.
                   {diagnostics}
                 </>
               ) : (
@@ -195,7 +196,7 @@ export function SettingsPanel({ settings, blankCount, onClearBlanks, onChange, o
               )
             }
           >
-            <Row title="Modalità" stacked>
+            <Row title="Modalità" hint="Ogni volume ricorda la sua modalità; i volumi nuovi si aprono nell’ultima scelta." stacked>
               <ReadingModePicker value={settings.readingMode} onChange={(readingMode) => onChange({ readingMode })} />
             </Row>
             {scroll ? (

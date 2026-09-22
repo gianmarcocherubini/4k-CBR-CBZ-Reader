@@ -3,7 +3,7 @@ import { openArchive, type OpenedArchive, supportsPassword } from '../../lib/arc
 import { ArchiveError, describeError, isArchiveError } from '../../lib/archive/types'
 import { clampOffset, clampZoom, layoutSpread, type Size, zoomAround } from '../../lib/reader/layout'
 import { PageCache } from '../../lib/reader/pageCache'
-import { layoutStrip } from '../../lib/reader/scrollLayout'
+import { layoutStrip, MIN_STRIP_ZOOM } from '../../lib/reader/scrollLayout'
 import { blankBefore, firstPage, isBlank, layoutSpreads, realPages, spreadIndexOf, spreadLabel } from '../../lib/spread'
 import { getBook, getPageSizes, getProgress, putBook, putPageSizes, putProgress } from '../../lib/storage/db'
 import {
@@ -15,7 +15,7 @@ import {
 import { flags } from '../../lib/flags'
 import { type EnsembleSize, EsrganAborted, MODELS } from '../../lib/upscale/esrgan/esrganEngine'
 import { SrAborted, type SrOptions, type SrPlan, type SrResult } from '../../lib/upscale/srEngine'
-import { type Book, GUTTER_FRACTION, type MaxQualityModel, type PageSize, type ReaderSettings, SCROLL_GAP_PX, SCROLL_WIDTH_FRACTION } from '../../types'
+import { type Book, GUTTER_FRACTION, type MaxQualityModel, type PageSize, type ReaderSettings, type ReadingMode, SCROLL_GAP_PX, SCROLL_WIDTH_FRACTION } from '../../types'
 import { QualityControls } from './QualityControls'
 import { enterFullscreen, isFullscreen } from '../../lib/fullscreen'
 import { HdBadge } from './HdBadge'
@@ -101,10 +101,27 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
   const canvasRef = useRef<HTMLDivElement>(null)
   const sizesDirty = useRef(false)
   const dpr = window.devicePixelRatio || 1
+  /**
+   * How this volume is read: its own remembered choice (bookmark), else the app-wide one, which
+   * is the last mode picked anywhere. Picking a mode here sets both.
+   */
+  const [bookMode, setBookMode] = useState<ReadingMode | null>(null)
+  const readingMode: ReadingMode = bookMode ?? settings.readingMode
+  const scroll = readingMode === 'scroll'
   /** Scroll mode: the strip reports which pages intersect the viewport; the reader loads and enhances those. */
-  const scroll = settings.readingMode === 'scroll'
   const [scrollVisible, setScrollVisible] = useState<number[]>([])
   const scrollApi = useRef<ScrollApi | null>(null)
+  const [stripZoom, setStripZoom] = useState(MIN_STRIP_ZOOM)
+  const changeSettings = useCallback(
+    (patch: Partial<ReaderSettings>) => {
+      if (patch.readingMode) {
+        setBookMode(patch.readingMode)
+        setStripZoom(MIN_STRIP_ZOOM)
+      }
+      updateSettings(patch)
+    },
+    [updateSettings],
+  )
 
   // ---- open the book -------------------------------------------------------------------------
   useEffect(() => {
@@ -179,6 +196,7 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
       if (progress) {
         setCurrentPage(Math.min(Math.max(0, progress.page), n - 1))
         if (progress.blanks?.length) setBlanks(new Set(progress.blanks.filter((p) => p >= 0 && p < n)))
+        if (progress.readingMode === 'pages' || progress.readingMode === 'scroll') setBookMode(progress.readingMode)
       }
       cacheRef.current = new PageCache(opened.reader, opened.pages, (index, size) => {
         setSizes((prev) => {
@@ -245,8 +263,8 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
   const spreadPages = useMemo(() => (scroll ? scrollVisible : realPages(spread)), [scroll, scrollVisible, spread])
   const spreadKey = scroll ? `scroll:${scrollVisible.join(',')}` : spread.join(',')
   const strip = useMemo(
-    () => layoutStrip(pageCount, sizes, viewport, SCROLL_WIDTH_FRACTION[settings.scrollWidth], SCROLL_GAP_PX[settings.scrollGap]),
-    [pageCount, sizes, viewport, settings.scrollWidth, settings.scrollGap],
+    () => layoutStrip(pageCount, sizes, viewport, SCROLL_WIDTH_FRACTION[settings.scrollWidth] * stripZoom, SCROLL_GAP_PX[settings.scrollGap]),
+    [pageCount, sizes, viewport, settings.scrollWidth, settings.scrollGap, stripZoom],
   )
   const spreadHasBlank = spread.some(isBlank)
   /** Insert a blank before the first page of the current spread, or remove the one shown. */
@@ -406,19 +424,19 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
   // ---- persistence ---------------------------------------------------------------------------
   // Progress is written after a short debounce, and flushed when the reader closes or the app
   // goes to the background (iPad app switch), so a quick exit never loses the bookmark.
-  const pendingProgress = useRef<{ bookId: string; page: number; blanks: number[] } | null>(null)
+  const pendingProgress = useRef<{ bookId: string; page: number; blanks: number[]; readingMode: ReadingMode | null } | null>(null)
   const flushProgress = useCallback(() => {
     const p = pendingProgress.current
     if (!p) return
     pendingProgress.current = null
-    void putProgress({ bookId: p.bookId, page: p.page, updatedAt: Date.now(), blanks: p.blanks })
+    void putProgress({ bookId: p.bookId, page: p.page, updatedAt: Date.now(), blanks: p.blanks, ...(p.readingMode ? { readingMode: p.readingMode } : {}) })
   }, [])
   useEffect(() => {
     if (status !== 'ready' || !book) return
-    pendingProgress.current = { bookId: book.id, page: currentPage, blanks: [...blanks].sort((a, b) => a - b) }
+    pendingProgress.current = { bookId: book.id, page: currentPage, blanks: [...blanks].sort((a, b) => a - b), readingMode: bookMode }
     const t = setTimeout(flushProgress, 250)
     return () => clearTimeout(t)
-  }, [status, book, currentPage, blanks, flushProgress])
+  }, [status, book, currentPage, blanks, bookMode, flushProgress])
   useEffect(() => {
     const onHide = () => {
       if (document.visibilityState === 'hidden') flushProgress()
@@ -1115,6 +1133,8 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
           api={scrollApi}
           layout={strip}
           viewport={viewport}
+          zoom={stripZoom}
+          onZoom={setStripZoom}
           pages={pageStates}
           enhanced={showEnhanced ? displayed : undefined}
           background={settings.stageBackground}
@@ -1170,16 +1190,16 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
         onBack={onClose}
         onSettings={() => setSettingsOpen((o) => !o)}
         onSeek={scroll ? goToPage : goToSpread}
-        onToggleDouble={() => updateSettings({ pageMode: double ? 'single' : 'double' })}
+        onToggleDouble={() => changeSettings({ pageMode: double ? 'single' : 'double' })}
         onToggleBlank={toggleBlankHere}
         onHoverChange={setHoveringBars}
       />
       {settingsOpen && (
         <SettingsPanel
-          settings={settings}
+          settings={readingMode === settings.readingMode ? settings : { ...settings, readingMode }}
           blankCount={blanks.size}
           onClearBlanks={clearBlanks}
-          onChange={updateSettings}
+          onChange={changeSettings}
           onClose={() => setSettingsOpen(false)}
           viewportInfo={viewportDiagnostics}
           quality={
@@ -1191,7 +1211,7 @@ export function Reader({ bookId, sessionBook, settings, updateSettings, onClose,
               fourKSummary={mqSummary}
               hdStatus={srStatusLine}
               fourKStatus={mqStatusLine}
-              onChange={updateSettings}
+              onChange={changeSettings}
             />
           }
         />

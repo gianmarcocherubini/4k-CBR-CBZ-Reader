@@ -1040,6 +1040,122 @@ test.describe('reader', () => {
     await expect(label(page)).toHaveText('2-3')
   })
 
+  test('each volume remembers its reading mode; new volumes open in the last mode picked', async ({ page }) => {
+    await page.goto('/')
+    await importBooks(page, ['manga-vol-01.cbz', 'short-book.cbz', 'zip64-book.cbz'])
+    const stage = page.getByTestId('stage')
+    const pickMode = async (mode: 'pages' | 'scroll') => {
+      await page.mouse.move(CENTER.x, CENTER.y)
+      if (!(await page.getByTestId('toolbar-top').evaluate((el) => el.classList.contains('opacity-100')))) await page.mouse.click(CENTER.x, CENTER.y)
+      await page.getByTestId('settings').click()
+      await page.getByTestId(`mode-${mode}`).click()
+      await page.getByRole('button', { name: 'Chiudi impostazioni' }).click()
+      await page.waitForTimeout(400) // the bookmark writer's debounce
+    }
+    // A: switched to scroll. Remembered by A, and now the mode for volumes never opened before.
+    await openBook(page, 'manga-vol-01')
+    await expect(stage).not.toHaveAttribute('data-mode', 'scroll')
+    await pickMode('scroll')
+    await expect(stage).toHaveAttribute('data-mode', 'scroll')
+    await page.getByTestId('back').click()
+    await openBook(page, 'short-book')
+    await expect(stage).toHaveAttribute('data-mode', 'scroll')
+    // B: switched back to pages. B remembers pages; A keeps scroll; C (new) follows the last choice: pages.
+    await pickMode('pages')
+    await expect(stage).not.toHaveAttribute('data-mode', 'scroll')
+    await page.getByTestId('back').click()
+    await openBook(page, 'manga-vol-01')
+    await expect(stage).toHaveAttribute('data-mode', 'scroll')
+    await page.getByTestId('back').click()
+    await openBook(page, 'zip64-book')
+    await expect(stage).not.toHaveAttribute('data-mode', 'scroll')
+    await page.getByTestId('back').click()
+    // Survives a reload: the mode lives in the bookmark.
+    await page.reload()
+    await openBook(page, 'manga-vol-01')
+    await expect(stage).toHaveAttribute('data-mode', 'scroll')
+    await page.mouse.move(CENTER.x, CENTER.y)
+    if (!(await page.getByTestId('toolbar-top').evaluate((el) => el.classList.contains('opacity-100')))) await page.mouse.click(CENTER.x, CENTER.y)
+    await page.getByTestId('settings').click()
+    await expect(page.getByTestId('mode-scroll')).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  test('zoom in the strip: Ctrl+wheel, double tap and a two-finger pinch keep the point under the fingers', async ({ page }) => {
+    await page.goto('/')
+    await page.evaluate(() => localStorage.setItem('reader.settings.v1', JSON.stringify({ readingMode: 'scroll', fullscreenReading: false })))
+    await page.reload()
+    await importBooks(page, ['manga-vol-01.cbz'])
+    await openBook(page, 'manga-vol-01')
+    const stage = page.getByTestId('stage')
+    await expect(stage).toHaveAttribute('data-mode', 'scroll')
+    await expect(stage).toHaveAttribute('data-zoom', '1.00')
+    const box1 = () => page.locator('[data-testid=page][data-page="1"]').boundingBox()
+    const metrics = () => stage.evaluate((el) => ({ top: el.scrollTop, left: el.scrollLeft, w: el.scrollWidth, h: el.scrollHeight, cw: el.clientWidth }))
+
+    // Ctrl+wheel zooms in around the cursor: pages get wider than the viewport and the strip scrolls sideways.
+    await page.mouse.move(CENTER.x, CENTER.y)
+    await page.mouse.wheel(0, 0)
+    await page.keyboard.down('Control')
+    await page.mouse.wheel(0, -300)
+    await page.keyboard.up('Control')
+    await expect.poll(async () => Number(await stage.getAttribute('data-zoom'))).toBeGreaterThan(1.2)
+    const zoomed = (await box1())!
+    expect(zoomed.width).toBeGreaterThan(1180)
+    expect((await metrics()).w).toBeGreaterThan((await metrics()).cw)
+
+    // Double tap: back to the chosen width; double tap again: 2.5× around the tapped point.
+    await page.mouse.click(300, 300)
+    await page.mouse.click(300, 300)
+    await expect(stage).toHaveAttribute('data-zoom', '1.00')
+    await expect.poll(async () => (await box1())?.width).toBeCloseTo(1180, 0)
+    await page.waitForTimeout(400)
+    await page.mouse.click(300, 300)
+    await page.mouse.click(300, 300)
+    await expect(stage).toHaveAttribute('data-zoom', '2.50')
+    await expect.poll(async () => (await box1())?.width).toBeCloseTo(2950, 0)
+    await page.waitForTimeout(400)
+    await page.mouse.click(300, 300)
+    await page.mouse.click(300, 300)
+    await expect(stage).toHaveAttribute('data-zoom', '1.00')
+
+    // A pinch (two touch pointers moving apart) around a point keeps that point of the page in place.
+    await page.waitForTimeout(400)
+    await stage.evaluate((el) => el.scrollTo({ top: 600 }))
+    await page.waitForTimeout(200)
+    const before = await page.evaluate(() => {
+      const el = document.querySelector('[data-testid=stage]')!
+      const p1 = document.querySelector('[data-testid=page][data-page="1"]') as HTMLElement
+      const focal = { x: 590, y: 410 }
+      // The point of page 1 under the focal, as fractions of the page box.
+      return { fx: (el.scrollLeft + focal.x - p1.offsetLeft) / p1.offsetWidth, fy: (el.scrollTop + focal.y - p1.offsetTop) / p1.offsetHeight }
+    })
+    await page.evaluate(() => {
+      const el = document.querySelector('[data-testid=stage]')!
+      const rect = el.getBoundingClientRect()
+      const fire = (type: string, id: number, x: number, y: number) =>
+        el.dispatchEvent(new PointerEvent(type, { pointerId: id, pointerType: 'touch', isPrimary: id === 1, clientX: rect.left + x, clientY: rect.top + y, bubbles: true }))
+      fire('pointerdown', 1, 540, 410)
+      fire('pointerdown', 2, 640, 410)
+      for (let i = 1; i <= 5; i++) {
+        fire('pointermove', 1, 540 - i * 10, 410)
+        fire('pointermove', 2, 640 + i * 10, 410)
+      }
+      fire('pointerup', 1, 490, 410)
+      fire('pointerup', 2, 690, 410)
+    })
+    await expect(stage).toHaveAttribute('data-zoom', '2.00')
+    await expect.poll(async () => (await box1())?.width).toBeCloseTo(2360, 0)
+    const after = await page.evaluate(() => {
+      const el = document.querySelector('[data-testid=stage]')!
+      const p1 = document.querySelector('[data-testid=page][data-page="1"]') as HTMLElement
+      const focal = { x: 590, y: 410 }
+      return { fx: (el.scrollLeft + focal.x - p1.offsetLeft) / p1.offsetWidth, fy: (el.scrollTop + focal.y - p1.offsetTop) / p1.offsetHeight }
+    })
+    expect(after.fx).toBeCloseTo(before.fx, 2)
+    expect(after.fy).toBeCloseTo(before.fy, 2)
+    await expect(label(page)).toHaveText('1')
+  })
+
   test('a user-inserted blank page re-aligns the following pairs and persists', async ({ page }) => {
     await page.goto('/')
     await importBooks(page, ['manga-vol-01.cbz'])

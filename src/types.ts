@@ -51,6 +51,8 @@ export interface Progress {
   coverOffset?: boolean
   /** Pages preceded by a user-inserted blank page (re-aligns the following pairs). */
   blanks?: number[]
+  /** How this volume is read; absent = the app-wide choice (the last mode picked). */
+  readingMode?: ReadingMode
 }
 
 /**

@@ -36,14 +36,14 @@ describe('backup serialization', () => {
     const archive = book({ id: 'b', fileName: 'Naruto 01.cbz', cover: jpeg, coverSource: 'archive', passwordProtected: true })
     const session = book({ id: 'session:x', fileName: 'x.cbz', storage: 'session' })
     const collections: Collection[] = [{ id: 'c1', name: 'Shonen', createdAt: 5, icon: 'flame' }]
-    const progress = new Map<string, Progress>([['a', { bookId: 'a', page: 12, updatedAt: 60, blanks: [3] }]])
+    const progress = new Map<string, Progress>([['a', { bookId: 'a', page: 12, updatedAt: 60, blanks: [3], readingMode: 'scroll' }]])
     const backup = await serializeBackup({ books: [remote, archive, session], collections, progress }, DEFAULT_SETTINGS, app, 1234)
 
     expect(backup.format).toBe(BACKUP_FORMAT)
     expect(backup.version).toBe(BACKUP_VERSION)
     expect(backup.createdAt).toBe(1234)
     expect(backup.books).toHaveLength(2)
-    expect(backup.books[0]).toMatchObject({ title: 'One Piece 1', fileName: 'One_Piece_01.cbz', fileSize: 1000, collectionId: 'c1', lastReadAt: 50, progress: { page: 12, updatedAt: 60, blanks: [3] } })
+    expect(backup.books[0]).toMatchObject({ title: 'One Piece 1', fileName: 'One_Piece_01.cbz', fileSize: 1000, collectionId: 'c1', lastReadAt: 50, progress: { page: 12, updatedAt: 60, blanks: [3], readingMode: 'scroll' } })
     expect(backup.books[0]!.cover).toMatch(/^data:image\/jpeg;base64,/)
     expect(backup.books[1]).toMatchObject({ fileName: 'Naruto 01.cbz', passwordProtected: true })
     expect(backup.books[1]!.cover).toBeUndefined()
@@ -76,7 +76,7 @@ describe('parseBackup', () => {
         createdAt: 'no',
         collections: [{ id: 'c1', name: '  Shonen ', createdAt: 1, icon: '🔥' }, { id: 'c2' }, 'junk'],
         books: [
-          { fileName: 'a.cbz', fileSize: 10, format: 'cbz', collectionId: 'missing', cover: 'data:text/html;base64,PGI+', progress: { page: -3, updatedAt: 'x', blanks: [1, -1, 'q', 2.5, 4] } },
+          { fileName: 'a.cbz', fileSize: 10, format: 'cbz', collectionId: 'missing', cover: 'data:text/html;base64,PGI+', progress: { page: -3, updatedAt: 'x', blanks: [1, -1, 'q', 2.5, 4], readingMode: 'sideways' } },
           { fileName: 'a.cbz', fileSize: 10, format: 'cbz', title: 'duplicate' },
           { fileName: 'b.cbr', fileSize: 10.5, format: 'cbr' },
           { fileName: 'c.cbr', fileSize: 20, format: 'djvu' },

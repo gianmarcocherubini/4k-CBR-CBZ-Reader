@@ -1,4 +1,4 @@
-import type { Book, BookFormat, Collection, PendingRestore, Progress, ReaderSettings } from '../../types'
+import type { Book, BookFormat, Collection, PendingRestore, Progress, ReaderSettings, ReadingMode } from '../../types'
 import { normalizeCollectionGlyph } from '../collections'
 import { titleFromFileName } from '../detect'
 
@@ -22,6 +22,7 @@ export interface BackupProgress {
   updatedAt: number
   blanks?: number[]
   coverOffset?: boolean
+  readingMode?: ReadingMode
 }
 
 export interface BackupBook {
@@ -143,6 +144,7 @@ export async function serializeBackup(
                   updatedAt: progress.updatedAt,
                   ...(progress.blanks && progress.blanks.length > 0 ? { blanks: [...progress.blanks] } : {}),
                   ...(progress.coverOffset ? { coverOffset: true } : {}),
+                  ...(progress.readingMode ? { readingMode: progress.readingMode } : {}),
                 },
               }
             : {}),
@@ -222,6 +224,7 @@ export function parseBackup(json: string): BackupFile {
               updatedAt: finite(progress.updatedAt),
               ...(blanks && blanks.length > 0 ? { blanks } : {}),
               ...(progress.coverOffset === true ? { coverOffset: true } : {}),
+              ...(progress.readingMode === 'pages' || progress.readingMode === 'scroll' ? { readingMode: progress.readingMode } : {}),
             },
           }
         : {}),

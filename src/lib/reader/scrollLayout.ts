@@ -32,9 +32,14 @@ export function fallbackRatio(sizes: ReadonlyArray<PageSize | null | undefined>)
   return ratios[ratios.length >> 1]!
 }
 
+/** Pinch/double-tap zoom of the strip, as a multiplier of the chosen width. */
+export const MIN_STRIP_ZOOM = 1
+export const MAX_STRIP_ZOOM = 4
+
 export function layoutStrip(pageCount: number, sizes: ReadonlyArray<PageSize | null | undefined>, viewport: Size, widthFraction: number, gap: number): StripLayout {
-  const pageWidth = Math.max(1, Math.floor(viewport.w * Math.min(1, Math.max(0.2, widthFraction))))
-  const left = Math.floor((viewport.w - pageWidth) / 2)
+  const pageWidth = Math.max(1, Math.floor(viewport.w * Math.min(MAX_STRIP_ZOOM, Math.max(0.2, widthFraction))))
+  // Wider than the viewport (zoomed in): flush left, and the strip scrolls sideways.
+  const left = Math.max(0, Math.floor((viewport.w - pageWidth) / 2))
   const ratio = fallbackRatio(sizes)
   const boxes: StripBox[] = []
   let top = 0
